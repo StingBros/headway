@@ -118,7 +118,13 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, leftCollapsed: leftCollapsed };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, leftCollapsed: leftCollapsed, colorBy: colorBy };
+  }
+  var COLOR_MODES = [['workstream', 'Workstream'], ['epic', 'Epic'], ['assignee', 'Assignee'], ['priority', 'Priority']];
+  var colorBy = 'workstream'; // what bar colors follow: 'workstream' | 'epic' | 'assignee' | 'priority'
+  function setColorBy(mode) {
+    colorBy = RM.COLOR_MODES.indexOf(mode) !== -1 ? mode : 'workstream';
+    RM.setColorMode(colorBy);
   }
   var prioGroup = 'none';   // Prioritizing view swimlanes: 'none' | 'ws' | 'epic'
   var sprLevel = 'feature'; // Sprinting view rows: 'feature' | 'story'
@@ -133,7 +139,7 @@
     if (!ui) return;
     weekPx = ui.weekPx || 28;
     view = ['scoping', 'setup', 'budget', 'reports', 'history', 'prio', 'sprints'].indexOf(ui.view) !== -1 ? ui.view : 'planning';
-    detailMode = ['phase', 'feature', 'story'].indexOf(ui.detailMode) !== -1 ? ui.detailMode : 'feature';
+    detailMode = ui.detailMode === 'story' ? 'story' : 'feature';
     buColW = ui.buColW && typeof ui.buColW === 'object' ? ui.buColW : {};
     buColOrder = Array.isArray(ui.buColOrder) ? ui.buColOrder : null;
     buColHide = ui.buColHide && typeof ui.buColHide === 'object' ? ui.buColHide : {};
@@ -169,6 +175,7 @@
     panelOpen = ui.panelOpen !== false; // panel is persistent by default
     leftCollapsed = ui.leftCollapsed === true;
     prioGroup = ['ws', 'epic'].indexOf(ui.prioGroup) !== -1 ? ui.prioGroup : 'none';
+    setColorBy(ui.colorBy);
     sprLevel = ui.sprLevel === 'story' ? 'story' : 'feature';
     prioLevel = ui.prioLevel === 'story' ? 'story' : 'feature';
     if (Array.isArray(ui.prioFields)) prioFields = ui.prioFields.map(String);
@@ -883,7 +890,7 @@
     var seq = [];
     state.phases.forEach(function (p) {
       seq.push({ kind: 'band', phaseId: p.id });
-      if (!p.collapsed && detailMode !== 'phase') {
+      if (!p.collapsed) {
         RM.itemsInPhase(state, p.id).filter(matchesFilter).forEach(function (it) {
           seq.push({ kind: 'item', id: it.id, phaseId: p.id });
         });
@@ -893,12 +900,10 @@
   }
 
   // ---- detail level (Scoping + Planning): how deep the row grid goes.
-  // phase: phase bands only · feature: features, stories tucked away ·
-  // story: features with every story row open
+  // feature: features, stories tucked away · story: every story row open
   var DM_MODES = [
-    ['phase', 'Phase', 'panel-top', 'Only phases — the whole plan at a glance'],
-    ['feature', 'Feature', 'rows-3', 'Down to the feature level'],
-    ['story', 'Story', 'list-tree', 'Every story, under its feature']
+    ['feature', 'Feature', 'rows-3'],
+    ['story', 'Story', 'list-tree']
   ];
   function setDetailMode(mode) {
     detailMode = mode;
@@ -907,9 +912,7 @@
     saveLocal();
     render();
   }
-  // Feature / Story rows only — the Prioritizing board and Sprinting page
-  // have no phase-only reading
-  var LEVEL_MODES = DM_MODES.slice(1);
+  var LEVEL_MODES = DM_MODES;
   // ONE level dropdown for every view: same markup (icon · label · caret),
   // same title, same place — the far left of the view's toolbar
   function levelBtnInner(modes, current) {
@@ -918,7 +921,7 @@
   }
   function levelBtnTitle(modes, current) {
     var m = modes.filter(function (x) { return x[0] === current; })[0] || modes[0];
-    return 'Detail level: ' + m[1] + ' — click to change';
+    return 'Detail level: ' + m[1];
   }
   function levelBtnHtml(attr, modes, current) {
     return '<button class="dm-btn" ' + attr + ' title="' + esc(levelBtnTitle(modes, current)) + '">' +
@@ -926,8 +929,7 @@
   }
   function openLevelMenu(anchor, modes, current, pick) {
     openDropdown(anchor, modes.map(function (m) {
-      return { icon: m[2], label: esc(m[1]) + ' <small>' + esc(m[3]) + '</small>',
-        checked: current === m[0], fn: function () { pick(m[0]); } };
+      return { icon: m[2], label: esc(m[1]), checked: current === m[0], fn: function () { pick(m[0]); } };
     }));
   }
   function syncDetailBtn() {
@@ -1064,7 +1066,7 @@
     b.innerHTML = '<i data-lucide="git-branch"></i><span>' + esc(state.optName) + '</span>' +
       (compareOptId ? '<span class="opt-cmp-dot" title="Comparing"></span>' : '') +
       '<i data-lucide="chevron-down" class="dm-caret"></i>';
-    b.title = 'Option: ' + state.optName + (n ? ' — ' + (n + 1) + ' open options' : ' — click to add alternate plan versions');
+    b.title = 'Option: ' + state.optName;
     if (window.lucide) lucide.createIcons();
   }
   function syncCmpPill() {
@@ -1180,7 +1182,7 @@
   function mSub(m) { return (m && (m.role || m.type)) || ''; }
   function avatarHtml(m, extraCls) {
     var lbl = mLabel(m);
-    return '<span class="avatar' + (extraCls ? ' ' + extraCls : '') + '" title="' + esc(lbl + (mSub(m) ? ' — ' + mSub(m) : '')) +
+    return '<span class="avatar' + (extraCls ? ' ' + extraCls : '') + '" title="' + esc(lbl) +
       '" style="background:' + RM.avatarColor(lbl) + '">' + esc(RM.initialsOf(lbl)) + '</span>';
   }
   function memberById(id) {
@@ -1663,8 +1665,8 @@
     return RM.prioritySchemeOf(state) === 'levels' ? levelGlyph(it.priority) : esc(it.priority);
   }
   function priChipTitle(it) {
-    if (RM.prioritySchemeOf(state) === 'rice') return 'RICE score — click to edit';
-    return 'Priority — click to change' + (it.priority ? '\nNow: ' + priorityValueLabel(it.priority) : '');
+    if (RM.prioritySchemeOf(state) === 'rice') return 'RICE score';
+    return 'Priority' + (it.priority ? '\nNow: ' + priorityValueLabel(it.priority) : '');
   }
   function priChipHasValue(it) {
     return !!(RM.prioritySchemeOf(state) === 'rice' ? riceScoreLabel(it) : it.priority);
@@ -1780,24 +1782,24 @@
     blank = blank == null ? '·' : blank;
     if (key === 'size') {
       if (!RM.sizingEnabled(state, 'story')) return '';
-      return '<span class="r-size" tabindex="0" role="button" ' + attr + '="st-size" title="Story size — click to change">' +
+      return '<span class="r-size" tabindex="0" role="button" ' + attr + '="st-size" title="Story size">' +
         (st.size ? esc(st.size) : blank) + '</span>';
     }
     if (key === 'pri') {
       if (!RM.priorityEnabled(state, 'story')) return '';
       return '<span class="r-risk pri' + (st.priority ? ' has-risk' : '') + '" tabindex="0" role="button" ' + attr + '="st-pri" title="' +
-        esc('Story priority — click to change' + (st.priority ? '\nNow: ' + priorityValueLabel(st.priority, 'story') : '')) + '">' +
+        esc('Story priority' + (st.priority ? '\nNow: ' + priorityValueLabel(st.priority, 'story') : '')) + '">' +
         (st.priority ? (RM.prioritySchemeOf(state, 'story') === 'levels' ? levelGlyph(st.priority) : esc(st.priority)) : blank) + '</span>';
     }
     if (key === 'risk') {
       if (!RM.riskEnabled(state)) return '';
       if (RM.riskSchemeOf(state) === 'auto') return '<span class="r-risk rk-none" title="Dependency risk is computed per feature"></span>';
       return '<span class="r-risk rk-none' + (st.risk ? ' has-risk' : '') + '" tabindex="0" role="button" ' + attr + '="st-risk" title="' +
-        esc(RM.riskColLabel(state) + ' — click to change' + (st.risk ? '\nNow: ' + riskValueLabel(st.risk) : '')) + '">' +
+        esc(RM.riskColLabel(state) + (st.risk ? '\nNow: ' + riskValueLabel(st.risk) : '')) + '">' +
         (st.risk ? levelGlyph(st.risk) : blank) + '</span>';
     }
     if (key === 'dur') {
-      return '<span class="r-wk editable" tabindex="0" role="button" ' + attr + '="st-wk" title="Story duration — click to edit; empty clears it">' +
+      return '<span class="r-wk editable" tabindex="0" role="button" ' + attr + '="st-wk" title="Story duration">' +
         (storyWeeks(st) || blank) + '</span>';
     }
     return '';
@@ -1835,7 +1837,7 @@
     if (it.milestone) return '';
     if (key === 'size') {
       if (!RM.sizingEnabled(state)) return '';
-      return '<span class="r-size" tabindex="0" role="button" ' + attr + '="size" title="Size — click to change">' + (it.size ? esc(it.size) : '·') + '</span>';
+      return '<span class="r-size" tabindex="0" role="button" ' + attr + '="size" title="Size">' + (it.size ? esc(it.size) : '·') + '</span>';
     }
     if (key === 'pri') {
       if (!RM.priorityEnabled(state)) return '';
@@ -1850,11 +1852,11 @@
           (rkA.level === 'none' ? '·' : levelGlyph(rkA.level.charAt(0).toUpperCase())) + '</span>';
       }
       return '<span class="r-risk rk-none' + (it.risk ? ' has-risk' : '') + '" tabindex="0" role="button" ' + attr + '="risk" title="' +
-        esc(RM.riskColLabel(state) + ' — click to change' + (it.risk ? '\nNow: ' + riskValueLabel(it.risk) : '')) + '">' +
+        esc(RM.riskColLabel(state) + (it.risk ? '\nNow: ' + riskValueLabel(it.risk) : '')) + '">' +
         (it.risk ? levelGlyph(it.risk) : '·') + '</span>';
     }
     if (key === 'dur') {
-      return '<span class="r-wk editable" tabindex="0" role="button" ' + attr + '="dur" title="Duration — click to edit; empty takes it off the timeline">' + totalWeeks(it) + '</span>';
+      return '<span class="r-wk editable" tabindex="0" role="button" ' + attr + '="dur" title="Duration">' + totalWeeks(it) + '</span>';
     }
     return '';
   }
@@ -1938,7 +1940,7 @@
       fields + stories +
       '<div class="pr-chips">' +
       (RM.sizingEnabled(state)
-        ? '<span class="r-size" tabindex="0" role="button" data-pract="size" title="Size — click to change">' +
+        ? '<span class="r-size" tabindex="0" role="button" data-pract="size" title="Size">' +
           (it.size ? esc(it.size) : '·') + '</span>' : '') +
       (RM.priorityEnabled(state)
         ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') +
@@ -1946,10 +1948,10 @@
           (priChipContent(it) || '·') + '</span>' : '') +
       itemChipHtml('risk', it, 'data-pract') + itemChipHtml('dur', it, 'data-pract') +
       (prioGroup === 'epic' ? '' : // the swimlane already names the epic
-        '<span class="pr-chip" tabindex="0" role="button" data-pract="epic" title="Epic — click to change">' +
+        '<span class="pr-chip" tabindex="0" role="button" data-pract="epic" title="Epic">' +
         '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>') +
       (state.meta.workstreamsEnabled && prioGroup !== 'ws' 
-        ? '<span class="pr-chip" tabindex="0" role="button" data-pract="ws" title="Workstream — click to change">' +
+        ? '<span class="pr-chip" tabindex="0" role="button" data-pract="ws" title="Workstream">' +
           '<span class="dd-dot" style="background:#' + wsColor + '"></span>' + esc(it.workstream || RM.defaultWsName(state)) + '</span>' : '') +
       '</div></div>';
   }
@@ -2020,7 +2022,7 @@
       epicFilterDd + wsFilterDd +
       '<div class="pr-settings">' +
       '<span class="pr-lab">Group</span>' +
-      '<button class="dd-btn" data-prdd="group" title="Swimlanes — group the board">' +
+      '<button class="dd-btn" data-prdd="group" title="Swimlanes">' +
       '<span class="dd-label">' + prDdLabel(PR_GROUPS[prioGroup]) + '</span><i data-lucide="chevron-down"></i></button>' +
       '<span class="pr-lab">Sort</span>' +
       '<button class="dd-btn" data-prdd="sort" title="Order cards inside each column">' +
@@ -2365,7 +2367,7 @@
       '<span class="r-dot' + (it.milestone ? ' msdot ' + RM.msStyleOf(it) : '') + '" style="background:' + color + '"></span>' +
       '<input class="spv-title" data-spf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
       sprTag(it, num) +
-      '<span class="spv-chip" tabindex="0" role="button" data-spact="epic" title="Epic — click to change">' +
+      '<span class="spv-chip" tabindex="0" role="button" data-spact="epic" title="Epic">' +
       '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>' +
       '<span class="spv-est">' + ['size', 'pri', 'risk', 'dur'].map(function (k) { return itemChipHtml(k, it, 'data-spact'); }).join('') + '</span>' +
       '<span class="spv-dates">' + esc(sprDates(it)) + '</span>' +
@@ -2378,7 +2380,7 @@
       '" data-spid="' + it.id + '" data-spst="' + st.id + '" data-spsec="' + sprSecKey(num) + '">' +
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
       '<input class="spv-title" data-spf="story" placeholder="Story" value="' + esc(st.title || '') + '">' +
-      (own ? sprTag(st, num) : (num == null ? '' : '<span class="spv-tag" title="No timeline of its own — follows the feature">with feature</span>')) +
+      (own ? sprTag(st, num) : (num == null ? '' : '<span class="spv-tag" title="No timeline of its own">with feature</span>')) +
       '<span class="spv-est">' + ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-spact'); }).join('') + '</span>' +
       '<span class="spv-dates">' + esc(own ? sprDates(st) : '') + '</span>' +
       '</div>';
@@ -2700,11 +2702,8 @@
       // secondary and only appears when there's room
       var dateTxt = cellW >= 64 ? RM.fmtShort(d) : (d.getUTCMonth() + 1) + '/' + d.getUTCDate();
       var numTag = cellW >= 56 && RM.sprintsEnabled(meta) ? '<span class="sp-num">S' + num + '</span>' : '';
-      var hnS = 0;
-      for (var wv = w0v; wv < w1v; wv++) hnS += RM.holidaysInWeek(meta, wv, hset);
       hs.push('<div class="sprint-cell" style="left:' + (w0v * weekPx) + 'px;width:' + cellW +
-        'px" title="Sprint ' + num + ' — starts week of ' + esc(RM.fmtShortYear(d)) +
-        (hnS ? ' · ' + hnS + ' holiday day' + (hnS > 1 ? 's' : '') : '') + '">' +
+        'px" title="Sprint ' + num + '">' +
         '<span class="sp-date">' + dateTxt + '</span>' + numTag + '</div>');
     }
 
@@ -2719,13 +2718,13 @@
       var cls, txt2 = '', title;
       if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = 'Holiday week'; }
       else if (cap.teamTotal === 0 || avail === Infinity) {
-        cls = 'idle'; title = 'No roster yet — add people in Resources';
+        cls = 'idle'; title = 'No roster yet';
       } else {
         var over = demand > avail + 1e-9;
         cls = over ? 'over' : (avail > 0 && demand / avail > 0.85 ? 'mid' : (demand === 0 ? 'idle' : 'ok'));
         txt2 = weekPx >= 20 ? fmtPe(avail) : '';
         title = fmtPe(avail) + ' available' +
-          (over ? ' — looks like too much concurrent work (' + fmtPe(demand) + ' focus units in flight)'
+          (over ? ' · ' + fmtPe(demand) + ' focus units in flight'
             : demand ? ' · ' + fmtPe(demand) + ' focus units in flight' : '');
       }
       hc.push('<div class="cap-cell ' + cls + (hn && !cell.blackout ? ' part' : '') + '" tabindex="0" data-w="' + w +
@@ -2977,13 +2976,13 @@
           (rk.level === 'none' ? '' : levelGlyph(rk.level.charAt(0).toUpperCase())) + '</span>';
       }
       var hintLevel = sch === 'risk' ? rk.level : 'none'; // graph hint only for risk
-      var chipTitle = sch === 'risk' ? riskTitle : RM.riskColLabel(state) + ' \u2014 click to change' +
+      var chipTitle = sch === 'risk' ? riskTitle : RM.riskColLabel(state) +
         (it.risk ? '\nNow: ' + riskValueLabel(it.risk) : '');
       return '<span class="r-risk rk-' + hintLevel + (it.risk ? ' has-risk' : '') +
         '" tabindex="0" role="button" data-act="risk" title="' + esc(chipTitle) + '">' +
         (it.risk ? levelGlyph(it.risk) : (hintLevel === 'none' ? '' : levelGlyph(hintLevel.charAt(0).toUpperCase()))) + '</span>';
     }
-    var riskTitle = 'Risk — click to change' +
+    var riskTitle = 'Risk' +
       (rk.level !== 'none' ? '\nDependency risk ' + rk.level + ':\n· ' + rk.reasons.join('\n· ') : '');
     var laneInner = '';
     var ports = '<span class="port p-in" data-port="in" title="Drag to another bar: this depends on it"></span>' +
@@ -3072,8 +3071,7 @@
       if (dlDay != null) {
         var dlLate = RM.pastDeadline(meta, it);
         var dlX = (dlDay + 1) * dayPx();
-        var dlTip = 'Deadline ' + RM.fmtShortYear(RM.parseISO(it.deadline)) +
-          (dlLate ? ' — the item runs past it' : '');
+        var dlTip = 'Deadline ' + RM.fmtShortYear(RM.parseISO(it.deadline));
         dlHtml = '<span class="r-dl-mark' + (dlLate ? ' late' : '') + '" style="left:' + dlX +
           'px" title="' + esc(dlTip) + '"></span>';
         if (isScheduled(it)) {
@@ -3093,32 +3091,32 @@
       var cells = ['<div class="sc-row">'];
       var epIco2 = RM.iconForEpic(state, it.epic);
       var fixedContent = {
-        size: '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : '') + '</span>',
+        size: '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size">' + (it.size ? esc(it.size) : '') + '</span>',
         risk: riskChipHtml(),
         duration: it.milestone
-          ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone — 0 duration. Enter a duration to turn it back into a feature">0w</span>'
-          : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit. 0 makes it a milestone; empty takes it off the timeline">' +
+          ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone">0w</span>'
+          : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration">' +
             (isScheduled(it) || it.durDays != null ? totalWeeks(it) : '') + '</span>',
-        workstream: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="ws" title="Workstream — click to change">' +
+        workstream: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="ws" title="Workstream">' +
           '<span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' +
           (it.workstream ? esc(shorten(it.workstream, 18))
             : '<i class="dws">' + esc(shorten(RM.defaultWsName(state), 18)) + '</i>') + '</span>',
-        epic: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="epic" title="Epic — click to change">' +
+        epic: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="epic" title="Epic">' +
           (epIco2 ? '<i data-lucide="' + epIco2 + '"></i>' : '') +
           (it.epic ? esc(shorten(it.epic, 20)) : '') + '</span>',
-        start: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="startd" title="Start date — click to edit; empty takes it off the timeline">' +
+        start: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="startd" title="Start date">' +
           (isScheduled(it) ? esc(RM.fmtShort(RM.dayToDate(meta, it.startDay))) : '') + '</span>',
         deadline: (function () {
           var lateC = RM.pastDeadline(meta, it);
           return '<span class="r-ws sc-chip dl-chip' + (lateC ? ' late' : '') +
             '" tabindex="0" role="button" data-act="deadline" title="' +
-            esc('Hard deadline — click to edit' + (lateC ? '\nThe item runs past its deadline' : '')) + '">' +
+            esc('Hard deadline' + (lateC ? '\nThe item runs past its deadline' : '')) + '">' +
             (it.deadline ? esc(RM.fmtShort(RM.parseISO(it.deadline))) : '') + '</span>';
         })(),
         priority: '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') +
           '" tabindex="0" role="button" data-act="priority" title="' +
           esc(priChipTitle(it)) + '">' + priChipContent(it) + '</span>',
-        assignees: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="asg" title="Assignees — click to change">' +
+        assignees: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="asg" title="Assignees">' +
           (avatarStack(it.assignees) || '<i class="dws">+</i>') + '</span>'
       };
       allScopeCols().forEach(function (c) {
@@ -3129,7 +3127,7 @@
         }
         if (!colShowsOn(c[0], 'feature')) {
           cells.push('<div class="sc-cell sc-na" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) +
-            'px" title="Stories only — not set per feature"></div>');
+            'px" title="Stories only"></div>');
           return;
         }
         // every scope column holds rich text — edit it in place as such
@@ -3173,16 +3171,16 @@
         // the planning chips follow the user's column order/visibility
         var chips = {
           size: RM.sizingEnabled(state)
-            ? '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : (it.milestone ? '' : '·')) + '</span>'
+            ? '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size">' + (it.size ? esc(it.size) : (it.milestone ? '' : '·')) + '</span>'
             : '<span class="r-size r-blank"></span>',
           pri: RM.priorityEnabled(state)
             ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + '" tabindex="0" role="button" data-act="priority" title="' + esc(priChipTitle(it)) + '">' + (priChipContent(it) || '·') + '</span>'
             : '<span class="r-risk r-blank"></span>',
           risk: riskChipHtml(),
           dur: it.milestone
-            ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone — enter a duration to turn it back into a feature">◆</span>'
-            : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit. 0 makes it a milestone; empty takes it off the timeline">' + totalWeeks(it) + '</span>',
-          asg: '<span class="r-asg" tabindex="0" role="button" data-act="asg" title="Assignees — click to change">' +
+            ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone">◆</span>'
+            : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration">' + totalWeeks(it) + '</span>',
+          asg: '<span class="r-asg" tabindex="0" role="button" data-act="asg" title="Assignees">' +
             (avatarStack(it.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>'
         };
         return plColsVisible().map(function (k) { return chips[k]; }).join('');
@@ -3206,12 +3204,12 @@
             : '<span class="st-title' + (st.done ? ' done' : '') + '" data-act="st-open" title="Open story">' + esc(st.title) + '</span>') +
           (view === 'scoping' ? '' : plColsVisible().map(function (k) {
             if (k === 'asg') {
-              return '<span class="r-asg" tabindex="0" role="button" data-act="st-asg" title="Story assignees — click to change">' +
+              return '<span class="r-asg" tabindex="0" role="button" data-act="st-asg" title="Story assignees">' +
                 (avatarStack(st.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>';
             }
             // keep the column aligned even when the story scale is off
             return storyChipHtml(k, st, 'data-act') || '<span class="' + (k === 'size' ? 'r-size' : k === 'dur' ? 'r-wk' : 'r-risk') + ' r-blank"></span>';
-          }).join('')) +
+          }).join('') + '<span class="r-warn"></span>') +
           '</div>' +
           (view === 'scoping'
             // scoping: stories share the grid — text columns, Size, Assignees,
@@ -3223,7 +3221,7 @@
                 if (!isFixedColKey(key)) {
                   if (!colShowsOn(key, 'story')) {
                     return '<div class="sc-cell sc-na" data-col="' + key + '" style="width:' + w +
-                      'px" title="Features only — not set per story"></div>';
+                      'px" title="Features only"></div>';
                   }
                   var sval = key === 'description' ? st.description : ((st.custom || {})[key] || '');
                   return '<div class="sc-cell" data-col="' + key + '" style="width:' + w + 'px">' +
@@ -3235,21 +3233,21 @@
                 if (key === 'size' && RM.sizingEnabled(state, 'story')) return stFix(storyChipHtml('size', st, 'data-act', ''));
                 if (key === 'risk' && RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto') return stFix(storyChipHtml('risk', st, 'data-act', ''));
                 if (key === 'assignees') {
-                  return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-asg" title="Story assignees — click to change">' +
+                  return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-asg" title="Story assignees">' +
                     (avatarStack(st.assignees) || '<i class="dws">+</i>') + '</span>');
                 }
                 // stories rank on their own priority scheme (never RICE)
                 if (key === 'priority' && RM.priorityEnabled(state, 'story')) return stFix(storyChipHtml('pri', st, 'data-act', ''));
                 if (key === 'duration') return stFix(storyChipHtml('dur', st, 'data-act', ''));
                 if (key === 'start') {
-                  return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-startd" title="Story start — click to edit; empty takes it off the timeline">' +
+                  return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-startd" title="Story start">' +
                     (st.startDay != null ? esc(RM.fmtShort(RM.dayToDate(state.meta, st.startDay))) : '') + '</span>');
                 }
                 if (key === 'deadline') {
                   var stLate = RM.pastDeadline(state.meta, st);
                   return stFix('<span class="r-ws sc-chip dl-chip' + (stLate ? ' late' : '') +
                     '" tabindex="0" role="button" data-act="st-dl" title="' +
-                    esc('Story deadline — click to edit' + (stLate ? '\nThe story runs past its deadline' : '')) + '">' +
+                    esc('Story deadline' + (stLate ? '\nThe story runs past its deadline' : '')) + '">' +
                     (st.deadline ? esc(RM.fmtShort(RM.parseISO(st.deadline))) : '') + '</span>');
                 }
                 // rolled up from the feature — shown dimmed and italic
@@ -3257,7 +3255,7 @@
                   : key === 'epic' ? esc(it.epic || '')
                   : '';
                 return '<div class="sc-cell sc-fix sc-na" data-col="' + key + '" style="width:' + w +
-                  'px" title="Rolls up from the feature — not set per story">' +
+                  'px" title="Rolls up from the feature">' +
                   (roll ? '<span class="sc-roll">' + roll + '</span>' : '') + '</div>';
               }).join('') + '</div></div></div>'
             : '<div class="row-lane"' + (!stSched && view === 'planning' ? ' title="Double-click to add a timeline"' : '') + '>' +
@@ -3292,31 +3290,11 @@
     var cyclic = RM.cycleMembers(state);
     state.phases.forEach(function (p) {
       var items = RM.itemsInPhase(state, p.id).filter(matchesFilter);
-      // phase detail: the band's lane carries the phase's span as a bar (the
-      // whole plan reads phase-by-phase, items tucked away)
       var bandLane = p.description ? '<span class="band-desc" title="' + esc(RM.htmlToText(p.description)) + '">' + esc(RM.htmlToText(p.description)) + '</span>' : '';
-      if (detailMode === 'phase' && view === 'planning') {
-        var psp = RM.phaseSpan(state, p);
-        if (psp) {
-          // every scheduled item paints inside the span in ITS color, so the
-          // phase row doubles as a colored overview of what's in it
-          var segs = items.filter(isScheduled).map(function (sit) {
-            var sw = Math.max(3, (sit.milestone ? 1 : RM.itemSpan(sit)) * dayPx());
-            return '<span class="ph-seg" style="left:' + ((sit.startDay - psp.lo) * dayPx()) +
-              'px;width:' + sw + 'px;background:#' + RM.colorForItem(state, sit) + '" title="' +
-              esc('#' + sit.num + ' ' + sit.feature) + '"></span>';
-          }).join('');
-          bandLane = '<div class="ph-row-bar" style="left:' + (psp.lo * dayPx()) + 'px;width:' +
-            Math.max(6, (psp.hi - psp.lo) * dayPx()) + 'px" title="' +
-            esc(p.name + '  ·  ' + RM.fmtShort(RM.dayToDate(state.meta, psp.lo)) + ' → ' +
-              RM.fmtShort(RM.dayToDate(state.meta, Math.max(psp.lo, psp.hi - 1)))) + '">' + segs + '<span>' + esc(p.name) + '</span></div>';
-        }
-      }
       html.push(
-        '<div class="row band' + (detailMode === 'phase' ? ' ph-only' : '') + '" data-kind="band" data-phase="' + p.id + '">' +
+        '<div class="row band" data-kind="band" data-phase="' + p.id + '">' +
         '<div class="row-left">' +
-        (detailMode === 'phase' ? '' :
-          '<span class="band-chev' + (p.collapsed ? '' : ' open') + '" data-act="phase-toggle" title="Collapse / expand"><i data-lucide="chevron-right"></i></span>') +
+        '<span class="band-chev' + (p.collapsed ? '' : ' open') + '" data-act="phase-toggle" title="Collapse / expand"><i data-lucide="chevron-right"></i></span>' +
         '<span class="band-name">' + esc(p.name) + '</span>' +
         '<span class="band-count">' + items.length + '</span>' +
         (p.bucket ? '<span class="band-bucket-tag">backlog</span>' : '') +
@@ -3325,7 +3303,7 @@
         '</div>' +
         '<div class="row-lane">' + bandLane + '</div>' +
         '</div>');
-      if (p.collapsed || detailMode === 'phase') return;
+      if (p.collapsed) return;
 
       // grouping hierarchy: phase > workstream > epic ("no workstream" last)
       function partition(list, field, emptyLast) {
@@ -3728,8 +3706,8 @@
     panel.innerHTML =
       '<div id="panelRz"></div>' +
       '<div class="p-top"><span class="p-num">#<input class="p-num-edit" data-f="num" value="' + it.num +
-      '" title="Item # — an invalid or taken number picks the next available one"></span>' +
-      (it.milestone ? '<button class="p-mschip" data-act="msstyle" title="Milestone — fixed date. Click to pick its marker">' +
+      '" title="Item #"></span>' +
+      (it.milestone ? '<button class="p-mschip" data-act="msstyle" title="Milestone">' +
         MS_STYLE_GLYPHS[RM.msStyleOf(it)] + ' Milestone · ' + msStyleLabel(RM.msStyleOf(it)) + '</button>' : '') +
       '<button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-f="feature" rows="1" placeholder="Feature name">' + esc(it.feature) + '</textarea>' +
@@ -3800,7 +3778,7 @@
       sec('integrations', 'Integrations', '',
         '<label class="p-lab">Jira key</label>' +
         '<input data-f="jiraKey" placeholder="e.g. HW-12" value="' + esc(it.jiraKey || '') +
-        '" style="width:100%" title="Jira issue key — parents story rows and marks this row as an update in the Jira CSV export">') +
+        '" style="width:100%" title="Jira issue key">') +
 
       '<datalist id="wsList"><option>Product</option><option>Data</option><option>Process</option><option>Product / Process</option><option>All</option></datalist>';
     if (window.lucide) lucide.createIcons();
@@ -3896,7 +3874,7 @@
       sec2('integrations', 'Integrations',
         '<label class="p-lab">Jira key</label>' +
         '<input data-stf="jiraKey" placeholder="e.g. HW-13" value="' + esc(st.jiraKey || '') +
-        '" style="width:100%" title="Jira issue key — marks this story as an update in the Jira CSV export">');
+        '" style="width:100%" title="Jira issue key">');
     if (window.lucide) lucide.createIcons();
     var pn = $('.p-name', panel);
     if (pn) { pn.style.height = 'auto'; pn.style.height = pn.scrollHeight + 'px'; }
@@ -4651,7 +4629,6 @@
       var sv = val.trim();
       if (sv) {
         expanded[it.id] = true;
-        if (detailMode === 'phase') detailMode = 'feature'; // keep the new story reachable
         commit('add story', function (s) {
           RM.itemById(s, it.id).stories.push({ id: RM.uid('s'), title: sv, done: false });
         });
@@ -5586,8 +5563,52 @@
       dragTip.hidden = true;
     }
   }
+  // hovering a scheduled row whose bar is scrolled out of view floats a
+  // pointer at the near edge of the lane: "← title" or "title →"
+  var offTag = null, offRow = null;
+  function hideOffTag() {
+    if (offTag && offTag.parentNode) offTag.parentNode.removeChild(offTag);
+    offTag = null;
+    offRow = null;
+  }
+  // the row's bar in lane px ({x0, x1, title}), or null when it has none
+  function laneSpanOf(row) {
+    var it = RM.itemById(state, row.dataset.id);
+    if (!it) return null;
+    var st = row.dataset.story ? storyById(it, row.dataset.story) : null;
+    if (row.dataset.story && !st) return null;
+    if (st && st.startDay != null && st.durDays != null) {
+      return { x0: st.startDay * dayPx(), x1: st.startDay * dayPx() + Math.max(6, st.durDays * dayPx()), title: st.title };
+    }
+    // a story without its own timeline rides along with the feature
+    if (!isScheduled(it)) return null;
+    var w = it.milestone ? 1 : Math.max(1, it.durDays + (it.riskDays || 0));
+    return { x0: it.startDay * dayPx(), x1: (it.startDay + w) * dayPx(), title: st ? st.title : it.feature };
+  }
+  function showOffTag(row) {
+    var sp = laneSpanOf(row);
+    var vis0 = board.scrollLeft, vis1 = board.scrollLeft + Math.max(80, board.clientWidth - leftW());
+    var dir = !sp ? null : sp.x1 < vis0 ? 'left' : sp.x0 > vis1 ? 'right' : null;
+    if (!dir) { hideOffTag(); return; }
+    var lane = row.querySelector('.row-lane');
+    if (!lane) { hideOffTag(); return; }
+    if (!offTag) offTag = document.createElement('div');
+    offRow = row;
+    offTag.className = 'lane-off ' + dir;
+    offTag.innerHTML = '<span class="lo-arrow">' + (dir === 'left' ? '\u2190' : '\u2192') + '</span>' +
+      '<span class="lo-text">' + esc(sp.title || '(untitled)') + '</span>';
+    if (offTag.parentNode !== lane) lane.appendChild(offTag);
+    offTag.style.left = (dir === 'left' ? vis0 + 8 : vis1 - 8 - offTag.offsetWidth) + 'px';
+  }
+  board.addEventListener('scroll', function () {
+    if (!offRow) return;
+    if (document.body.contains(offRow)) showOffTag(offRow); else hideOffTag();
+  }, { passive: true });
   rowsEl.addEventListener('pointermove', function (e) {
-    if (view !== 'planning' || drag) { hidePlaceGhost(); return; }
+    if (view !== 'planning' || drag) { hidePlaceGhost(); hideOffTag(); return; }
+    var offHit = e.target.closest('.row-lane') && !e.target.closest('.row.story-add')
+      ? (e.target.closest('.row.story[data-story]') || e.target.closest('.row.item')) : null;
+    if (offHit) showOffTag(offHit); else hideOffTag();
     if (!e.target.closest('.row-lane') ||
       e.target.closest('[data-bar],[data-stbar],[data-ghost],.ghost-pill,.port,.ph-row-bar,.bar.cmp')) { hidePlaceGhost(); return; }
     var stRow = e.target.closest('.row.story[data-story]');
@@ -5619,8 +5640,8 @@
     dragTip.style.left = (e.clientX + 14) + 'px';
     dragTip.style.top = (lr.top - 30) + 'px';
   });
-  rowsEl.addEventListener('pointerleave', hidePlaceGhost);
-  rowsEl.addEventListener('pointerdown', hidePlaceGhost);
+  rowsEl.addEventListener('pointerleave', function () { hidePlaceGhost(); hideOffTag(); });
+  rowsEl.addEventListener('pointerdown', function () { hidePlaceGhost(); hideOffTag(); });
 
   function justPlaced(key) { return placedKey === key && Date.now() - placedAt < 500; }
   rowsEl.addEventListener('dblclick', function (e) {
@@ -7082,6 +7103,7 @@
         { icon: 'timer-reset', label: 'Auto save', checked: autoSave, fn: toggleAutoSave },
         { sep: true },
         { icon: 'share', nativeIcon: 'Share', label: 'Export…', fn: function () { $('#btnExport').click(); } },
+        { icon: 'refresh-cw', label: 'Sync with Jira…', fn: function () { HeadwayJira.syncModal(); } },
         { sep: true },
         { icon: 'circle-help', label: 'Help', fn: helpModal }
       ];
@@ -7102,6 +7124,7 @@
           : null,
         { sep: true },
         { icon: 'share', label: 'Export…', fn: function () { $('#btnExport').click(); } },
+        window.HeadwayJira ? { icon: 'refresh-cw', label: 'Sync with Jira…', fn: function () { HeadwayJira.syncModal(); } } : null,
         { icon: 'file-spreadsheet', label: 'Download template', fn: downloadTemplate },
         { sep: true },
         { icon: 'circle-help', label: 'Shortcuts & help', fn: helpModal }
@@ -7171,6 +7194,13 @@
         groupEpic = !groupEpic;
         saveLocal(); render();
       } },
+      { sep: true }
+    ].concat(COLOR_MODES.map(function (cm) {
+      return { icon: 'palette', label: 'Color by ' + cm[1].toLowerCase(), checked: colorBy === cm[0], fn: function () {
+        setColorBy(cm[0]);
+        saveLocal(); render();
+      } };
+    })).concat([
       { sep: true },
       { icon: 'chevrons-up-down', label: 'Expand all features', fn: function () {
         setDetailMode('story');
@@ -7193,8 +7223,7 @@
     ].concat(themeMenuItems())
       // macOS lost the native File menu (its actions moved to the app menu) —
       // keep the start page reachable from View there
-      .concat(isMacDesktop ? [{ sep: true }, { icon: 'house', label: 'Start page', fn: showStart }] : [])
-      .filter(Boolean));
+      .concat(isMacDesktop ? [{ sep: true }, { icon: 'house', label: 'Start page', fn: showStart }] : []))).filter(Boolean);
   }
 
   var openMenuName = null;
@@ -7482,21 +7511,21 @@
   // header labels + the tooltip that explains each column (tooltips live on
   // the HEADERS — the cells themselves stay quiet)
   var BU_COL_DEFS = {
-    role: ['Role', 'Role — free text, e.g. “Senior Backend Dev”'],
-    type: ['Rate card', 'Rate card — the role whose default rate/cost applies (optional)'],
+    role: ['Role', 'Role'],
+    type: ['Rate card', 'Rate card'],
     ws: ['Workstream', 'Workstreams this person works on'],
-    cost: ['Cost', 'Cost (hourly) — empty inherits the rate card'],
-    rate: ['Rate', 'Rate (hourly) — empty inherits the rate card'],
-    margin: ['Margin', 'Margin — (rate − cost) ÷ rate'],
-    total: ['Total', 'Total — actual hours × rate']
+    cost: ['Cost', 'Cost (hourly)'],
+    rate: ['Rate', 'Rate (hourly)'],
+    margin: ['Margin', 'Margin'],
+    total: ['Total', 'Total']
   };
   var BU_KEYS = ['role', 'type', 'ws', 'cost', 'rate', 'margin', 'total'];
   var PL_COL_DEFS = {
-    size: ['Size', 'Size — click a row chip to change', 34],
-    pri: ['Pri', 'Priority — click a row chip to change', 26],
-    risk: ['Risk', 'Risk — click a row chip to change', 26],
+    size: ['Size', 'Size', 34],
+    pri: ['Pri', 'Priority', 26],
+    risk: ['Risk', 'Risk', 26],
     dur: ['Wks', 'Duration in weeks', 34],
-    asg: ['Ppl', 'Assignees', 44]
+    asg: ['Ppl', 'Assignees', 40]
   };
   var PL_KEYS = ['size', 'pri', 'risk', 'dur', 'asg'];
   function orderedCols(order, allKeys) {
@@ -7541,7 +7570,7 @@
       el.innerHTML = plColsVisible().map(function (k) {
         return '<i class="pl-only' + (k === 'size' ? ' sz-lab' : '') + '" data-plcol="' + k + '" title="' +
           esc(PL_COL_DEFS[k][1]) +
-          '" style="width:' + PL_COL_DEFS[k][2] + 'px">' + esc(PL_COL_DEFS[k][0]) + '</i>';
+          '" style="width:' + PL_COL_DEFS[k][2] + 'px"></i>';
       }).join('');
     }
   }
@@ -7751,8 +7780,7 @@
     costs.forEach(function (c) {
       var occ = RM.costOccurrences(state, c);
       var marks = occ.map(function (o) {
-        return '<span class="bu-costmark" title="' + esc(c.name + ' — ' + fmtMoney(o.amount) + ' on ' +
-          RM.fmtShortYear(RM.dayToDate(meta, o.day))) + '" style="left:' + (o.day * dayPx()) + 'px"></span>';
+        return '<span class="bu-costmark" title="' + esc(c.name) + '" style="left:' + (o.day * dayPx()) + 'px"></span>';
       }).join('');
       var kindLabel = c.kind === 'fixed' ? 'One-time' : c.kind === 'weekly' ? 'Weekly' : 'Monthly';
       var cTotal = RM.costTotal(state, c);
@@ -8380,7 +8408,7 @@
         '<span class="su-name">' + esc(RM.defaultWsName(state)) + '</span>' +
         '<span class="band-bucket-tag">default</span>' +
         '<span class="band-count">' + count + '</span>' +
-        '<button data-sudefws title="Edit — items without a workstream use this name and color"><i data-lucide="pencil"></i></button>' +
+        '<button data-sudefws title="Edit"><i data-lucide="pencil"></i></button>' +
         '</div>';
     })();
     var wsRows = allWorkstreams().map(function (w) {
@@ -8413,7 +8441,7 @@
     var typeRows = state.teamTypes.map(function (t) {
       var rc = (m.rateCard && m.rateCard[t]) || {};
       return '<div class="su-row" data-key="' + esc(t) + '">' + grip() +
-        '<input class="su-name su-name-in" data-rcname="' + esc(t) + '" value="' + esc(t) + '" title="Rename role — applies to people, features and the rate card">' +
+        '<input class="su-name su-name-in" data-rcname="' + esc(t) + '" value="' + esc(t) + '" title="Rename role">' +
         '<span class="band-count">' + (typeCounts[t] || 0) + '</span>' +
         '<input class="su-rc" type="number" min="0" data-rccost="' + esc(t) + '" value="' + (rc.cost || '') + '" placeholder="cost/h" title="Default hourly cost for this role">' +
         '<input class="su-rc" type="number" min="0" data-rcrate="' + esc(t) + '" value="' + (rc.rate || '') + '" placeholder="rate/h" title="Default hourly bill rate for this role">' +
@@ -8465,7 +8493,7 @@
         '<div class="hol-add">' +
         '<input id="suHolName" placeholder="Name (optional)">' +
         '<input type="text" readonly class="cal-in" id="suHolStart" placeholder="First day" aria-label="First day">' +
-        '<input type="text" readonly class="cal-in" data-cal-clear="Single day" id="suHolEnd" placeholder="Last day" aria-label="Last day (optional)" title="Last day — leave empty for a single day">' +
+        '<input type="text" readonly class="cal-in" data-cal-clear="Single day" id="suHolEnd" placeholder="Last day" aria-label="Last day (optional)" title="Last day">' +
         '<button id="suHolAddBtn" class="fixed">Add</button>' +
         '</div>' +
         '<div class="m-hint">Single days or ranges (e.g. Christmas Eve through New Year’s). Non-working days stretch bars that span them.</div>' +
@@ -8571,6 +8599,10 @@
       ai:
         '<section class="su-card" id="aiSettingsCard">' +
         (window.HeadwayAI ? HeadwayAI.settingsHtml() : '<div class="m-hint">AI module not loaded.</div>') +
+        '</section>',
+      jira:
+        '<section class="su-card" id="jiraSettingsCard">' +
+        (window.HeadwayJira ? HeadwayJira.settingsHtml() : '<div class="m-hint">Jira module not loaded.</div>') +
         '</section>'
     };
     if (!tabBodies[setupTab]) setupTab = 'timeline';
@@ -8596,6 +8628,7 @@
       '<div class="su-content"><h1 class="su-page">' + esc(pageTitle) + '</h1>' + tabBodies[setupTab] + '</div>' +
       '</div>';
     if (setupTab === 'ai' && window.HeadwayAI) HeadwayAI.wireSettings($('#aiSettingsCard', host));
+    if (setupTab === 'jira' && window.HeadwayJira) HeadwayJira.wireSettings($('#jiraSettingsCard', host));
     if (window.lucide) lucide.createIcons();
   }
 
@@ -8606,7 +8639,8 @@
       ['workstreams', 'Workstreams', 'layers'],
       ['team', 'Team', 'users'],
       ['columns', 'Columns', 'columns-3'],
-      ['sizing', 'Sizing', 'ruler']
+      ['sizing', 'Sizing', 'ruler'],
+      ['jira', 'Jira', 'link']
     ]],
     ['Personal', [
       ['appearance', 'Appearance', 'palette'],
@@ -9038,8 +9072,7 @@
         var t2 = Math.max(0, Math.min(1, h / RM.weekHoursOf(meta)));
         var bg = '#' + (darkActive() ? mixHex('242C35', '31597F', t2) : RM.tint('7FAEDD', 1 - t2));
         cells.push('<div class="rh' + cls + '" data-w="' + w + '" style="left:' + (w * weekPx) +
-          'px;width:' + weekPx + 'px;background:' + bg + '" title="' + esc(mLabel(m) + ' — week of ' +
-            RM.fmtShort(RM.weekStartDate(meta, w)) + ': ' + fmtH(h) + 'h') + '">' +
+          'px;width:' + weekPx + 'px;background:' + bg + '" title="' + esc(mLabel(m)) + '">' +
           (weekPx >= 20 ? fmtH(h) : '') + '</div>');
       }
       // SAME left columns as the Budgeting view (name · role · rate card ·
@@ -9051,7 +9084,7 @@
         memberColsHtml(m) +
         (state.meta.capacityEnabled
           ? '<span class="res-cap" tabindex="0" role="button" data-rcap="' + m.id +
-            '" title="Capacity at full-time hours — click to edit">' + fmtPe(m.capacity != null ? m.capacity : 1) + '×</span>'
+            '" title="Capacity at full-time hours">' + fmtPe(m.capacity != null ? m.capacity : 1) + '×</span>'
           : '') +
         '</div>' +
         '<div class="rlane" style="width:' + laneW + 'px">' + cells.join('') + '</div>' +
@@ -9534,6 +9567,9 @@
       (state && state.meta.workstreamsEnabled ? chk('groupWs', 'Group by workstream', groupWs) : '') +
       chk('groupEpic', 'Group by epic', groupEpic) +
       '</div>' +
+      '<div class="m-sec"><label>Color bars by</label><div class="seg">' + COLOR_MODES.map(function (cm) {
+        return '<button data-pref-color="' + cm[0] + '"' + (colorBy === cm[0] ? ' class="on"' : '') + '>' + cm[1] + '</button>';
+      }).join('') + '</div></div>' +
       (desktop
         ? '<div class="m-sec"><label>Files</label>' + chk('autoSave', 'Auto-save to the open file', autoSave) + '</div>'
         : '');
@@ -9548,6 +9584,8 @@
       if (tb) { setTheme(tb.dataset.prefTheme); after(); return; }
       var sb = e.target.closest('[data-pref-snap]');
       if (sb) { var sp = sb.dataset.prefSnap.split(':'); setSnapMode(sp[0], sp[1]); saveLocal(); renderTopbar(); after(); return; }
+      var cb = e.target.closest('[data-pref-color]');
+      if (cb) { setColorBy(cb.dataset.prefColor); saveLocal(); render(); after(); return; }
     });
     host.addEventListener('change', function (e) {
       if (e.target.dataset.prefUser != null) { setUserName(e.target.value); return; }
@@ -9669,7 +9707,7 @@
       '<div class="sp-hero">' +
       '<div class="tb-mark sp-mark" aria-hidden="true"><span></span><span></span><span></span></div>' +
       '<div class="sp-brand"><h1>Headway</h1><div class="sp-sub">Roadmap planner</div></div>' +
-      '<button data-sp-settings title="Personal settings — theme, view options"><i data-lucide="settings"></i>Settings</button>' +
+      '<button data-sp-settings title="Personal settings"><i data-lucide="settings"></i>Settings</button>' +
       '</div>' +
       '<div class="sp-actions">' +
       '<button class="primary sp-big" data-sp-new><i data-lucide="file-plus-2"></i>New project…</button>' +
@@ -9942,6 +9980,9 @@
     menuItems: menuItems,
     noteRecent: noteRecent,
     renderStartPage: renderStartPage,
+    openModal: openModal,
+    closeModal: closeModal,
+    openSetup: function (tab) { setupTab = tab; view = 'setup'; saveLocal(); render(); },
     // hooks for the AI assistant (js/ai.js): reads are clones, every write
     // goes through commit() so it lands in undo + Version history (as
     // "<name> · AI")
@@ -9976,8 +10017,9 @@
         }
         else if (key === 'groupWs') groupWs = !!val;
         else if (key === 'groupEpic') groupEpic = !!val;
+        else if (key === 'colorBy') { if (RM.COLOR_MODES.indexOf(val) === -1) return false; setColorBy(val); }
         else if (key === 'autoSave') { autoSave = !!val; if (autoSave) scheduleAutoSave(); }
-        else if (key === 'detailMode') { if (['phase', 'feature', 'story'].indexOf(val) === -1) return false; detailMode = val; }
+        else if (key === 'detailMode') { if (['feature', 'story'].indexOf(val) === -1) return false; detailMode = val; }
         else return false;
         saveLocal();
         render();
@@ -10139,7 +10181,7 @@
     var pb = $('#btnPresent');
     if (pb) {
       pb.innerHTML = '<i data-lucide="' + (on ? 'minimize-2' : 'maximize-2') + '"></i>';
-      pb.title = on ? 'Exit expand (Esc)' : 'Expand \u2014 timeline-only view';
+      pb.title = on ? 'Exit expand (Esc)' : 'Expand';
       if (window.lucide) lucide.createIcons();
     }
     render();

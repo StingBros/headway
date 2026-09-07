@@ -293,8 +293,113 @@
     var c = state && state.wsColors ? resolveColor(state.wsColors[ws]) : null;
     return c || RM.PALETTE.neutral;
   };
+  // What bar colors follow. The mode is a UI preference the app sets on
+  // load; every renderer and export reads colorForItem, so they all agree.
+  RM.COLOR_MODES = ['workstream', 'epic', 'assignee', 'priority'];
+  var colorMode = 'workstream';
+  RM.setColorMode = function (mode) { colorMode = RM.COLOR_MODES.indexOf(mode) !== -1 ? mode : 'workstream'; };
+  RM.colorMode = function () { return colorMode; };
+  // a spread of distinct hues for names without a chosen color (epics)
+  RM.HASH_PALETTE = ['3273BD', 'C25E0E', '08875B', 'A14FBF', '2A7F8E', 'B8336A', '5B6ABF', '8A7B1E', 'C2402E', '3E8E41'];
+  function hashOf(s) {
+    var h = 0;
+    s = String(s || '');
+    for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return h;
+  }
+  function hslToHex(h, s, l) {
+    s /= 100; l /= 100;
+    var k = function (n) { return (n + h / 30) % 12; };
+    var a = s * Math.min(l, 1 - l);
+    var f = function (n) { return l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))); };
+    return [f(0), f(8), f(4)].map(function (v) { return ('0' + Math.round(v * 255).toString(16)).slice(-2); }).join('').toUpperCase();
+  }
+  // Epics without a chosen color share the hash palette; the document's
+  // epics are assigned together (alphabetically) so two epics never land on
+  // the same swatch while a free one exists, and adding an epic does not
+  // recolor the others unless it collides.
+  function epicColorTable(state) {
+    var names = {};
+    ((state && state.items) || []).forEach(function (it) { if (it.epic) names[it.epic] = true; });
+    var chosen = state && state.epicColors ? state.epicColors : {};
+    var taken = {}, table = {};
+    Object.keys(names).sort().forEach(function (e) {
+      var c = resolveColor(chosen[e]);
+      if (c) { table[e] = c; taken[c] = true; }
+    });
+    Object.keys(names).sort().forEach(function (e) {
+      if (table[e]) return;
+      var n = RM.HASH_PALETTE.length;
+      var i = ((hashOf(e) * 2654435761) >>> 0) % n;
+      for (var k = 0; k < n; k++) {
+        var col = RM.HASH_PALETTE[(i + k) % n];
+        if (!taken[col]) { table[e] = col; taken[col] = true; return; }
+      }
+      table[e] = RM.HASH_PALETTE[i]; // more epics than swatches: colors repeat
+    });
+    return table;
+  }
+  RM.colorForEpic = function (state, epic) {
+    if (!epic) return RM.PALETTE.neutral;
+    var c = state && state.epicColors ? resolveColor(state.epicColors[epic]) : null;
+    if (c) return c;
+    var table = epicColorTable(state);
+    return table[epic] || RM.HASH_PALETTE[((hashOf(epic) * 2654435761) >>> 0) % RM.HASH_PALETTE.length];
+  };
+  RM.colorForMember = function (m) {
+    if (!m) return RM.PALETTE.neutral;
+    return hslToHex(hashOf(RM.memberLabel(m)) % 360, 52, 42);
+  };
+  // priority: a fixed ladder from hottest to coolest across the scheme's order
+  RM.PRIORITY_RAMP = ['C2402E', 'D9822B', '3273BD', '6E7883'];
+  RM.colorForPriority = function (state, it) {
+    var sch = RM.prioritySchemeOf(state);
+    if (sch === 'none') return RM.PALETTE.neutral;
+    if (sch === 'rice') {
+      // relative: quartiles of the scored items
+      var mine = RM.riceScore(it);
+      if (!(mine > 0)) return RM.PALETTE.neutral;
+      var scores = state.items.map(RM.riceScore).filter(function (x) { return x > 0; }).sort(function (a, b) { return b - a; });
+      var rank = scores.indexOf(mine);
+      return RM.PRIORITY_RAMP[Math.min(3, Math.floor(rank * 4 / scores.length))];
+    }
+    var order = RM.priorityOrderOf(state);
+    var idx = order.indexOf(it.priority);
+    if (idx === -1) return RM.PALETTE.neutral;
+    return RM.PRIORITY_RAMP[Math.min(3, Math.floor(idx * 4 / order.length))];
+  };
   RM.colorForItem = function (state, it) {
+    if (colorMode === 'epic') return RM.colorForEpic(state, it.epic);
+    if (colorMode === 'assignee') {
+      var id = (it.assignees || [])[0];
+      var m = id ? (state.team || []).filter(function (x) { return x.id === id; })[0] : null;
+      return RM.colorForMember(m);
+    }
+    if (colorMode === 'priority') return RM.colorForPriority(state, it);
     return RM.colorForWs(state, it.workstream);
+  };
+  // legend entries for a set of items under the active color mode:
+  // [{ name, color }], in first-seen order (workstreams: default last)
+  RM.colorLegend = function (state, items) {
+    var seen = {}, out = [];
+    function add(name, color) { if (!seen[name]) { seen[name] = true; out.push({ name: name, color: color }); } }
+    items.forEach(function (it) {
+      if (colorMode === 'epic') add(it.epic || 'No epic', RM.colorForEpic(state, it.epic));
+      else if (colorMode === 'assignee') {
+        var id = (it.assignees || [])[0];
+        var m = id ? (state.team || []).filter(function (x) { return x.id === id; })[0] : null;
+        add(m ? RM.memberLabel(m) : 'Unassigned', RM.colorForMember(m));
+      } else if (colorMode === 'priority') {
+        var sch = RM.prioritySchemeOf(state);
+        var lbl = sch === 'none' ? 'No priority' : sch === 'rice' ? 'RICE' : (it.priority || 'No priority');
+        add(lbl, RM.colorForPriority(state, it));
+      } else add(it.workstream || RM.defaultWsName(state), RM.colorForWs(state, it.workstream));
+    });
+    if (colorMode === 'workstream') {
+      var dn = RM.defaultWsName(state);
+      out = out.filter(function (e) { return e.name !== dn; }).concat(out.filter(function (e) { return e.name === dn; }));
+    }
+    return out;
   };
   // profile avatars: initials + a deterministic color from the name
   RM.initialsOf = function (name) {

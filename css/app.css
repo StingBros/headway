@@ -2801,26 +2801,6 @@ body[data-view="scoping"] .row.story .sc-edit { height: 50px; min-height: 50px; 
 body[data-view="budget"] #detailBtn, body[data-view="setup"] #detailBtn { display: none; }
 #rowFilter { border-radius: 7px; }
 
-/* phase-only detail: the band's lane holds the phase's span with every
-   scheduled item painted inside it in ITS color */
-.ph-row-bar {
-  position: absolute; top: 4px; bottom: 4px; border-radius: 6px;
-  background: var(--band-hover); border: 1px solid var(--band-line);
-  overflow: hidden;
-}
-.ph-row-bar > span {
-  position: absolute; left: 8px; top: 50%; transform: translateY(-50%); z-index: 2;
-  color: var(--band-ink); font-size: 10.5px; font-weight: 700; white-space: nowrap;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, .55);
-  pointer-events: none;
-}
-.ph-seg {
-  position: absolute; top: 3px; bottom: 3px; border-radius: 3px;
-  opacity: .9;
-}
-.row.band.ph-only .row-lane { position: relative; }
-/* no chevron in phase detail — indent the label to the app's 14px gutter */
-.row.band.ph-only .band-name { padding-left: 14px; }
 
 /* ------------------------------------------------------- budget column resize */
 .hl-cols i[data-bucol] { position: relative; }
@@ -2995,3 +2975,27 @@ body[data-view="history"] #panelPeek { display: none; }
 .vt-key .sw { width: 14px; height: 8px; border-radius: 3px; display: inline-block; }
 .vt-key .sw.old { background: var(--err-bg); border: 1px solid var(--err); }
 .vt-key .sw.new { background: color-mix(in srgb, var(--ok) 22%, var(--surface)); border: 1px solid var(--ok); }
+
+/* hovering a row whose bar is scrolled out of view: "← title" / "title →"
+   pinned to the near edge of the visible lane */
+.lane-off {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--ink); white-space: nowrap;
+  pointer-events: none; z-index: 6;
+}
+.lane-off.right { flex-direction: row-reverse; }
+.lane-off .lo-arrow { font-size: 13px; line-height: 1; color: var(--ink-2); }
+.lane-off .lo-text {
+  max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+  padding: 2px 7px; border: 1px solid var(--line-2); border-radius: 5px;
+  background: var(--surface);
+}
+.row.story .lane-off { font-size: 10.5px; }
+.row.story .lane-off .lo-text { padding: 0 6px; }
+
+/* Jira sync dialog */
+.jr-plan { margin: 0 0 8px 18px; padding: 0; font-size: 13px; }
+.jr-plan li { margin: 3px 0; }
+.jr-list { max-height: 160px; overflow: auto; font-size: 12px; color: var(--ink-2); }
+.jr-list div { padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -18,6 +18,7 @@ build:
 # core + headless UI smoke suites
 test:
 	NODE_PATH=./node_modules node tests/core.test.js
+	NODE_PATH=./node_modules node tests/jira.test.js
 	NODE_PATH=./node_modules node tests/smoke.test.js
 
 # stage the static frontend into dist/ (what the Tauri build bundles)

@@ -523,7 +523,7 @@
       if (!right) return;
       var b = document.createElement('button');
       b.id = 'btnUpdate';
-      b.title = 'Version ' + update.version + ' downloaded — click to restart and update';
+      b.title = 'Version ' + update.version + ' downloaded';
       b.innerHTML = '<i data-lucide="refresh-cw"></i>Update';
       b.addEventListener('click', function () {
         b.disabled = true;

@@ -200,24 +200,15 @@
     // colors), default workstream last. Entry positions are precomputed with
     // an approximate glyph width so both renderers lay them out identically.
     var legend = [];
-    if (meta.workstreamsEnabled !== false) {
-      var seenWs = {}, wsOrder = [];
-      visPhases.forEach(function (v) {
-        v.items.forEach(function (it) {
-          var k = it.workstream || '';
-          if (!seenWs[k]) { seenWs[k] = true; wsOrder.push(k); }
-        });
-      });
-      if (wsOrder.indexOf('') !== -1) {
-        wsOrder = wsOrder.filter(function (k) { return k !== ''; }).concat(['']);
-      }
+    if (meta.workstreamsEnabled !== false || RM.colorMode() !== 'workstream') {
+      var legItems = [];
+      visPhases.forEach(function (v) { v.items.forEach(function (it) { legItems.push(it); }); });
       var width = LEFT_W + (w1 - w0) * weekPx;
       var lx = 10, ly = y + 8, LG_H = 18;
-      wsOrder.forEach(function (k) {
-        var name = k || RM.defaultWsName(state);
-        var w = 16 + name.length * 6.2 + 18; // swatch + gap + name + spacing
+      RM.colorLegend(state, legItems).forEach(function (e) {
+        var w = 16 + e.name.length * 6.2 + 18; // swatch + gap + name + spacing
         if (lx > 10 && lx + w > width - 10) { lx = 10; ly += LG_H; }
-        legend.push({ name: name, color: RM.colorForWs(state, k), x: lx, y: ly, h: LG_H });
+        legend.push({ name: e.name, color: e.color, x: lx, y: ly, h: LG_H });
         lx += w;
       });
       if (legend.length) y = ly + LG_H;

@@ -45,7 +45,7 @@ window.addEventListener('error', (e) => errors.push(e.message));
   window.localStorage.setItem('headway-v1', JSON.stringify(seeded));
 }
 
-for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/app.js']) {
+for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/app.js']) {
   try {
     window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   } catch (e) {
@@ -162,8 +162,8 @@ click(doc.querySelector('[data-menu="file"]'));
 ok(!doc.querySelector('#popover').hidden && doc.querySelectorAll('#popover .menu-list button').length >= 5, 'File menu opens with items');
 ok(Array.from(doc.querySelectorAll('#popover .menu-list button')).some(b => /Download template/.test(b.textContent)),
   'File menu offers Download template');
-ok(!Array.from(doc.querySelectorAll('#popover .menu-list button')).some(b => /Jira/.test(b.textContent)),
-  'File menu has no separate Jira item — it lives in the Export dialog');
+ok(Array.from(doc.querySelectorAll('#popover .menu-list button')).some(b => /Sync with Jira/.test(b.textContent)),
+  'File menu offers Sync with Jira (the CSV export stays in the Export dialog)');
 {
   const tpl = window.__headway.templateState();
   ok(tpl.items.length === 1 && /Example/.test(tpl.items[0].feature) &&
@@ -370,9 +370,9 @@ click(doc.querySelector('#resManage'));
 ok(doc.body.dataset.view === 'setup', 'resources "manage" jumps to the Setup view');
 ok(doc.querySelector('#setupView [data-sutab="team"]').classList.contains('on'),
   'resources "manage" lands on the Team tab');
-ok(doc.querySelectorAll('#setupView .su-tab').length === 9 &&
+ok(doc.querySelectorAll('#setupView .su-tab').length === 10 &&
   doc.querySelectorAll('#setupView .su-rail-hd').length === 2,
-  'settings rail: 9 vertical tabs under Project + Personal sections');
+  'settings rail: 10 vertical tabs under Project + Personal sections');
 ok(doc.querySelectorAll('#setupView .su-card').length === 3 && !!doc.querySelector('#suCapEnable'),
   'Team tab shows roles + work week + capacity');
 ok(/Roles/.test(doc.querySelector('#setupView .su-card h2').textContent), 'team types renamed to Roles');
@@ -2215,29 +2215,23 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(!!dmBtn && !!dmBtn.querySelector('svg,[data-lucide]'), 'a detail-level dropdown sits left of the Feature header');
   click(dmBtn);
   const dmMenu = doc.querySelector('#popover .menu-list');
-  ok(!!dmMenu && dmMenu.querySelectorAll('[data-mi]').length === 3 &&
-    /Phase/.test(dmMenu.textContent) && /Feature/.test(dmMenu.textContent) && /Story/.test(dmMenu.textContent),
-    'the dropdown offers Phase / Feature / Story, each with an icon');
-  ok(dmMenu.querySelectorAll('[data-mi] svg, [data-mi] [data-lucide]').length >= 3, 'detail options carry icons');
-  click(dmMenu.querySelector('[data-mi="1"]')); // Feature
+  ok(!!dmMenu && dmMenu.querySelectorAll('[data-mi]').length === 2 &&
+    !/Phase/.test(dmMenu.textContent) && /Feature/.test(dmMenu.textContent) && /Story/.test(dmMenu.textContent),
+    'the dropdown offers Feature / Story only, each with an icon');
+  ok(dmMenu.querySelectorAll('[data-mi] svg, [data-mi] [data-lucide]').length >= 2, 'detail options carry icons');
+  ok(!dmMenu.querySelector('[data-mi] small'), 'detail options carry no explanatory text');
+  click(dmMenu.querySelector('[data-mi="0"]')); // Feature
   ok(doc.querySelectorAll('#rows .row.story').length === 0,
     'feature detail keeps story rows tucked away');
   click(dmBtn);
-  click(doc.querySelector('#popover .menu-list [data-mi="2"]')); // Story
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story
   ok(doc.querySelectorAll('#rows .row.story').length > 0, 'story detail opens every story row');
-  click(doc.querySelector('#detailBtn'));
-  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // Phase
-  ok(doc.querySelectorAll('#rows .row.item').length === 0 &&
-    doc.querySelectorAll('#rows .row.band').length === state().phases.length,
-    'phase detail shows only the phase bands');
-  ok(!!doc.querySelector('#rows .ph-row-bar'), 'phase bands paint their span as a bar on Planning');
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
-  ok(doc.querySelectorAll('#rows .row.item').length === 0, 'phase detail applies on Scoping too');
   click(doc.querySelector('#detailBtn'));
-  click(doc.querySelector('#popover .menu-list [data-mi="2"]')); // Story
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story
   ok(doc.querySelectorAll('#rows .row.story').length > 0, 'story detail applies on Scoping too');
   click(doc.querySelector('#detailBtn'));
-  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // back to Feature
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
@@ -2329,7 +2323,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   // and carries a text label
   const dmBtn = doc.querySelector('#filterCell #detailBtn');
   ok(!!dmBtn, 'the detail selector sits inside the filter header cell');
-  ok(/Phase|Feature|Story/.test(dmBtn.textContent), 'the detail selector shows a text label');
+  ok(/Feature|Story/.test(dmBtn.textContent), 'the detail selector shows a text label');
 
   // budget headers are rendered dynamically, aligned to the same visible set
   click(doc.querySelector('#viewTabs [data-view="budget"]'));
@@ -2386,17 +2380,9 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 
 // ------------------------------------------------- batch 11: detail modes
 {
-  // phase detail paints items inside the phase bar, in their colors
-  click(doc.querySelector('#detailBtn'));
-  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // Phase
-  ok(doc.querySelectorAll('#rows .ph-row-bar .ph-seg').length > 0,
-    'phase bars carry colored per-item segments');
-  ok(/background:#/.test(doc.querySelector('#rows .ph-seg').getAttribute('style')),
-    'segments use the item colors');
-
   // story detail: everything expanded, add-story everywhere, milestones bare
   click(doc.querySelector('#detailBtn'));
-  click(doc.querySelector('#popover .menu-list [data-mi="2"]')); // Story
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story
   const visItems = Array.from(doc.querySelectorAll('#rows .row.item'));
   const visNonMs = visItems.filter(r => {
     const it = state().items.find(i => i.id === r.dataset.id);
@@ -2434,7 +2420,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(moved, 'dragging a story row drops it into the targeted feature (' + srcItem + ' → ' + destItem + ')');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   click(doc.querySelector('#detailBtn'));
-  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // back to Feature
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature
 }
 
 // ------------------------------------------------- batch 11: history timeline
@@ -2567,7 +2553,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   w2.ExcelJS = ExcelJS;
   w2.localStorage.setItem('headway-v1', window.localStorage.getItem('headway-v1'));
   w2.localStorage.setItem('headway-ui-v1', window.localStorage.getItem('headway-ui-v1'));
-  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/app.js']) {
+  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/app.js']) {
     w2.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   }
   const d2 = w2.document;
@@ -2584,7 +2570,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const dom3 = new JSDOM(html, { url: 'http://localhost/roadmapping/index.html', runScripts: 'outside-only', pretendToBeVisual: true });
   dom3.window.ExcelJS = ExcelJS;
   dom3.window.localStorage.setItem('headway-v1', window.localStorage.getItem('headway-v1'));
-  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/app.js']) {
+  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/app.js']) {
     dom3.window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   }
   dom3.window.document.querySelector('#startBody [data-sp-continue]')
@@ -2869,7 +2855,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
 {
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
   click(doc.querySelector('#detailBtn'));
-  click(doc.querySelector('#popover .menu-list [data-mi="2"]')); // Story detail: every feature open
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story detail: every feature open
   const seedRow = doc.querySelector('#rows .row.story[data-story]');
   const addInp = doc.querySelector('#rows .row.story-add[data-id="' + seedRow.dataset.id + '"] .st-add-input');
   addInp.value = 'Second story';
@@ -2894,7 +2880,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   ok(state().items.find(i => i.id === host.id).stories[0].id === firstId, 'undo restores the story order');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true })); // drop the added story
   click(doc.querySelector('#detailBtn'));
-  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // back to Feature detail
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
 }
 
 // ---------------------------------------------------------------- story assignees in the story panel
@@ -3027,7 +3013,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   // story chips on every board: Planning rows, Sprinting rows, Prioritizing cards
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
   click(doc.querySelector('#detailBtn'));
-  click(doc.querySelector('#popover .menu-list [data-mi="2"]')); // Story detail
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story detail
   const stRowP = doc.querySelector('#rows .row.story[data-story]');
   ok(!!stRowP && !!stRowP.querySelector('[data-act="st-size"]') && !!stRowP.querySelector('[data-act="st-wk"]'),
     'planning story rows carry size + duration chips');
@@ -3057,7 +3043,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     }
   }
   click(doc.querySelector('#detailBtn'));
-  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // back to Feature detail
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
   click(doc.querySelector('#viewTabs [data-view="sprints"]'));
   ok(!!doc.querySelector('#sprintsView .spv-row [data-spact="dur"]') || !!doc.querySelector('.spv-row [data-spact="dur"]'),
     'sprinting rows carry a duration chip');
