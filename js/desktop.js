@@ -250,6 +250,40 @@
 
     currentPath: function () { return currentPath; },
     basename: basename,
+    // Claude Code process bridge for the AI assistant's "Claude subscription"
+    // provider (js/ai.js owns the stream-json protocol). One global event
+    // listener fans stdout/stderr/exit lines out to the live handles by pid.
+    claude: (function () {
+      var invoke = window.__TAURI__.core.invoke;
+      var handles = {};
+      var listening = false;
+      function ensureListener() {
+        if (listening) return;
+        listening = true;
+        window.__TAURI__.event.listen('ai-proc', function (ev) {
+          var p = ev.payload || {};
+          var h = handles[p.id];
+          if (!h) return;
+          if (p.kind === 'exit') { delete handles[p.id]; h.alive = false; }
+          try { h.onLine(p.kind, p.line); } catch (e) { /* handler error must not kill the pipe */ }
+        });
+      }
+      return {
+        // resolve the CLI binary (custom path wins); null when not installed
+        path: function (custom) { return invoke('ai_claude_path', { custom: custom || '' }); },
+        // spawn → handle { write(line), kill(), alive }
+        spawn: function (bin, args, onLine) {
+          ensureListener();
+          return invoke('ai_spawn', { bin: bin, args: args }).then(function (id) {
+            var h = { id: id, alive: true, onLine: onLine,
+              write: function (line) { return invoke('ai_write', { id: id, line: line }); },
+              kill: function () { h.alive = false; delete handles[id]; return invoke('ai_kill', { id: id }); } };
+            handles[id] = h;
+            return h;
+          });
+        }
+      };
+    })(),
     appVersion: '' // filled asynchronously below
   };
 

@@ -61,8 +61,152 @@ mod traffic {
     }
 }
 
+
+/// AI assistant ↔ Claude Code bridge. The "Claude subscription" provider runs
+/// `claude -p` (headless Claude Code, billed to the user's Claude plan) as a
+/// child process speaking stream-json on stdin/stdout; the webview owns the
+/// protocol, this module only spawns, pipes lines and kills.
+mod ai {
+    use std::collections::HashMap;
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Child, ChildStdin, Command, Stdio};
+    use std::sync::Mutex;
+    use tauri::{AppHandle, Emitter, Manager, State};
+
+    #[derive(Default)]
+    pub struct Procs(pub Mutex<HashMap<u32, (Child, ChildStdin)>>);
+
+    #[derive(Clone, serde::Serialize)]
+    struct Line {
+        id: u32,
+        kind: &'static str,
+        line: String,
+    }
+
+    fn home() -> String {
+        std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_default()
+    }
+
+    fn login_shell_lookup() -> Option<String> {
+        #[cfg(target_os = "windows")]
+        {
+            let out = Command::new("where").arg("claude").output().ok()?;
+            let s = String::from_utf8_lossy(&out.stdout);
+            return s.lines().map(str::trim).find(|l| !l.is_empty()).map(String::from);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+            let out = Command::new(shell)
+                .args(["-lc", "command -v claude"])
+                .output()
+                .ok()?;
+            let s = String::from_utf8_lossy(&out.stdout);
+            s.lines().map(str::trim).find(|l| !l.is_empty()).map(String::from)
+        }
+    }
+
+    /// Locate the Claude Code CLI: an explicit path first, then the usual
+    /// install spots, then whatever the user's login shell resolves (GUI apps
+    /// start with a bare PATH).
+    #[tauri::command]
+    pub fn ai_claude_path(custom: String) -> Option<String> {
+        let c = custom.trim();
+        if !c.is_empty() {
+            return if std::path::Path::new(c).is_file() { Some(c.to_string()) } else { None };
+        }
+        let h = home();
+        let mut candidates = vec![
+            format!("{h}/.local/bin/claude"),
+            format!("{h}/.claude/local/claude"),
+            "/opt/homebrew/bin/claude".to_string(),
+            "/usr/local/bin/claude".to_string(),
+        ];
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            candidates.push(format!("{appdata}\\npm\\claude.cmd"));
+        }
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            candidates.push(format!("{local}\\Programs\\claude\\claude.exe"));
+        }
+        for p in candidates {
+            if std::path::Path::new(&p).is_file() {
+                return Some(p);
+            }
+        }
+        login_shell_lookup()
+    }
+
+    #[tauri::command]
+    pub fn ai_spawn(app: AppHandle, procs: State<Procs>, bin: String, args: Vec<String>) -> Result<u32, String> {
+        let mut cmd = Command::new(&bin);
+        cmd.args(&args)
+            .current_dir(home())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let mut child = cmd.spawn().map_err(|e| format!("could not start {bin}: {e}"))?;
+        let stdin = child.stdin.take().ok_or("no stdin")?;
+        let stdout = child.stdout.take().ok_or("no stdout")?;
+        let stderr = child.stderr.take().ok_or("no stderr")?;
+        let id = child.id();
+        procs.0.lock().map_err(|e| e.to_string())?.insert(id, (child, stdin));
+
+        let app_out = app.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                let _ = app_out.emit("ai-proc", Line { id, kind: "out", line });
+            }
+            // stdout closed: the process is done — reap it and tell the page
+            if let Some(procs) = app_out.try_state::<Procs>() {
+                if let Ok(mut m) = procs.0.lock() {
+                    if let Some((mut child, _)) = m.remove(&id) {
+                        let _ = child.wait();
+                    }
+                }
+            }
+            let _ = app_out.emit("ai-proc", Line { id, kind: "exit", line: String::new() });
+        });
+        let app_err = app.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                let _ = app_err.emit("ai-proc", Line { id, kind: "err", line });
+            }
+        });
+        Ok(id)
+    }
+
+    #[tauri::command]
+    pub fn ai_write(procs: State<Procs>, id: u32, line: String) -> Result<(), String> {
+        let mut m = procs.0.lock().map_err(|e| e.to_string())?;
+        let (_, stdin) = m.get_mut(&id).ok_or("process is gone")?;
+        stdin.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+        stdin.write_all(b"\n").map_err(|e| e.to_string())?;
+        stdin.flush().map_err(|e| e.to_string())
+    }
+
+    #[tauri::command]
+    pub fn ai_kill(procs: State<Procs>, id: u32) -> Result<(), String> {
+        let mut m = procs.0.lock().map_err(|e| e.to_string())?;
+        if let Some((mut child, stdin)) = m.remove(&id) {
+            drop(stdin);
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Ok(())
+    }
+}
+
 fn main() {
     tauri::Builder::default()
+        .manage(ai::Procs::default())
+        .invoke_handler(tauri::generate_handler![ai::ai_claude_path, ai::ai_spawn, ai::ai_write, ai::ai_kill])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
