@@ -45,7 +45,7 @@ window.addEventListener('error', (e) => errors.push(e.message));
   window.localStorage.setItem('headway-v1', JSON.stringify(seeded));
 }
 
-for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/app.js']) {
+for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/app.js']) {
   try {
     window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   } catch (e) {
@@ -112,6 +112,41 @@ ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidd
   ok(window.localStorage.getItem('headway-user-v1') === 'Test User', 'the name persists on this machine');
   const hist = state().history;
   ok(hist.length && hist[hist.length - 1].u === 'Test User', 'the anonymous change is stamped with the new author');
+}
+
+// ------------------------------------------------------------ AI assistant
+{
+  const AI = window.HeadwayAI;
+  ok(!!AI && typeof AI.send === 'function', 'js/ai.js registers window.HeadwayAI');
+  const drawer = doc.querySelector('#aiDrawer');
+  ok(drawer && drawer.hidden, 'the assistant drawer starts closed');
+  click(doc.querySelector('#btnAI'));
+  ok(!drawer.hidden && doc.body.classList.contains('ai-open'), 'the toolbar AI button opens the drawer');
+  ok(doc.querySelector('#aiDrawer #aiInput') && doc.querySelector('#aiDrawer #aiCompose #aiEffortSel') && doc.querySelector('#aiDrawer #aiCompose #aiModelSel') && doc.querySelector('#aiDrawer textarea#aiInput'),
+    'the composer is a textarea with the model and effort pickers beneath it');
+  ok(/Open AI settings/.test(drawer.textContent), 'an unconfigured provider points at the settings');
+  click(doc.querySelector('#aiDrawer #aiClose'));
+  ok(drawer.hidden, 'the close button hides the drawer');
+  // settings tab renders the provider fields
+  window.HeadwayApp.ai.openSettings();
+  ok(doc.querySelector('#aiSettingsCard #aiBase') && doc.querySelector('#aiSettingsCard [data-aiprov="claude"]'),
+    'Setup → AI assistant shows the gateway fields and the provider switch');
+  click(doc.querySelector('#aiSettingsCard [data-aiprov="claude"]'));
+  ok(AI.loadSettings().provider === 'claude' && !doc.querySelector('#aiSettingsCard #aiClaude').hidden,
+    'picking the Claude provider persists and reveals its fields');
+  click(doc.querySelector('#aiSettingsCard [data-aiprov="litellm"]'));
+  click(doc.querySelector('#aiSettingsCard [data-aieffort="high"]'));
+  ok(AI.loadSettings().effort === 'high', 'effort persists from the settings tab');
+  // tools run against the live app bridge and land in history as "· AI"
+  const before = state().items.length;
+  const res = AI.runTool('add_items', { items: [{ feature: 'AI-made feature', start: state().meta.timelineStart, durDays: 5 }] }, window.HeadwayApp);
+  ok(res.created.length === 1 && state().items.length === before + 1, 'add_items creates a feature through the app');
+  const h = state().history;
+  ok(h[h.length - 1].u === 'Test User · AI', 'AI edits are attributed to "<name> · AI" in Version history');
+  ok(AI.runTool('navigate', { view: 'planning', num: res.created[0].num }, window.HeadwayApp).selected === true, 'navigate selects the new feature');
+  AI.runTool('update_items', { updates: [{ num: res.created[0].num, delete: true }] }, window.HeadwayApp);
+  ok(state().items.length === before, 'update_items can delete it again');
+  window.HeadwayApp.ai.setView('planning');
 }
 ok(doc.querySelectorAll('#rows .row.band').length === 6, 'six phase bands rendered');
 const itemRows = doc.querySelectorAll('#rows .row.item').length;
@@ -2567,7 +2602,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   w2.ExcelJS = ExcelJS;
   w2.localStorage.setItem('headway-v1', window.localStorage.getItem('headway-v1'));
   w2.localStorage.setItem('headway-ui-v1', window.localStorage.getItem('headway-ui-v1'));
-  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/app.js']) {
+  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/app.js']) {
     w2.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   }
   const d2 = w2.document;
@@ -2584,7 +2619,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const dom3 = new JSDOM(html, { url: 'http://localhost/roadmapping/index.html', runScripts: 'outside-only', pretendToBeVisual: true });
   dom3.window.ExcelJS = ExcelJS;
   dom3.window.localStorage.setItem('headway-v1', window.localStorage.getItem('headway-v1'));
-  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/app.js']) {
+  for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/app.js']) {
     dom3.window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   }
   dom3.window.document.querySelector('#startBody [data-sp-continue]')

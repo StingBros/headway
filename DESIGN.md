@@ -276,11 +276,47 @@ Parent, Labels (`ws-…`, `phase-…`, `size-…`; story rows add `feature-…`)
 the row as an update). It is the third format in the Export dialog (right of PowerPoint); choosing it swaps the timeline options for feature and/or story rows and the issue type names
 (defaults Story / Sub-task); its settings persist in the UI snapshot (`jiraPrefs`).
 
+## AI assistant (`js/ai.js`)
+
+`window.HeadwayAI`, module-shaped like `js/jira.js`: pure pieces (node-tested in
+`tests/ai.test.js`) plus browser glue. App hooks live on `HeadwayApp.ai` (reads are clones;
+`commit(label, mutate)` flips `aiActor` so history stamps "<name> · AI"; `setPref`, `setView`,
+`selectNum`, `ui()`, `validation()`).
+
+- **Providers** (personal, `localStorage` `headway-ai-v1`): `litellm` — OpenAI-compatible
+  `POST {base}/v1/chat/completions`, streamed SSE, native `tools`, `reasoning_effort` (retried
+  without it on a 400 that names it), reasoning via `reasoning_content` / `thinking_blocks`
+  (blocks are replayed on assistant turns so Anthropic tool-use stays valid), models from
+  `GET /v1/models`; transport is Tauri's http plugin on desktop, `fetch` otherwise. `claude` —
+  desktop only: `HeadwayDesktop.claude.spawn` runs `claude -p --input-format stream-json
+  --output-format stream-json --include-partial-messages --tools "" --strict-mcp-config
+  --system-prompt … --model … --effort …` once per conversation, user turns are written as
+  stream-json lines, `stream_event` deltas stream text/thinking, `result` ends the turn; Stop
+  kills the process and the next turn `--resume`s the session id. Function calling is a text
+  protocol there: the system prompt lists the tool schemas and the model writes
+  ```` ```headway-tool ```` fenced `{name, args}` JSON; results go back as the next user turn.
+- **Tools** (`AI.TOOLS`, `AI.runTool`): `get_project` (summary / items by num / meta / phases /
+  team / validation / history), `get_preferences`, `add_items`, `update_items` (ISO `start` /
+  `end` conveniences, `addStories`, `delete`), `update_project` (path ops `set` / `delete` /
+  `push` over any part of the state — `items/#12/feature`, `phases/@id/name`, `team/-`,
+  `wsColors/Data`; then `RM.normalizeState`), `set_preference`, `navigate`, `sync_jira` (dry-run preview or apply through `js/jira.js`: plan → apply → commit keys, Done flags and the sync stamp). Tools may return promises; calls run in order. Writes return
+  validation counts + errors so the model can react. `AI.MAX_ROUNDS` bounds tool loops.
+- **System prompt** (`AI.GUIDE` + `AI.systemPrompt(ctx)`): what Headway is, the views, the
+  model, working rules (read before write, ISO dates inside the timeline, ask when ambiguous),
+  plus today / user / view / open-document line.
+- **Drawer** (`#aiDrawer`, last child of `#main`, `--ai-w` width, `headway-ai-ui-v1`): header
+  with model + effort selects, new chat, settings, close; messages re-render on a rAF-coalesced
+  `emit`; assistant blocks = collapsible thinking (`.ai-think`), `AI.md` markdown (escaped;
+  `#12` becomes `.ai-ref` that selects the item), tool cards (`.ai-tool`, `.write` / `.fail`),
+  errors; composer with attachments (`AI.readFile`: images / PDF as base64, text inline, size
+  caps). `#btnAI.busy` spins; `.ai-dot` marks a reply that landed while closed. The
+  conversation persists in `headway-ai-chat-v1` (file names only).
+
 ## Files
 
 `index.html` · `css/app.css` · `js/core.js` (pure logic, node-testable) · `js/excel.js` ·
 `js/app.js` (UI) · `js/vendor/exceljs.min.js` · `js/vendor/lucide.min.js` ·
-`js/jira.js` · `tests/core.test.js` · `tests/jira.test.js` · `tests/smoke.test.js` (jsdom) · `tests/seed.fixture.js` (the old
+`js/jira.js` · `js/ai.js` · `tests/core.test.js` · `tests/jira.test.js` · `tests/ai.test.js` · `tests/smoke.test.js` (jsdom) · `tests/seed.fixture.js` (the old
 workbook parse, now a TEST FIXTURE only — the app itself boots completely empty; there is
 no embedded seed and no seed-restore menu).
 
