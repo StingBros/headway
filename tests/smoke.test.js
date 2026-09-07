@@ -2235,6 +2235,20 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
+// ---------------------------------------------------------------- Jira login stays on this machine
+{
+  window.HeadwayJira.saveCreds({ email: 'me@example.com', token: 'SECRET-TOKEN-123' });
+  window.eval("HeadwayApp.ai.commit('jira settings', function (s) { s.meta.jira = { site: 'https://x.atlassian.net', project: 'HW' }; })");
+  const docJson = JSON.stringify(state());
+  const uiJson = window.localStorage.getItem('headway-ui-v1') || '';
+  ok(docJson.indexOf('SECRET-TOKEN-123') === -1 && docJson.indexOf('me@example.com') === -1,
+    'the Jira token and email never enter the document');
+  ok(uiJson.indexOf('SECRET-TOKEN-123') === -1, 'the Jira token is not in the UI snapshot that the file carries');
+  ok(docJson.indexOf('x.atlassian.net') !== -1, 'the site and project are shared through the document');
+  ok(window.HeadwayJira.credsFor(state()).site === 'https://x.atlassian.net', 'the login pairs with the document site');
+  window.localStorage.removeItem('headway-jira-v1');
+}
+
 // ---------------------------------------------------------------- workstream via context menu
 {
   const itRow = doc.querySelector('#rows .row.item');

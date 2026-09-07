@@ -2999,3 +2999,24 @@ body[data-view="history"] #panelPeek { display: none; }
 .jr-plan li { margin: 3px 0; }
 .jr-list { max-height: 160px; overflow: auto; font-size: 12px; color: var(--ink-2); }
 .jr-list div { padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* topbar Jira sync status: icon + a dot that reads off / never / dirty / clean / error */
+#btnJira { position: relative; }
+#btnJira .jr-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); display: inline-block; margin-left: 2px; }
+#btnJira.off .jr-dot { opacity: .45; }
+#btnJira.never .jr-dot, #btnJira.dirty .jr-dot { background: var(--warn); }
+#btnJira.clean .jr-dot { background: var(--ok); }
+#btnJira.error .jr-dot { background: var(--err); }
+
+#btnJira.busy .jr-dot { background: var(--blue); }
+#btnJira.busy svg { animation: jr-spin 1s linear infinite; }
+@keyframes jr-spin { to { transform: rotate(360deg); } }
+
+/* Setup → Jira: people to Jira accounts */
+.jr-people { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.jr-person { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.jr-pname { min-width: 140px; font-weight: 600; }
+.jr-pstate { font-size: 11.5px; color: var(--ink-3); min-width: 120px; }
+.jr-pstate.on { color: var(--ok); }
+.jr-psearch { flex: 1; min-width: 160px; }
+.jr-presults select { max-width: 320px; }

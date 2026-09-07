@@ -280,7 +280,7 @@ the row as an update). It is the third format in the Export dialog (right of Pow
 
 `index.html` · `css/app.css` · `js/core.js` (pure logic, node-testable) · `js/excel.js` ·
 `js/app.js` (UI) · `js/vendor/exceljs.min.js` · `js/vendor/lucide.min.js` ·
-`tests/core.test.js` · `tests/smoke.test.js` (jsdom) · `tests/seed.fixture.js` (the old
+`js/jira.js` · `tests/core.test.js` · `tests/jira.test.js` · `tests/smoke.test.js` (jsdom) · `tests/seed.fixture.js` (the old
 workbook parse, now a TEST FIXTURE only — the app itself boots completely empty; there is
 no embedded seed and no seed-restore menu).
 

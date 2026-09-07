@@ -2679,6 +2679,7 @@
     }
     var fsEl = $('#finishStat');
     if (fsEl) fsEl.textContent = fs;
+    if (window.HeadwayJira) HeadwayJira.renderStatus($('#btnJira'), state);
   }
 
   function renderHeader(laneW) {
@@ -7449,6 +7450,7 @@
   // ------------------------------------------------------------ team modal
   // ------------------------------------------------------------ validation modal
   $('#btnValidation').addEventListener('click', validationModal);
+  $('#btnJira').addEventListener('click', function (e) { if (window.HeadwayJira) HeadwayJira.statusMenu(e.currentTarget); });
   function validationModal() {
     var groups = { error: [], warn: [], info: [] };
     state.items.forEach(function (it) {
@@ -9982,6 +9984,7 @@
     renderStartPage: renderStartPage,
     openModal: openModal,
     closeModal: closeModal,
+    openDropdown: openDropdown,
     openSetup: function (tab) { setupTab = tab; view = 'setup'; saveLocal(); render(); },
     // hooks for the AI assistant (js/ai.js): reads are clones, every write
     // goes through commit() so it lands in undo + Version history (as

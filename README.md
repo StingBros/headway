@@ -104,6 +104,7 @@ rows have right-click context menus; dropdowns share one list UI.
 - `js/excel.js` — ExcelJS import/export
 - `js/app.js` — UI
 - `js/export-jira.js` — Jira CSV export (user-level importer shape)
+- `js/jira.js` — Jira Cloud sync
 - `js/desktop.js` — Tauri desktop bridge (native dialogs, disk save/load, file watching); no-op in a browser
 - `tests/seed.fixture.js` — sample document used by the test suites only
 - `js/vendor/exceljs.min.js`, `js/vendor/lucide.min.js` — vendored libraries
