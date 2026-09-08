@@ -183,11 +183,33 @@ other side.
 - `reconcileVisibleEdits` remains for standalone workbooks only; the bundle path never
   reaches it.
 
+### Import from Excel (add-only)
+
+- File → **Import from Excel…** (bundle only, desktop only) merges a workbook *into* the open
+  shared roadmap. The workbook is read once through `RMExcel.importWorkbook` and never adopted:
+  `currentPath`, the watcher and the bundle session are untouched. A foreign (template-layout)
+  workbook is accepted and flagged in the preview.
+- **The shared roadmap wins; the import only adds.** `RM.planImport(state, incoming)` pairs
+  rows and never guesses: items by `id`, then by `num` + normalized title, then by title alone
+  when it is unique on both sides; stories inside a matched item by `id` then title; team and
+  phases by `id` then name. Unpaired rows are adds — a colliding id is re-minted, the item takes
+  the next `num`, its phase maps by name (else the first phase), its dependencies resolve to
+  merged ids or fall to `depsText` as `#num`.
+- A paired row gains a value only for a field that is **empty** in the roadmap and non-empty in
+  the workbook (`RM.IMPORT_FILL_FIELDS`, story `description`/`ac`, an empty dependency list).
+  Where both hold a value and differ the difference is counted and shown as "left alone";
+  nothing is overwritten. A fill re-checks emptiness at apply time.
+- Idempotent: importing the same workbook again plans zero adds and zero fills ("Nothing new
+  to import").
+- The preview modal (counts + the first new feature titles) applies through
+  `commit('import from Excel', …)` → `RM.applyImport`, so the import is one undo step, one
+  history line, and flushes only the shards it changed.
+
 ### Menus, recents, start page
 
 - File (and its macOS native mirror): **New shared roadmap…**, **Open shared roadmap…**,
   **Convert to shared folder…** (xlsx only), Save becomes **Export .xlsx…** in a bundle,
-  Auto save is hidden. Desktop only — the browser build keeps its `.xlsx` flow.
+  **Import from Excel…** appears (bundle only), Auto save is hidden. Desktop only — the browser build keeps its `.xlsx` flow.
 - Recents entries gain `kind` (`'bundle' | 'xlsx'`; missing = xlsx); folders show a
   `folder-open` icon and open through `openBundle`. The Save button reads **Sync** /
   **Synced ✓** in a bundle. `{docKind, bundleDir, activePlanId}` ride in the UI snapshot so

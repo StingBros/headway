@@ -1489,6 +1489,68 @@
       toast('Could not open the shared roadmap: ' + (err && err.message || err), 'err');
     });
   }
+  // bundle mode: File → Import from Excel… merges a workbook INTO the open
+  // shared roadmap. Add-only — RM.planImport never overwrites a value — and
+  // previewed first; the apply runs through commit, so it is one undoable
+  // step with one history line, flushed like any other edit. The workbook is
+  // read once and never adopted: currentPath and the bundle session stand.
+  function countOf(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+  function importFromExcel() {
+    if (docKind !== 'bundle' || !window.HeadwayDesktop || !HeadwayDesktop.pickWorkbook) return;
+    HeadwayDesktop.pickWorkbook().then(function (pick) {
+      if (!pick) return null;
+      return RMExcel.importWorkbook(pick.buffer).then(function (r) {
+        var incoming = RM.normalizeState(r.state);
+        importPreview(pick.name, RM.planImport(state, incoming), r.source);
+      });
+    }).catch(function (err) {
+      toast('Could not import: ' + (err && err.message || err), 'err');
+    });
+  }
+  function importPreview(name, plan, source) {
+    var s = plan.summary;
+    var leftAlone = countOf(s.conflicts, 'difference', 'differences') + ' left alone (the shared roadmap wins)';
+    var note = source === 'template'
+      ? '<div class="m-hint">Not a Headway workbook — read from the template layout.</div>' : '';
+    var body;
+    if (s.empty) {
+      body = '<p style="margin:0">Nothing new to import' + (s.conflicts ? ' — ' + esc(leftAlone) : '') + '.</p>' + note;
+    } else {
+      var counts = [
+        countOf(s.items, 'new feature', 'new features'),
+        countOf(s.stories, 'new story', 'new stories'),
+        countOf(s.fills, 'field filled in', 'fields filled in'),
+        countOf(s.team, 'team member', 'team members'),
+        countOf(s.phases, 'phase', 'phases'),
+        leftAlone
+      ];
+      var titles = plan.items.add.slice(0, 8).map(function (it) { return '<li>' + esc(it.feature || '(untitled)') + '</li>'; });
+      if (plan.items.add.length > 8) titles.push('<li>…and ' + (plan.items.add.length - 8) + ' more</li>');
+      body = '<ul style="margin:0 0 10px;padding-left:18px">' + counts.map(function (c) { return '<li>' + esc(c) + '</li>'; }).join('') + '</ul>' +
+        (titles.length ? '<div class="m-sec"><label>New features</label><ul style="margin:4px 0 0;padding-left:18px">' + titles.join('') + '</ul></div>' : '') +
+        note;
+    }
+    openModal(
+      '<div class="modal" style="width:440px">' +
+      '<div class="m-head"><h2>Import from “' + esc(name) + '”</h2></div>' +
+      '<div class="m-body"><div style="font-size:13px;color:var(--ink-2);line-height:1.5">' + body + '</div></div>' +
+      '<div class="m-foot">' + (s.empty
+        ? '<button data-m="cancel" class="primary">Close</button>'
+        : '<button data-m="cancel">Cancel</button><button data-m="ok" class="primary">Import</button>') +
+      '</div></div>',
+      function (host) {
+        $('[data-m=cancel]', host).onclick = closeModal;
+        var okBtn = $('[data-m=ok]', host);
+        if (!okBtn) return;
+        okBtn.onclick = function () {
+          closeModal();
+          var res = null;
+          commit('import from Excel', function (st) { res = RM.applyImport(st, plan); });
+          toast('Imported ' + countOf(res.added.items, 'feature', 'features') + ', ' +
+            countOf(res.added.stories, 'story', 'stories') + ', ' + countOf(res.filled, 'field', 'fields') + ' filled in');
+        };
+      });
+  }
   // bundle mode's Save: a standalone workbook, always via the dialog, never
   // adopted as the document's path
   function exportXlsx() {
@@ -7059,6 +7121,8 @@
     var saveItem = bundle
       ? { icon: 'file-spreadsheet', label: 'Export .xlsx…', fn: exportXlsx }
       : { icon: 'download', label: 'Save', kbd: '⌘S', fn: function () { $('#btnSave').click(); } };
+    // a workbook merged INTO the open shared roadmap (add-only)
+    var importItem = desk && bundle ? { icon: 'file-input', nativeIcon: 'MultipleDocuments', label: 'Import from Excel…', fn: importFromExcel } : null;
     if (name === 'macApp') {
       // macOS: file actions live in the app-name menu (desktop.js appends the
       // standard Hide/Quit block after these)
@@ -7069,6 +7133,7 @@
         { icon: 'file-spreadsheet', nativeIcon: 'MultipleDocuments', label: 'Download template', fn: downloadTemplate },
         { sep: true },
         saveItem,
+        importItem,
         bundle ? null : { icon: 'save', label: 'Save as…', kbd: '⇧⌘S', fn: function () { window.HeadwayApp.save(true); } },
         bundle ? null : { icon: 'timer-reset', label: 'Auto save', checked: autoSave, fn: toggleAutoSave },
         { sep: true },
@@ -7087,6 +7152,7 @@
         shared[0], shared[1], shared[2],
         { sep: true },
         saveItem,
+        importItem,
         desk && !bundle
           ? { icon: 'save', label: 'Save as…', fn: function () { window.HeadwayApp.save(true); } }
           : null,

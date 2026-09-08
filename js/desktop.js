@@ -738,6 +738,19 @@
     friendlyFsError: friendlyFsError,
 
     // ---- xlsx (single-file) backend ----
+    // pick an .xlsx and hand back its bytes WITHOUT adopting it — no
+    // currentPath, no watcher, the bundle stays the document (Import from
+    // Excel…). Resolves {path, name, buffer}, or null on cancel.
+    pickWorkbook: function () {
+      return dialog.open({ multiple: false, filters: XLSX_FILTER }).then(function (p) {
+        if (!p) return null;
+        return fs.readFile(p).then(function (bytes) {
+          // an exact ArrayBuffer: a view may sit inside a larger pool
+          var buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+          return { path: p, name: basename(p), buffer: buf };
+        });
+      });
+    },
     // native open dialog → load → remember + watch the path
     openDialog: function () {
       dialog.open({ multiple: false, filters: XLSX_FILTER }).then(function (p) {

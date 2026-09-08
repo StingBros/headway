@@ -1569,6 +1569,248 @@
     return out;
   };
 
+  // ------------------------------------------------------------ import (add-only)
+  // Merge a workbook into an open document without overwriting it: unknown
+  // features, stories, team members and phases are added; a matched row only
+  // gains values for fields it left empty. Where both sides hold a value and
+  // disagree the difference is counted, never applied — the shared roadmap
+  // wins. planImport is pure; applyImport mutates (inside commit).
+  // teamType is not here: normalizeState always defaults it, so it is never
+  // empty and a difference would only ever be a false conflict
+  RM.IMPORT_FILL_FIELDS = ['enables', 'outOfScope', 'notes', 'extDeps', 'description', 'size', 'risk'];
+  RM.IMPORT_STORY_FILL_FIELDS = ['description', 'ac'];
+  function normTitle(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase(); }
+  // Only an RM.uid-shaped id is identity across documents. Template imports
+  // mint low-entropy ids ('ph1', 'tm1', …) on BOTH sides, so pairing those by
+  // id would marry unrelated rows; they fall through to the name/title key.
+  function strongId(x) {
+    var id = x && x.id != null ? String(x.id) : '';
+    return /^[a-z]+[0-9a-z]{6,}-\d+-[0-9a-z]{4,}$/.test(id) ? id : '';
+  }
+  function emptyVal(v) { return v == null || v === '' || (Array.isArray(v) && !v.length); }
+  function sameVal(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+  function sameSet(a, b) { return sameVal((a || []).slice().sort(), (b || []).slice().sort()); }
+  // Pair `want` rows with `have` rows, one key function at a time; a key
+  // pairs only when exactly one unmatched row on EACH side carries it, so a
+  // shared title never guesses. Rows left over are adds.
+  function pairRows(have, want, keyFns) {
+    var pairs = [], hFree = have.slice(), wFree = want.slice();
+    keyFns.forEach(function (keyOf) {
+      var hBy = {}, wBy = {};
+      hFree.forEach(function (h, i) { var k = keyOf(h); if (k) (hBy[k] = hBy[k] || []).push(i); });
+      wFree.forEach(function (w, i) { var k = keyOf(w); if (k) (wBy[k] = wBy[k] || []).push(i); });
+      // rows are tracked by position, not id: a workbook may repeat an id
+      var hTaken = {}, wTaken = {};
+      wFree.forEach(function (w, i) {
+        var k = keyOf(w);
+        if (!k || !hBy[k] || hBy[k].length !== 1 || wBy[k].length !== 1) return;
+        pairs.push({ have: hFree[hBy[k][0]], want: w });
+        hTaken[hBy[k][0]] = true;
+        wTaken[i] = true;
+      });
+      hFree = hFree.filter(function (h, i) { return !hTaken[i]; });
+      wFree = wFree.filter(function (w, i) { return !wTaken[i]; });
+    });
+    return { pairs: pairs, add: wFree };
+  }
+  function byId(x) { return strongId(x); } // import pairing: uid-shaped ids only (see strongId)
+  // fill/conflict pass over one matched pair; returns the fields to fill
+  function fillFields(have, want, fields, counter) {
+    var out = {}, any = false;
+    fields.forEach(function (f) {
+      var hv = have[f], wv = want[f];
+      if (emptyVal(wv)) return;
+      if (emptyVal(hv)) { out[f] = RM.clone(wv); any = true; }
+      else if (!sameVal(hv, wv)) counter.conflicts++;
+    });
+    return any ? out : null;
+  }
+
+  // state, incoming: normalized states. Returns a plan for applyImport plus
+  // the counts the preview shows; nothing in `state` is touched.
+  RM.planImport = function (state, incoming) {
+    var plan = {
+      items: { add: [], fill: [], matched: 0, conflicts: 0 },
+      stories: { add: [], fill: [], matched: 0, conflicts: 0 },
+      team: { add: [] },
+      phases: { add: [] },
+      summary: {}
+    };
+    function used(list) { var m = {}; (list || []).forEach(function (x) { m[x.id] = true; }); return m; }
+    function fresh(id, taken, prefix) { var out = taken[id] ? RM.uid(prefix) : id; taken[out] = true; return out; }
+
+    // phases: id, then name
+    var phaseMap = {}, phaseTaken = used(state.phases);
+    var ph = pairRows(state.phases, incoming.phases, [byId, function (p) { return normTitle(p.name); }]);
+    ph.pairs.forEach(function (pr) { phaseMap[pr.want.id] = pr.have.id; });
+    ph.add.forEach(function (p) {
+      var np = RM.clone(p);
+      np.id = fresh(p.id, phaseTaken, 'p');
+      np.order = null;
+      phaseMap[p.id] = np.id;
+      plan.phases.add.push(np);
+    });
+
+    // team: id, then name (an unnamed seat never matches by name)
+    var teamMap = {}, teamTaken = used(state.team);
+    var tm = pairRows(state.team, incoming.team, [byId, function (m) { return normTitle(m.name); }]);
+    tm.pairs.forEach(function (pr) { teamMap[pr.want.id] = pr.have.id; });
+    tm.add.forEach(function (m) {
+      var nm = RM.clone(m);
+      nm.id = fresh(m.id, teamTaken, 't');
+      nm.order = null;
+      teamMap[m.id] = nm.id;
+      plan.team.add.push(nm);
+    });
+    function mapAssignees(list) {
+      var out = [];
+      (list || []).forEach(function (a) { var to = teamMap[a]; if (to && out.indexOf(to) === -1) out.push(to); });
+      return out;
+    }
+
+    // items: id, then num + title, then a title unique on both sides
+    var idMap = {}, itemTaken = used(state.items);
+    var im = pairRows(state.items, incoming.items, [
+      byId,
+      function (it) { return it.num != null && normTitle(it.feature) ? it.num + '|' + normTitle(it.feature) : ''; },
+      function (it) { return normTitle(it.feature); }
+    ]);
+    im.pairs.forEach(function (pr) { idMap[pr.want.id] = pr.have.id; });
+    var num = RM.nextNum(state), srcOf = {};
+    im.add.forEach(function (it) {
+      var n = RM.clone(it);
+      delete n.holdPos;
+      n.id = fresh(it.id, itemTaken, 'i');
+      n.num = num++;
+      n.order = null;
+      n.phaseId = phaseMap[it.phaseId] || state.phases[0].id;
+      n.assignees = mapAssignees(it.assignees);
+      n.stories.forEach(function (s) { s.assignees = mapAssignees(s.assignees); });
+      if (!idMap[it.id]) idMap[it.id] = n.id; // a matched row with this id keeps the mapping
+      srcOf[n.id] = it;
+      plan.items.add.push(n);
+    });
+    // deps reference incoming ids: a target that is matched or added maps to
+    // its merged id; one already in the roadmap stays; anything else falls to
+    // depsText as '#num' so the reference is not lost
+    function mapDeps(it, selfId) {
+      var deps = [], text = (it.depsText || []).slice();
+      (it.deps || []).forEach(function (d) {
+        var to = idMap[d] || (RM.itemById(state, d) ? d : null);
+        if (to) { if (to !== selfId && deps.indexOf(to) === -1) deps.push(to); return; }
+        var tgt = RM.itemById(incoming, d);
+        var label = tgt && tgt.num != null ? '#' + tgt.num : (/^\d+$/.test(d) ? '#' + d : null);
+        if (label && text.indexOf(label) === -1) text.push(label);
+      });
+      return { deps: deps, depsText: text };
+    }
+    plan.items.add.forEach(function (n) {
+      var md = mapDeps(srcOf[n.id], n.id);
+      n.deps = md.deps;
+      n.depsText = md.depsText;
+    });
+    im.pairs.forEach(function (pr) {
+      plan.items.matched++;
+      var fields = fillFields(pr.have, pr.want, RM.IMPORT_FILL_FIELDS, plan.items) || {};
+      if (normTitle(pr.want.feature) && normTitle(pr.have.feature) !== normTitle(pr.want.feature)) plan.items.conflicts++;
+      // a dependency list is filled only when the roadmap has none at all
+      var md = mapDeps(pr.want, pr.have.id);
+      if (md.deps.length || md.depsText.length) {
+        if (emptyVal(pr.have.deps) && emptyVal(pr.have.depsText)) { fields.deps = md.deps; fields.depsText = md.depsText; }
+        else if (!sameSet(pr.have.deps, md.deps)) plan.items.conflicts++;
+      }
+      if (Object.keys(fields).length) plan.items.fill.push({ id: pr.have.id, fields: fields });
+      // stories inside a matched item: id, then title
+      var sm = pairRows(pr.have.stories, pr.want.stories, [byId, function (s) { return normTitle(s.title); }]);
+      var sTaken = used(pr.have.stories);
+      sm.add.forEach(function (s) {
+        var ns = RM.clone(s);
+        ns.id = fresh(s.id, sTaken, 's');
+        ns.order = null;
+        ns.assignees = mapAssignees(s.assignees);
+        plan.stories.add.push({ itemId: pr.have.id, story: ns });
+      });
+      sm.pairs.forEach(function (sp) {
+        plan.stories.matched++;
+        var sf = fillFields(sp.have, sp.want, RM.IMPORT_STORY_FILL_FIELDS, plan.stories);
+        if (normTitle(sp.want.title) && normTitle(sp.have.title) !== normTitle(sp.want.title)) plan.stories.conflicts++;
+        if (sf) plan.stories.fill.push({ itemId: pr.have.id, id: sp.have.id, fields: sf });
+      });
+    });
+
+    function fieldCount(list) { return list.reduce(function (n, f) { return n + Object.keys(f.fields).length; }, 0); }
+    var s = plan.summary;
+    s.items = plan.items.add.length;
+    s.stories = plan.stories.add.length;
+    s.fills = fieldCount(plan.items.fill) + fieldCount(plan.stories.fill);
+    s.team = plan.team.add.length;
+    s.phases = plan.phases.add.length;
+    s.conflicts = plan.items.conflicts + plan.stories.conflicts;
+    s.matched = plan.items.matched;
+    s.empty = !(s.items || s.stories || s.fills || s.team || s.phases);
+    return plan;
+  };
+
+  // Apply a plan in place. A fill re-checks that the field is STILL empty, so
+  // a value typed since the preview is never overwritten. New rows go after
+  // the last row of their list.
+  RM.applyImport = function (state, plan) {
+    var added = { items: 0, stories: 0, team: 0, phases: 0 }, filled = 0;
+    function addType(t) { if (t && state.teamTypes.indexOf(t) === -1) state.teamTypes.push(t); }
+    function fillInto(obj, fields) {
+      Object.keys(fields).forEach(function (f) {
+        if (!emptyVal(obj[f])) return;
+        obj[f] = RM.clone(fields[f]);
+        filled++;
+      });
+    }
+    (plan.phases.add || []).forEach(function (p) {
+      if (RM.phaseIndex(state, p.id) !== -1) return;
+      var np = RM.clone(p);
+      np.order = RM.orderAfterAll(state.phases);
+      state.phases.push(np);
+      added.phases++;
+    });
+    (plan.team.add || []).forEach(function (m) {
+      if (state.team.some(function (x) { return x.id === m.id; })) return;
+      var nm = RM.clone(m);
+      nm.order = RM.orderAfterAll(state.team);
+      state.team.push(nm);
+      addType(nm.type);
+      added.team++;
+    });
+    (plan.items.add || []).forEach(function (it) {
+      if (RM.itemById(state, it.id)) return;
+      var n = RM.clone(it);
+      n.order = RM.orderAfterAll(state.items);
+      if (RM.phaseIndex(state, n.phaseId) === -1) n.phaseId = state.phases[0].id;
+      RM.ensureOrder(n.stories);
+      state.items.push(n);
+      addType(n.teamType);
+      added.items++;
+    });
+    (plan.stories.add || []).forEach(function (a) {
+      var it = RM.itemById(state, a.itemId);
+      if (!it || it.stories.some(function (s) { return s.id === a.story.id; })) return;
+      var ns = RM.clone(a.story);
+      ns.order = RM.orderAfterAll(it.stories);
+      it.stories.push(ns);
+      added.stories++;
+    });
+    (plan.items.fill || []).forEach(function (f) {
+      var it = RM.itemById(state, f.id);
+      if (!it) return;
+      fillInto(it, f.fields);
+      addType(it.teamType);
+    });
+    (plan.stories.fill || []).forEach(function (f) {
+      var it = RM.itemById(state, f.itemId);
+      var st = it && it.stories.filter(function (s) { return s.id === f.id; })[0];
+      if (st) fillInto(st, f.fields);
+    });
+    return { added: added, filled: filled };
+  };
+
   // ------------------------------------------------------------ scope columns
   RM.scopeColLabel = function (col) {
     return col.label || RM.SCOPE_BUILTIN_LABELS[col.key] || 'Column';

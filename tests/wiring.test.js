@@ -497,6 +497,7 @@ async function main() {
 
   await fixes();
   await presence();
+  await importFlow();
 
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
@@ -1075,6 +1076,128 @@ async function presence() {
   eq(w.HA.editingIds(), [], 'editingIds empty');
   await settle(3);
   ok(w.errors.length === 0, 'still no errors after a few ticks');
+}
+
+// ---- Import from Excel… (phase 7): a workbook merged INTO the open bundle,
+// add-only, previewed, applied through commit
+async function importFlow() {
+  section('Import from Excel…: menu item only in bundle mode on the desktop');
+  let nextPick = null;
+  const S = await openFresh('IMP', { dialogOpen: () => nextPick });
+  const { b, tauri, dir } = S;
+  const doc = b.doc, window = b.window;
+  ok(b.menuLabels('file').some((l) => /^Import from Excel…/.test(l)), 'File menu offers Import from Excel… in bundle mode');
+  ok(b.HA.menuItems('macApp').some((m) => /Import from Excel…/.test(m.label || '')), 'macApp list mirrors it');
+  doc.querySelector('#popover').hidden = true;
+
+  section('Import from Excel…: preview counts, add-only apply, exact shard writes');
+  // the workbook: this roadmap exported elsewhere and edited — one new
+  // feature, one new story under M, M's empty Enables filled, M's Notes changed
+  const base = b.RB.exportableState(b.state());
+  const M = base.items.find((i) => i.notes && !i.enables);
+  ok(!!M, 'a fixture feature with Notes set and Enables empty');
+  const mod = JSON.parse(JSON.stringify(base));
+  const mM = mod.items.find((i) => i.id === M.id);
+  mM.enables = 'Filled from Excel';
+  mM.notes = 'CONFLICT — the roadmap keeps its own';
+  mM.stories.push({ id: 's-imp-new', title: 'Imported story' });
+  mod.items.push({ id: 'i-imp-new', num: 999, feature: 'Imported feature', phaseId: M.phaseId, workstream: M.workstream, teamType: M.teamType, stories: [] });
+  const blob = await window.RMExcel.exportWorkbook(b.RM.normalizeState(mod));
+  const u8 = new Uint8Array(Buffer.from(await blob.arrayBuffer())); // node realm for ExcelJS
+  tauri.dirs.add('C:/tmp');
+  tauri.files.set('C:/tmp/Team edits.xlsx', u8);
+  nextPick = 'C:/tmp/Team edits.xlsx';
+  const nItems = b.state().items.length, nStories = S.item(M.id).stories.length;
+  const undoLen = b.info().undoLen;
+  const histPath = dir + '/history/' + FIXER.id + '.jsonl';
+  const histLen = () => b.RB.parseHistory(tauri.files.get(histPath) || '').length;
+  const hist0 = histLen();
+  // openModal swaps the #modalHost node (resetNode) — always re-query it
+  const mh = () => doc.querySelector('#modalHost');
+  // toasts auto-dismiss within milliseconds under the compressed timers: catch them as they are added
+  const seenToasts = [];
+  const mo = new window.MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach((n) => { if (n.textContent) seenToasts.push(n.textContent); })));
+  mo.observe(doc.querySelector('#toasts'), { childList: true });
+  b.menuClick('file', /Import from Excel…/);
+  ok(await until(() => !mh().hidden && /Import from/.test(mh().textContent)), 'the preview modal opens — toasts: ' + seenToasts.join(' | ') + ' errors: ' + b.errors.join('; '));
+  eq(seenToasts.length, 0, 'no error toast on the way to the preview');
+  const txt = mh().textContent;
+  ok(/Import from “Team edits\.xlsx”/.test(txt), 'titled after the file');
+  ok(/1 new feature(?!s)/.test(txt), 'says 1 new feature'); // li texts run together in textContent
+  ok(/1 new story/.test(txt), 'says 1 new story');
+  ok(/1 field filled in/.test(txt), 'says 1 field filled in');
+  ok(/0 team members/.test(txt) && /0 phases/.test(txt), 'says 0 team members, 0 phases');
+  ok(/1 difference left alone \(the shared roadmap wins\)/.test(txt), 'says 1 difference left alone: ' + txt.replace(/\s+/g, ' ').slice(0, 200));
+  ok(/Imported feature/.test(txt), 'lists the new feature title');
+  ok(!/template layout/.test(txt), 'a Headway workbook: no template note');
+  eq(b.state().items.length, nItems, 'nothing applied before Import');
+  let mark = tauri.log.length;
+  b.click(mh().querySelector('[data-m="ok"]'));
+  ok(mh().hidden, 'modal closed');
+  ok(await until(() => seenToasts.some((t) => /^Imported 1 feature, 1 story, 1 field filled in/.test(t))), 'summary toast: ' + seenToasts.join(' | '));
+  mo.disconnect();
+  eq(b.state().items.length, nItems + 1, 'one feature added');
+  const added = b.state().items.find((i) => i.feature === 'Imported feature');
+  ok(!!added && added.id === 'i-imp-new', 'the new feature keeps its workbook id (free in the roadmap)');
+  eq(added.num, b.RM.nextNum({ items: b.state().items.filter((i) => i.id !== added.id) }), '…and takes the next num');
+  eq(S.item(M.id).stories.length, nStories + 1, 'one story added under M');
+  eq(S.item(M.id).enables, 'Filled from Excel', 'the empty field is filled');
+  eq(S.item(M.id).notes, M.notes, 'the conflicting field is untouched');
+  eq(b.info().undoLen, undoLen + 1, 'one undo entry');
+  await settle();
+  let writes = shardWrites(tauri, mark);
+  eq(writes.map((w) => w.path).sort(), [S.path(added.id) + '.tmp', S.path(M.id) + '.tmp'].sort(), 'exactly the added item and M written — nothing else');
+  const mDisk = S.disk(M.id);
+  eq(mDisk.fields.enables, 'Filled from Excel', 'M on disk: filled');
+  eq(mDisk.fields.notes, M.notes, 'M on disk: the conflict left alone');
+  ok(mDisk.fields.stories.some((s) => s.id === 's-imp-new'), 'M on disk: the new story');
+  eq(S.disk(added.id).fields.feature, 'Imported feature', 'the new shard on disk');
+  eq(histLen(), hist0 + 1, 'one history line');
+  const lines = b.RB.parseHistory(tauri.files.get(histPath));
+  eq(lines[lines.length - 1].label, 'import from Excel', '…labelled import from Excel');
+
+  section('Import from Excel…: undo reverts it; the same workbook again has nothing to import');
+  b.key('z', { metaKey: true });
+  eq(b.state().items.length, nItems, 'undo removed the added feature');
+  eq(S.item(M.id).enables, '', 'undo cleared the fill');
+  eq(S.item(M.id).stories.length, nStories, 'undo removed the story');
+  mark = tauri.log.length;
+  await settle();
+  writes = shardWrites(tauri, mark);
+  eq(writes.map((w) => w.path).sort(), [S.path(added.id) + '.tmp', S.path(M.id) + '.tmp'].sort(), 'the flush after undo touches the same two shards');
+  eq(S.disk(added.id).deleted, true, 'the added feature is tombstoned');
+  eq(S.disk(M.id).fields.enables, '', 'M on disk: fill reverted');
+  ok(!S.disk(M.id).fields.stories.some((s) => s.id === 's-imp-new'), 'M on disk: story gone');
+  b.key('z', { metaKey: true, shiftKey: true }); // redo → the import is back
+  eq(b.state().items.length, nItems + 1, 'redo restores the import');
+  await settle();
+  eq(S.disk(added.id).deleted, false, 'the shard is live again');
+  b.menuClick('file', /Import from Excel…/);
+  ok(await until(() => !mh().hidden && /Import from/.test(mh().textContent)), 'the preview opens again');
+  ok(/Nothing new to import/.test(mh().textContent), 'says Nothing new to import');
+  ok(/1 difference left alone/.test(mh().textContent), '…still reporting the difference left alone');
+  ok(!mh().querySelector('[data-m="ok"]'), 'no Import button');
+  eq(mh().querySelector('[data-m="cancel"]').textContent.trim(), 'Close', 'just Close');
+  b.click(mh().querySelector('[data-m="cancel"]'));
+  ok(mh().hidden, 'closed');
+  eq(b.state().items.length, nItems + 1, 'nothing changed');
+  nextPick = null; // dialog cancelled
+  mark = tauri.log.length;
+  b.menuClick('file', /Import from Excel…/);
+  await settle();
+  ok(mh().hidden && shardWrites(tauri, mark).length === 0, 'dialog cancel: no modal, no shard writes');
+  eq([b.info().docKind, b.HD.currentPath()], ['bundle', null], 'the workbook was never adopted');
+
+  section('Import from Excel…: absent for an .xlsx document and in the web build');
+  await b.HA.loadBuffer(u8.buffer, 'Team edits.xlsx');
+  await settle();
+  eq(b.info().docKind, 'xlsx', 'standalone document');
+  ok(!b.menuLabels('file').some((l) => /Import from Excel/.test(l)), 'File menu: no Import for an .xlsx');
+  ok(!b.HA.menuItems('macApp').some((m) => /Import from Excel/.test(m.label || '')), 'macApp: none either');
+  doc.querySelector('#popover').hidden = true;
+  const w = boot(null, { localStorage: { 'headway-user-v2': JSON.stringify(FIXER) } });
+  ok(!w.HA.menuItems('file').some((m) => /Import from Excel/.test(m.label || '')), 'web build: no Import');
+  ok(w.errors.length === 0, 'web build boots clean');
 }
 
 main().catch((e) => {

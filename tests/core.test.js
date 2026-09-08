@@ -1653,3 +1653,140 @@ var tombed = RB.assembleState(mainPlan.meta, { items: [RB.tombstone(mainPlan.ite
 eq(tombed.items.length, 0, 'assembleState skips tombstones');
 var exp = RB.exportableState({ meta: { title: 'x' }, docId: 'doc1', bundle: { dir: '/x' }, planId: 'p', items: [] });
 ok(exp.docId === undefined && exp.bundle === undefined && exp.planId === undefined && exp.meta.title === 'x', 'exportableState strips bundle markers');
+
+// ------------------------------------------------------------- import (add-only merge)
+section('import: add-only merge');
+// template-created documents carry low-entropy phase ids on BOTH sides ('ph1'…); an id
+// match alone must never pair two unrelated phases
+var impHave = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'ph1', name: 'MVP' }],
+  items: [{ id: 'iHave0001-1-aaaaa', num: 1, feature: 'Existing', phaseId: 'ph1' }] });
+var impWant = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'ph1', name: 'Later' }],
+  items: [{ id: 'iWant0002-1-bbbbb', num: 7, feature: 'Newcomer', phaseId: 'ph1' }] });
+var impPlan = RM.planImport(impHave, impWant);
+eq(impPlan.phases.add.map(function (p) { return p.name; }), ['Later'], 'a same-id phase with a different name is NOT paired — it is added');
+eq(impPlan.items.add.length, 1, 'the workbook item is an add');
+ok(impPlan.items.add[0].phaseId !== 'ph1', 'and it lands in the NEW phase, not the unrelated ph1 (' + impPlan.items.add[0].phaseId + ')');
+var impSame = RM.planImport(impHave, RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'ph1', name: 'MVP' }], items: [] }));
+eq(impSame.phases.add.length, 0, 'same id AND same name pairs by name');
+// teamType is always defaulted by normalizeState, so differing defaults are not a conflict
+var ttHave = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1' }], teamTypes: ['Development', 'Data'],
+  items: [{ id: 'iTt000001-1-ccccc', num: 3, feature: 'Same', phaseId: 'p1' }] });
+var ttWant = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1' }], teamTypes: ['Data', 'Development'],
+  items: [{ id: 'iTt000001-1-ccccc', num: 3, feature: 'Same', phaseId: 'p1' }] });
+ok(ttHave.items[0].teamType !== ttWant.items[0].teamType, 'precondition: the two documents default teamType differently');
+eq(RM.planImport(ttHave, ttWant).items.conflicts, 0, 'a defaulted teamType difference is not counted as a conflict');
+// the shared roadmap: three features in two phases, one story, one teammate
+var sImpBase = mkState([
+  { id: 'iA', num: 1, feature: 'Alpha feature', phaseId: 'p1', notes: 'kept notes', enables: '', stories: [{ id: 'sA1', title: 'Story one', description: '' }] },
+  { id: 'iB', num: 2, feature: 'Beta feature', phaseId: 'p1', deps: ['iA'] },
+  { id: 'iC', num: 3, feature: 'Gamma feature', phaseId: 'p2' }
+], { team: [{ id: 'tA', name: 'Ada', type: 'Development' }] });
+// the workbook: same lineage, edited elsewhere — ids kept where the export
+// kept them, one row re-minted (matches by num+title), one by title alone,
+// one brand-new feature in a new phase, a new teammate
+var sImpIn = RM.normalizeState({
+  meta: RM.clone(META),
+  phases: [
+    { id: 'p1', name: 'Alpha', bucket: false },
+    { id: 'pX', name: 'next', bucket: true },     // p2 by name (case-insensitive)
+    { id: 'pNew', name: 'Later', bucket: false }  // new phase
+  ],
+  items: [
+    { id: 'iA', num: 1, feature: 'Alpha feature', phaseId: 'p1', notes: 'CONFLICT notes', enables: 'filled enables',
+      stories: [
+        { id: 'sA1', title: 'Story one', description: '<p>filled body</p>' }, // by id → fill
+        { id: 'sZZ', title: 'Story two' }                                     // new story
+      ] },
+    { id: 'iB2', num: 2, feature: '  beta   FEATURE ', phaseId: 'p1', deps: ['iA'], size: 'M' }, // by num + title → fill size
+    { id: 'iC2', num: 30, feature: 'Gamma feature', phaseId: 'pX' },                            // by title alone
+    { id: 'iD', num: 40, feature: 'Delta feature', phaseId: 'pNew', deps: ['iB2', 'iC2', 'iGhost'], depsText: ['ext'] }, // new feature
+    { id: 'iE', num: 41, feature: 'Epsilon feature', phaseId: 'pNew', deps: ['iD'] }             // dep on another added item
+  ],
+  team: [
+    { id: 'tOther', name: 'ADA', type: 'Development' }, // by name
+    { id: 'tB', name: 'Grace', type: 'Data' }           // new
+  ],
+  teamTypes: ['Development', 'Data']
+});
+var planImp = RM.planImport(sImpBase, sImpIn);
+eq(planImp.summary.matched, 3, 'three features matched (id, num+title, title)');
+eq(planImp.summary.items, 2, 'two features to add');
+eq(planImp.summary.phases, 1, 'one phase to add');
+eq(planImp.summary.team, 1, 'one teammate to add');
+eq(planImp.summary.stories, 1, 'one story to add');
+eq(planImp.summary.fills, 3, 'three fields to fill (enables, size, story body)');
+eq(planImp.summary.conflicts, 1, 'one conflict (notes differs) — reported, never applied');
+eq(planImp.summary.empty, false, 'not empty');
+ok(planImp.items.fill.some(function (f) { return f.id === 'iA' && f.fields.enables === 'filled enables' && !('notes' in f.fields); }), 'fill for iA: enables only, notes left alone');
+ok(planImp.items.fill.some(function (f) { return f.id === 'iB' && f.fields.size === 'M'; }), 'num+title match fills size on iB');
+ok(planImp.stories.fill.some(function (f) { return f.itemId === 'iA' && f.id === 'sA1' && /filled body/.test(f.fields.description); }), 'story matched by id → description filled');
+eq(planImp.stories.add[0].itemId, 'iA', 'new story goes under the matched item');
+eq(planImp.stories.add[0].story.title, 'Story two', '…the new one');
+var addedDelta = planImp.items.add.filter(function (x) { return x.feature === 'Delta feature'; })[0];
+var addedEps = planImp.items.add.filter(function (x) { return x.feature === 'Epsilon feature'; })[0];
+eq(addedDelta.id, 'iD', 'an added feature keeps its id when it is free');
+eq([addedDelta.num, addedEps.num], [4, 5], 'added features take the next nums');
+eq(addedDelta.phaseId, planImp.phases.add[0].id, 'phase mapped to the phase being added');
+eq(planImp.phases.add[0].name, 'Later', '…which is the new phase');
+eq(addedDelta.deps.slice().sort(), ['iB', 'iC'].sort(), 'deps on matched items resolve to the roadmap ids');
+eq(addedDelta.depsText, ['ext'], 'a dangling non-numeric dep id is dropped; existing depsText kept');
+eq(addedEps.deps, [addedDelta.id], 'a dep on another added item follows its new id');
+eq(planImp.team.add[0].name, 'Grace', 'new teammate');
+ok(!sImpBase.items.some(function (x) { return x.feature === 'Delta feature'; }), 'planImport does not touch the state');
+
+var sImpApplied = RM.clone(sImpBase);
+var resImp = RM.applyImport(sImpApplied, planImp);
+eq(resImp, { added: { items: 2, stories: 1, team: 1, phases: 1 }, filled: 3 }, 'applyImport reports the counts');
+eq(sImpApplied.items.length, 5, 'five features now');
+eq(sImpApplied.phases.length, 3, 'three phases');
+eq(RM.itemById(sImpApplied, 'iA').notes, 'kept notes', 'conflicting field untouched');
+eq(RM.itemById(sImpApplied, 'iA').enables, 'filled enables', 'empty field filled');
+eq(RM.itemById(sImpApplied, 'iB').size, 'M', 'size filled on the num+title match');
+eq(RM.itemById(sImpApplied, 'iA').stories.length, 2, 'story added');
+eq(RM.itemById(sImpApplied, 'iA').stories[0].description, '<p>filled body</p>', 'story body filled');
+ok(sImpApplied.items.every(function (x) { return typeof x.order === 'string' && x.order; }), 'added rows carry order keys');
+ok(RM.itemById(sImpApplied, addedDelta.id).order > RM.itemById(sImpApplied, 'iC').order, 'added feature sorts after the existing ones');
+var nums = sImpApplied.items.map(function (x) { return x.num; }).sort();
+eq(nums, [1, 2, 3, 4, 5], 'nums stay unique');
+ok(RM.normalizeState(sImpApplied).items.length === 5, 'the merged document normalizes cleanly');
+
+// idempotent: the same workbook again has nothing to add or fill
+var planImp2 = RM.planImport(sImpApplied, sImpIn);
+eq([planImp2.summary.items, planImp2.summary.stories, planImp2.summary.fills, planImp2.summary.team, planImp2.summary.phases], [0, 0, 0, 0, 0], 'second plan: nothing new');
+eq(planImp2.summary.empty, true, '…and says so');
+eq(planImp2.summary.conflicts, 1, 'the conflict is still reported');
+var sImpTwice = RM.clone(sImpApplied);
+RM.applyImport(sImpTwice, planImp2);
+eq(JSON.stringify(sImpTwice), JSON.stringify(sImpApplied), 'applying the empty plan changes nothing');
+
+// an added row whose id is already taken by a DIFFERENT feature is re-minted
+var sCol = mkState([{ id: 'x1', num: 1, feature: 'One' }]);
+var planCol = RM.planImport(sCol, RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1', name: 'Alpha' }], items: [
+  { id: 'x1', num: 1, feature: 'One' },
+  { id: 'x1', num: 2, feature: 'Other' }
+] }));
+eq([planCol.summary.matched, planCol.summary.items], [1, 1], 'duplicate incoming id: One matches by num+title, Other is added');
+ok(planCol.items.add[0].id !== 'x1' && /^i/.test(planCol.items.add[0].id), 'the added row gets a fresh id');
+// title-only matching refuses to guess when a title repeats on either side
+var sDup = mkState([
+  { id: 'd1', num: 1, feature: 'Same' },
+  { id: 'd2', num: 2, feature: 'Same' }
+]);
+var planDup = RM.planImport(sDup, mkState([{ id: 'dX', num: 9, feature: 'same' }]));
+eq([planDup.summary.matched, planDup.summary.items], [0, 1], 'ambiguous title → added, not matched');
+// a fill never overwrites a value typed after the preview
+var sLate = RM.clone(sImpBase);
+var planLate = RM.planImport(sLate, sImpIn);
+RM.itemById(sLate, 'iA').enables = 'typed meanwhile';
+var resLate = RM.applyImport(sLate, planLate);
+eq(RM.itemById(sLate, 'iA').enables, 'typed meanwhile', 'a field filled since the preview is left alone');
+eq(resLate.filled, 2, '…and not counted');
+// deps: filled only when the roadmap has none; unresolvable numeric → depsText
+var sDeps = mkState([{ id: 'q1', num: 1, feature: 'One' }, { id: 'q2', num: 2, feature: 'Two' }]);
+var planDeps = RM.planImport(sDeps, mkState([
+  { id: 'q1', num: 1, feature: 'One' },
+  { id: 'q2', num: 2, feature: 'Two', deps: ['q1', '77'] }
+]));
+var fDeps = planDeps.items.fill.filter(function (f) { return f.id === 'q2'; })[0];
+eq(fDeps && fDeps.fields.deps, ['q1'], 'empty dep list filled with the resolvable dep');
+eq(fDeps && fDeps.fields.depsText, ['#77'], 'the unresolvable numbered dep lands in depsText');
