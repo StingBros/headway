@@ -20,9 +20,9 @@ var state = RM.normalizeState({
   team: [{ id: 'm1', name: 'Alice Rivera' }, { id: 'm2', name: 'Bob Stone' }],
   epicJira: { 'Known Epic': 'HW-1' },
   items: [
-    { id: 'a', num: 1, phaseId: 'p1', feature: 'Alpha', epic: 'Known Epic', workstream: 'Data', size: 'M', priority: 'H',
+    { id: 'a', num: 1, phaseId: 'p1', feature: 'Alpha', epic: 'Known Epic', workstream: 'Data', size: 'M', priority: 'H', type: 'bug',
       startDay: 0, durDays: 5, assignees: ['m1'], description: '<p>First</p><p>Second line</p>',
-      stories: [{ id: 's1', title: 'Story one', done: false, assignees: ['m2'] }, { id: 's2', title: 'Story two', jiraKey: 'HW-20', done: false }] },
+      stories: [{ id: 's1', title: 'Story one', done: false, assignees: ['m2'], type: 'subtask' }, { id: 's2', title: 'Story two', jiraKey: 'HW-20', done: false, type: 'bug' }] },
     { id: 'b', num: 2, phaseId: 'p1', feature: 'Beta', epic: 'New Epic', jiraKey: 'HW-10', deps: [1], deadline: '2026-09-01',
       startDay: 12, durDays: 5, done: false, stories: [] },
     { id: 'c', num: 3, phaseId: 'p1', feature: 'Gamma', jiraKey: 'HW-99', stories: [] },
@@ -40,14 +40,19 @@ eq(doc.content.length, 2, 'blank lines split paragraphs');
 eq(doc.content[0].content.map(function (n) { return n.type; }), ['text', 'hardBreak', 'text'], 'single newlines become hard breaks');
 eq(JR.adf('').content, [], 'empty text is an empty doc');
 
+console.log('— resolveTypes');
+var projTypes = [{ name: 'Epic', hierarchyLevel: 1 }, { name: 'Story' }, { name: 'Bug' }, { name: 'Sub-task', subtask: true }];
+var rt = JR.resolveTypes(projTypes, state);
+eq(rt.byKey.epic.name, 'Epic', 'epic resolves by name');
+eq(rt.byKey.bug.name, 'Bug', 'bug resolves by name');
+eq(rt.byKey.story, { name: 'Sub-task', subtask: true }, 'story type resolves to Sub-task and is flagged subtask');
+eq(rt.byKey.task.name, 'Story', 'a missing feature-level type falls back to Story');
+ok(rt.notes.some(function (n) { return /Task.*not in the project.*Story/.test(n); }), 'fallback is noted');
+var rt2 = JR.resolveTypes([{ name: 'Epic', hierarchyLevel: 1 }, { name: 'Task' }], state);
+eq(rt2.byKey.subtask, { name: 'Task', subtask: false }, 'no subtask type in the project: story-level types fall back to Task');
+eq(JR.resolveTypes([], state).known, false, 'empty project type list is unknown');
+
 console.log('— discovery helpers');
-var types = JR.resolveTypes([
-  { name: 'Epic', hierarchyLevel: 1 }, { name: 'Task', hierarchyLevel: 0 }, { name: 'Subtask', subtask: true, hierarchyLevel: -1 }
-], cfg);
-eq(types.feature, 'Task', 'a missing Story type falls back to Task');
-eq(types.story, 'Subtask', 'a missing Sub-task type falls back to the project’s subtask type');
-ok(types.storyIsSubtask, 'the resolved story type is flagged as a subtask');
-eq(types.epic, 'Epic', 'epic resolves by name');
 var sf = JR.findStartField([
   { id: 'duedate', name: 'Due date', schema: { type: 'date' } },
   { id: 'customfield_10015', name: 'Start date', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:datepicker', schema: { type: 'date' } }
@@ -68,11 +73,11 @@ eq(JR.sprintOfDay(state.meta, 12), 2, 'day 12 (week 3 of 5-day weeks) is in spri
 eq(JR.sprintSpan(state.meta, 2), { num: 2, name: 'Sprint 2', start: '2026-08-10', end: '2026-08-23' }, 'a sprint spans two calendar weeks');
 
 console.log('— fields');
-var info = { remote: {}, types: { epic: 'Epic', feature: 'Story', story: 'Sub-task', storyIsSubtask: true }, startField: 'customfield_10015',
+var info = { remote: {}, types: rt, startField: 'customfield_10015',
   accounts: { 'Alice Rivera': 'acc-alice' }, board: { id: 7, name: 'HW board', sprints: [{ id: 501, name: 'Sprint 1', startDate: '2026-07-27T09:00:00.000Z', endDate: '2026-08-09T17:00:00.000Z', state: 'active' }] }, notes: [] };
 var fa = JR.featureFields(state, RM.itemById(state, 'a'), cfg, 'HW-1', info);
 eq(fa.project, { key: 'HW' }, 'project key from the document mapping');
-eq(fa.issuetype, { name: 'Story' }, 'default feature type');
+eq(fa.issuetype, { name: 'Bug' }, 'a Bug item resolves to the Bug issue type');
 eq(fa.parent, { key: 'HW-1' }, 'parent is the epic key');
 eq(fa.priority, { name: 'High' }, 'levels priority maps to Jira names');
 ok(fa.labels.indexOf('ws-data') !== -1 && fa.labels.indexOf('phase-pilot-phase') !== -1 && fa.labels.indexOf('size-m') !== -1, 'labels carry workstream, phase and size');
@@ -82,14 +87,17 @@ eq(fa.assignee, { accountId: 'acc-alice' }, 'the first assignee becomes the Jira
 ok(!fa.description.content.some(function (p) { return p.content.some(function (n) { return /Stories:/.test(n.text); }); }),
   'story checklist stays out of the description when stories sync on their own');
 var fb = JR.featureFields(state, RM.itemById(state, 'b'), cfg, null, info);
+eq(fb.issuetype, { name: 'Story' }, 'a default-type feature resolves to Story');
 eq(fb.duedate, '2026-09-01', 'a deadline wins as the due date');
 ok(!fb.parent, 'no epic key, no parent');
 ok(!fb.assignee, 'no assignee, no Jira assignee');
 var fs1 = JR.storyFields(state, RM.itemById(state, 'a'), RM.itemById(state, 'a').stories[0], cfg, 'HW-5', info);
+eq(fs1.issuetype, { name: 'Sub-task' }, 'a Subtask story resolves to Sub-task');
 eq(fs1.customfield_10015, '2026-07-27', 'a story without its own timeline takes the feature’s start');
 eq(fs1.duedate, '2026-07-31', '…and the feature’s end');
 ok(!fs1.assignee, 'a story assignee with no Jira match stays unassigned');
 var fs2 = JR.storyFields(state, RM.itemById(state, 'a'), RM.itemById(state, 'a').stories[1], cfg, 'HW-5', info);
+eq(fs2.issuetype, { name: 'Bug' }, 'a Bug story resolves to Bug');
 eq(fs2.assignee, { accountId: 'acc-alice' }, 'a story with no assignee of its own inherits the feature’s');
 
 console.log('— plan');
@@ -116,12 +124,19 @@ eq(plan.links.length, 1, 'one dependency link planned (the milestone’s depende
 eq(plan.people, { total: 2, unresolved: ['Bob Stone'] }, 'people summary names who did not match');
 eq(plan.sprints.create, [{ num: 2, name: 'Sprint 2', start: '2026-08-10', end: '2026-08-23' }], 'a Headway sprint with no Jira sprint is created');
 eq(plan.sprints.assign.map(function (a) { return a.ref.kind + ':' + a.ref.id + '→' + a.num + (a.sprintId ? '#' + a.sprintId : ''); }),
-  ['feature:a→1#501', 'feature:b→2', 'feature:d→1#501'], 'scheduled features are placed; sub-task stories follow their parent; the milestone is skipped');
-eq(plan.counts, { create: 4, update: 4, link: 1, pull: 1, missing: 1, done: 2, sprintsCreate: 1, sprintAssign: 3 }, 'counts summarise the plan');
+  ['feature:a→1#501', 'story:s2→1#501', 'feature:b→2', 'feature:d→1#501'],
+  'scheduled features are placed; sub-task stories follow their parent; the Bug story (not a subtask) is placed by its feature’s day; the milestone is skipped');
+eq(plan.counts, { create: 4, update: 4, link: 1, pull: 1, missing: 1, done: 2, sprintsCreate: 1, sprintAssign: 4 }, 'counts summarise the plan');
 eq(JR.keysOf(state, cfg), ['HW-20', 'HW-10', 'HW-99', 'HW-30'], 'keysOf lists every linked key except milestones');
 var planNoBoard = JR.plan(state, cfg, { remote: info.remote, types: info.types, startField: null, accounts: {}, board: null });
 eq(planNoBoard.sprints, null, 'no board, no sprint work');
 ok(!planNoBoard.features[0].fields.customfield_10015, 'no Start date field, no start date');
+
+var pa = plan.features.filter(function (f) { return f.id === 'a'; })[0];
+eq(pa.fields.issuetype.name, 'Bug', 'a Bug feature is created as Bug');
+var ps1 = plan.stories.filter(function (s) { return s.id === 's1'; })[0];
+eq(ps1.fields.issuetype.name, 'Sub-task', 'a Subtask story is created as Sub-task');
+ok(ps1.nest === true, 'subtask stories nest');
 
 console.log('— apply');
 var calls = [];
@@ -165,9 +180,9 @@ JR.apply(plan, client, null).then(function (result) {
   eq(sprintCreate[0][2].originBoardId, 7, 'on the project’s board');
   ok(/^2026-08-10T/.test(sprintCreate[0][2].startDate) && /^2026-08-23T/.test(sprintCreate[0][2].endDate), 'with Headway’s sprint dates');
   var moves = calls.filter(function (c) { return /\/rest\/agile\/1.0\/sprint\/\d+\/issue$/.test(c[1]); }).map(function (c) { return c[1].replace(/.*sprint\//, '') + ':' + c[2].issues.join(','); }).sort();
-  eq(moves, ['501/issue:HW-101,HW-30', '777/issue:HW-10'], 'issues land in the matching existing sprint and the newly created one');
+  eq(moves, ['501/issue:HW-101,HW-20,HW-30', '777/issue:HW-10'], 'issues land in the matching existing sprint and the newly created one');
   eq(result.sprintsCreated, 1, 'sprint created count');
-  eq(result.sprintAssigned, 3, 'sprint placement count');
+  eq(result.sprintAssigned, 4, 'sprint placement count');
   eq(result.created, 4, 'created count');
   eq(result.updated, 4, 'updated count');
   eq(result.errors, [], 'no errors');
@@ -237,7 +252,7 @@ JR.apply(plan, client, null).then(function (result) {
   var dclient = {
     get: function (p) {
       seen.push(p);
-      if (/^\/rest\/api\/3\/project\//.test(p)) return Promise.resolve({ issueTypes: [{ name: 'Epic', hierarchyLevel: 1 }, { name: 'Story' }, { name: 'Sub-task', subtask: true }] });
+      if (/^\/rest\/api\/3\/project\//.test(p)) return Promise.resolve({ issueTypes: [{ name: 'Epic', hierarchyLevel: 1 }, { name: 'Story' }, { name: 'Bug' }, { name: 'Sub-task', subtask: true }] });
       if (p === '/rest/api/3/field') return Promise.resolve([{ id: 'customfield_10015', name: 'Start date', custom: 'x', schema: { type: 'date' } }]);
       if (/user\/assignable/.test(p)) return Promise.resolve(/Alice/.test(decodeURIComponent(p)) ? [{ accountId: 'acc-alice', displayName: 'Alice Rivera' }] : []);
       if (/\/rest\/agile\/1.0\/board\?/.test(p)) return Promise.resolve({ values: [{ id: 7, name: 'HW board' }] });
@@ -248,7 +263,7 @@ JR.apply(plan, client, null).then(function (result) {
     }
   };
   return JR.discover(dclient, state, cfg, null).then(function (inf) {
-    eq(inf.types.story, 'Sub-task', 'types come from the project');
+    eq(inf.types.byKey.story.name, 'Sub-task', 'types come from the project');
     eq(inf.startField, 'customfield_10015', 'the Start date field is found');
     eq(inf.accounts, { 'Alice Rivera': 'acc-alice', 'Bob Stone': null }, 'people are looked up per name');
     eq(inf.accountNames['Alice Rivera'], 'Alice Rivera', 'the matched display name is kept for the settings page');
@@ -276,11 +291,20 @@ JR.apply(plan, client, null).then(function (result) {
   });
 }).then(function () {
   console.log('— stories without a sub-task type');
-  var flat = { remote: info.remote, types: { epic: 'Epic', feature: 'Story', story: 'Story', storyIsSubtask: false }, startField: null, accounts: {}, board: null, notes: [] };
+  var flat = { remote: info.remote, types: { byKey: { epic: { name: 'Epic', subtask: false }, feature: { name: 'Story', subtask: false }, bug: { name: 'Bug', subtask: false }, task: { name: 'Task', subtask: false }, story: { name: 'Story', subtask: false }, subtask: { name: 'Story', subtask: false } }, known: true, notes: [] }, startField: null, accounts: {}, board: null, notes: [] };
   var pf = JR.plan(state, cfg, flat);
   ok(pf.stories.every(function (st) { return !st.fields.parent && st.nest === false; }), 'stories beside their feature carry no parent');
   eq(pf.storyLinks.length, 3, 'every unnested story (new or already keyed) is noted for a link to its feature');
-  ok(pf.notes.some(function (n) { return /no sub-task type/.test(n); }), 'the preview explains why');
+  ok(pf.notes.some(function (n) { return /not a sub-task/.test(n); }), 'the preview explains why');
+
+  console.log('— mixed nesting');
+  var mixed = { remote: info.remote, types: rt, startField: null, accounts: {}, board: null, notes: [] };
+  var pm = JR.plan(state, cfg, mixed);
+  var bugStory = pm.updates.filter(function (u) { return u.id === 's2'; })[0];
+  ok(bugStory && bugStory.kind === 'story', 'the Bug story (non-subtask) is planned');
+  ok(pm.storyLinks.some(function (l) { return l.storyId === 's2'; }), 'a non-subtask story gets a feature link instead of a parent');
+  ok(!pm.storyLinks.some(function (l) { return l.storyId === 's1'; }), 'a subtask story does not');
+
   var callsF = [];
   var nkF = 700;
   var clientF = {
@@ -426,7 +450,7 @@ JR.apply(plan, client, null).then(function (result) {
   JR.fetchImpl = function (url, opts) {
     var path = url.replace('https://x.atlassian.net', '');
     function reply(status, body) { return Promise.resolve({ ok: status < 300, status: status, text: function () { return Promise.resolve(body == null ? '' : JSON.stringify(body)); } }); }
-    if (/^\/rest\/api\/3\/project\//.test(path)) return reply(200, { issueTypes: [{ name: 'Epic', hierarchyLevel: 1 }, { name: 'Story' }, { name: 'Sub-task', subtask: true }] });
+    if (/^\/rest\/api\/3\/project\//.test(path)) return reply(200, { issueTypes: [{ name: 'Epic', hierarchyLevel: 1 }, { name: 'Story' }, { name: 'Bug' }, { name: 'Sub-task', subtask: true }] });
     if (path === '/rest/api/3/field') return reply(200, [{ id: 'customfield_10015', name: 'Start date', schema: { type: 'date' } }]);
     if (/user\/assignable/.test(path)) return reply(200, []);
     if (/\/rest\/agile\/1.0\/board\?/.test(path)) return reply(200, { values: [] });
