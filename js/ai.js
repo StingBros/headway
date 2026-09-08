@@ -366,7 +366,7 @@
     },
     {
       name: 'add_items',
-      description: 'Create features in a phase. Each item: feature (title, required), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps (feature numbers), start (ISO date), durDays or end (ISO date), deadline (ISO), milestone (boolean, zero duration), headcount, teamType, stories ([{title, description, ac, size, priority, done}]). Returns the new feature numbers.',
+      description: 'Create features in a phase. Each item: feature (title, required), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps (feature numbers), start (ISO date), durDays or end (ISO date), deadline (ISO), milestone (boolean, zero duration; milestones ignore size and priority), headcount, teamType, stories ([{title, description, ac, size, priority, done}]). Returns the new feature numbers.',
       parameters: {
         type: 'object',
         properties: {

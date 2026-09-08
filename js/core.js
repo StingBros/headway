@@ -1220,7 +1220,8 @@
         deps: (it.deps || []).map(Number).filter(function (n) { return !isNaN(n); }),
         depsText: it.depsText || [],
         extDeps: it.extDeps || '',
-        size: it.size && RM.SIZE_ORDER.indexOf(it.size) !== -1 ? it.size : (it.size || null),
+        // milestones are dates, not work: they carry neither size nor priority
+        size: it.milestone ? null : (it.size && RM.SIZE_ORDER.indexOf(it.size) !== -1 ? it.size : (it.size || null)),
         // assessment value — validated against the active scheme's options;
         // legacy t-shirt risk values migrate: XS/S → L, XL → H
         risk: (function () {
@@ -1233,7 +1234,7 @@
           }
           return null;
         })(),
-        priority: it.priority && prioOrder.indexOf(String(it.priority).toUpperCase()) !== -1
+        priority: !it.milestone && it.priority && prioOrder.indexOf(String(it.priority).toUpperCase()) !== -1
           ? String(it.priority).toUpperCase() : null,
         // hard deadline: a calendar date (ISO), so it survives work-week edits
         deadline: /^\d{4}-\d{2}-\d{2}$/.test(String(it.deadline || '')) ? String(it.deadline) : null,

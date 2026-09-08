@@ -90,6 +90,10 @@ var sN = mkState([
 eq(sN.items[0].headcount, 1, 'default headcount 1');
 ok(sN.items[0].num != null && sN.items[0].num !== 7, 'auto num assigned, no collision');
 eq(sN.items[1].headcount, 1, 'headcount floor 1');
+var sMs = mkState([{ feature: 'M', milestone: true, size: 'L', priority: 'P1', startDay: 0, durDays: 0 }]);
+sMs.meta.priorityScheme = 'levels'; sMs.items[0].priority = 'P1'; sMs = RM.normalizeState(sMs);
+eq(sMs.items[0].size, null, 'milestones carry no size');
+eq(sMs.items[0].priority, null, 'milestones carry no priority');
 eq(sN.items[1].phaseId, 'p1', 'bad phase falls back to first');
 ok(Array.isArray(sN.items[0].stories), 'stories default []');
 

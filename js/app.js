@@ -3366,7 +3366,8 @@
       var cells = ['<div class="sc-row">'];
       var epIco2 = RM.iconForEpic(state, it.epic);
       var fixedContent = {
-        size: '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size">' + (it.size ? esc(it.size) : '') + '</span>',
+        size: it.milestone ? '<span class="r-size r-blank"></span>'
+          : '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="Size">' + (it.size ? esc(it.size) : '') + '</span>',
         risk: riskChipHtml(),
         duration: it.milestone
           ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone">0w</span>'
@@ -3388,7 +3389,8 @@
             esc('Hard deadline' + (lateC ? '\nThe item runs past its deadline' : '')) + '">' +
             (it.deadline ? esc(RM.fmtShort(RM.parseISO(it.deadline))) : '') + '</span>';
         })(),
-        priority: '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) +
+        priority: it.milestone ? '<span class="r-risk r-blank"></span>'
+          : '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) +
           '" tabindex="0" role="button" data-act="priority" title="' +
           esc(priChipTitle(it)) + '">' + priChipContent(it) + '</span>',
         assignees: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="asg" title="Assignees">' +
@@ -3445,10 +3447,10 @@
       (view === 'scoping' ? '' : (function () {
         // the planning chips follow the user's column order/visibility
         var chips = {
-          size: RM.sizingEnabled(state)
-            ? '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size">' + (it.size ? esc(it.size) : (it.milestone ? '' : '·')) + '</span>'
+          size: RM.sizingEnabled(state) && !it.milestone
+            ? '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="Size">' + (it.size ? esc(it.size) : '·') + '</span>'
             : '<span class="r-size r-blank"></span>',
-          pri: RM.priorityEnabled(state)
+          pri: RM.priorityEnabled(state) && !it.milestone
             ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) + '" tabindex="0" role="button" data-act="priority" title="' + esc(priChipTitle(it)) + '">' + (priChipContent(it) || '·') + '</span>'
             : '<span class="r-risk r-blank"></span>',
           risk: riskChipHtml(),
@@ -3874,7 +3876,9 @@
           ' title="' + esc(riskValueLabel(s)) + '">' + levelGlyph(s) + '</button>';
       })).join('');
     var priInfo = '';
-    if (RM.prioritySchemeOf(state) === 'rice') {
+    if (it.milestone) {
+      // milestones carry no priority
+    } else if (RM.prioritySchemeOf(state) === 'rice') {
       // the RICE scheme edits through dropdowns; the score is the priority
       priInfo = '<label class="p-lab" style="margin-top:10px">RICE score' +
         (riceScoreLabel(it) ? ' · ' + riceScoreLabel(it) : '') + '</label>' +
@@ -4743,6 +4747,7 @@
       if (t.milestone) {
         if (t.durDays != null) t.durDays = 0;
         t.riskDays = 0;
+        t.size = null; t.priority = null; // milestones carry neither
       } else if (t.durDays != null) {
         // back to a bar: restore a duration from the size (else one week)
         var days = RM.sizeDays(s, t.size) || 5;
@@ -5148,6 +5153,7 @@
                 t.milestone = true;
                 t.durDays = t.startDay != null ? 0 : null;
                 t.riskDays = 0;
+                t.size = null; t.priority = null;
               });
             } else if (saveIt && isFinite(wv) && wv > 0) {
               commit('duration', function (s) {

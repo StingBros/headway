@@ -3219,6 +3219,8 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   const msIt = state().items.find(i => i.id === schedRow.dataset.id);
   const msRow = doc.querySelector('#rows .row.item[data-id="' + msIt.id + '"]');
   ok(!!msRow && msIt.milestone && msIt.startDay != null, 'a scheduled milestone row is visible');
+  ok(msIt.size == null && msIt.priority == null, 'converting to a milestone clears size and priority');
+  ok(!msRow.querySelector('[data-act="size"]') && !msRow.querySelector('[data-act="priority"]'), 'milestone rows have no size or priority chips');
   ok(!!doc.querySelector('#rows .bar.ms.ms-diamond[data-bar="' + msIt.id + '"]'), 'milestones default to the diamond');
   ok(!!doc.querySelector('#rows .row.item.ms[data-id="' + msIt.id + '"] .r-name'), 'a milestone row carries the ms class (bold title)');
   msRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 240, clientY: 240 }));
@@ -3231,6 +3233,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   click(msRow.querySelector('.r-num'));
   const chip = doc.querySelector('#panel .p-mschip');
   ok(!!chip && /Star/.test(chip.textContent), 'panel milestone chip names the style');
+  ok(!doc.querySelector('#panel [data-f="priSet"]') && !doc.querySelector('#panel [data-f="size"]'), 'milestone panel shows neither size nor priority');
   click(chip);
   const circBtn = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Circle/.test(b.textContent));
   ok(!!circBtn, 'chip opens the style picker');
