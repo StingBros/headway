@@ -3414,6 +3414,25 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   }
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
+
+  // type pickers, row icons, epic type
+  {
+    // pick a currently-rendered row's item — not state().items[0], which
+    // may sit in a phase collapsed by default in the fixture
+    const firstRow = doc.querySelector('#rows .row.item[data-id]');
+    const first = state().items.find(i => i.id === firstRow.dataset.id);
+    window.__headway.selectItem ? window.__headway.selectItem(first.id) : click(firstRow);
+    const chip = doc.querySelector('#panel [data-act="itype"]');
+    ok(chip && /Feature/.test(chip.textContent), 'panel shows the type chip');
+    click(chip);
+    const bug = [...doc.querySelectorAll('.menu-list [data-mi]')].find(el => /^Bug$/.test(el.textContent.trim()));
+    ok(!!bug, 'type dropdown lists Bug');
+    click(bug);
+    ok(state().items.find(i => i.id === first.id).type === 'bug', 'picking Bug sets the item type');
+    ok(!!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-type'), 'a non-default type shows its icon on the row');
+    window.__headway.setItemType(first.id, 'feature');
+    ok(!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-type'), 'the default type shows no icon');
+  }
 }
 
 ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'commits autosave to localStorage');

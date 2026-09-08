@@ -2091,6 +2091,10 @@ body.chrome-mac #startBar { padding-left: 96px; }
 }
 .p-crumb:hover { color: var(--blue); box-shadow: none; }
 .p-crumb svg.lucide { width: 13px; height: 13px; }
+.r-type { display: inline-flex; align-items: center; margin-right: 4px; color: var(--ink-2); flex: 0 0 auto; }
+.r-type i { width: 13px; height: 13px; }
+.p-typechip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--well); color: var(--ink-2); margin-left: 6px; cursor: pointer; }
+.p-typechip i { width: 12px; height: 12px; }
 .p-rollup { display: flex; gap: 6px; flex-wrap: wrap; }
 .p-rollup .sc-chip {
   display: inline-flex; align-items: center; gap: 6px;

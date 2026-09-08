@@ -298,6 +298,7 @@
       push('scope', lbl + ' — Phase', phName(a, p.phaseId), phName(b, it.phaseId));
       push('scope', lbl + ' — Workstream', p.workstream, it.workstream);
       push('scope', lbl + ' — Epic', p.epic, it.epic);
+      push('scope', lbl + ' — Type', RM.typeOf(a, p, 'feature').label, RM.typeOf(b, it, 'feature').label);
       push('scope', lbl + ' — Size', p.size, it.size);
       push('scope', lbl + ' — ' + RM.riskColLabel(b), p.risk, it.risk);
       push('scope', lbl + ' — Priority', p.priority, it.priority);
@@ -323,6 +324,7 @@
         push('scope', sl + ' — Title', sp.title, st.title);
         push('scope', sl + ' — Description', txt(sp.description), txt(st.description));
         push('scope', sl + ' — Size', sp.size, st.size);
+        push('scope', sl + ' — Type', RM.typeOf(a, sp, 'story').label, RM.typeOf(b, st, 'story').label);
         push('timeline', sl + ' — Start', dDate(sp.startDay), dDate(st.startDay));
         push('timeline', sl + ' — Duration', dWeeks(sp.durDays), dWeeks(st.durDays));
         push('timeline', sl + ' — Deadline', sp.deadline, st.deadline);
@@ -403,6 +405,7 @@
     genericDiff('setup', 'Setup — ', a.meta, b.meta);
     genericDiff('budget', 'Rate card — ', (a.meta || {}).rateCard, (b.meta || {}).rateCard);
     genericDiff('setup', 'Workstream color — ', a.wsColors, b.wsColors);
+    genericDiff('setup', 'Epic type — ', a.epicTypes, b.epicTypes);
     push('setup', 'Roles (rate card)', (a.teamTypes || []).join(', '), (b.teamTypes || []).join(', '));
     // options — renames of the active option and creates/renames/closes of
     // parked ones land in the audit trail (switching bypasses history)
@@ -1272,6 +1275,42 @@
         checked: RM.msStyleOf(it) === sname, fn: function () { setMsStyle(itemId, sname); } };
     });
   }
+  function setItemType(itemId, key) {
+    commit('type', function (s) { var t = RM.itemById(s, itemId); if (t && RM.itemType(s, key)) t.type = key; });
+  }
+  function setStoryType(itemId, storyId, key) {
+    commit('story type', function (s) {
+      var t = RM.itemById(s, itemId); if (!t) return;
+      t.stories.forEach(function (st) { if (st.id === storyId && RM.itemType(s, key)) st.type = key; });
+    });
+  }
+  function setEpicType(name, key) {
+    commit('epic type', function (s) {
+      if (!RM.itemType(s, key) || key === RM.defaultTypeFor(s, 'epic')) delete s.epicTypes[name];
+      else s.epicTypes[name] = key;
+    });
+  }
+  // dropdown / submenu entries for a level's types; the current type is
+  // listed even when it is no longer allowed there
+  function typeMenuItems(kind, currentKey, onPick) {
+    var list = RM.typesFor(state, kind).slice();
+    var cur = RM.itemType(state, currentKey);
+    if (cur && !list.some(function (t) { return t.key === cur.key; })) list.push(cur);
+    var allowed = RM.typesFor(state, kind).map(function (t) { return t.key; });
+    return list.map(function (t) {
+      var off = allowed.indexOf(t.key) === -1;
+      return { icon: t.icon, label: t.label + (off ? ' (not allowed here)' : ''), checked: t.key === currentKey, fn: function () { onPick(t.key); } };
+    });
+  }
+  function typeChipHtml(act, kind, obj) {
+    var t = RM.typeOf(state, obj, kind);
+    return '<button class="p-typechip" data-act="' + act + '" title="Type"><i data-lucide="' + esc(t.icon) + '"></i> ' + esc(t.label) + '</button>';
+  }
+  function typeIconHtml(obj, kind) {
+    var t = RM.typeOf(state, obj, kind);
+    if (t.key === RM.defaultTypeFor(state, kind)) return '';
+    return '<span class="r-type" title="' + esc(t.label) + '"><i data-lucide="' + esc(t.icon) + '"></i></span>';
+  }
   function typeIconMenu(anchor, key) {
     var t = RM.itemType(state, key);
     openDropdown(anchor, EPIC_ICONS.map(function (ic) {
@@ -1968,6 +2007,7 @@
         '<button class="pr-st-add" data-prstadd="1"><i data-lucide="plus"></i>' + esc('Add ' + lvl('story')) + '</button></div>'
       : '';
     return '<div class="sp-card pr-card" data-prcard="' + it.id + '" style="--ws-c:#' + wsColor + '">' +
+      typeIconHtml(it, 'feature') +
       '<input class="pr-title" data-prf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
       fields + stories +
       '<div class="pr-chips">' +
@@ -2059,6 +2099,7 @@
       '<div class="pr-stfeat" title="Feature"><span class="r-num">#' + it.num + '</span>' +
       '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' +
       '<span class="pr-stfeatname">' + esc(it.feature || '(untitled)') + '</span></div>' +
+      typeIconHtml(st, 'story') +
       '<input class="pr-title pr-st-title" data-prstf="title" placeholder="Story" value="' + esc(st.title || '') + '">' +
       '<div class="pr-chips">' + chips + '</div></div>';
   }
@@ -2604,6 +2645,7 @@
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
       '<span class="r-num">#' + it.num + '</span>' +
       '<span class="r-dot' + (it.milestone ? ' msdot ' + RM.msStyleOf(it) : '') + '" style="background:' + color + '"></span>' +
+      typeIconHtml(it, 'feature') +
       '<input class="spv-title" data-spf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
       sprTag(it, num) +
       '<span class="spv-chip" tabindex="0" role="button" data-spact="epic" title="Epic">' +
@@ -2618,6 +2660,7 @@
     return '<div class="spv-row spv-st' + (isSel(it.id) && selStory === st.id ? ' sel' : '') + (st.done ? ' done' : '') +
       '" data-spid="' + it.id + '" data-spst="' + st.id + '" data-spsec="' + sprSecKey(num) + '">' +
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
+      typeIconHtml(st, 'story') +
       '<input class="spv-title" data-spf="story" placeholder="Story" value="' + esc(st.title || '') + '">' +
       (own ? sprTag(st, num) : (num == null ? '' : '<span class="spv-tag" title="No timeline of its own">with feature</span>')) +
       '<span class="spv-est">' + ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-spact'); }).join('') + '</span>' +
@@ -3446,6 +3489,7 @@
       '<div class="r-main">' +
       (it.locked ? '<span class="r-lock"><i data-lucide="lock"></i></span>' : '') +
       (it.done ? '<span class="r-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
+      typeIconHtml(it, 'feature') +
       (view === 'scoping'
         // scoping: the title is a full-height editable cell in the tab ring,
         // top-aligned and wrapping like every other cell
@@ -3486,6 +3530,7 @@
           '" data-story="' + st.id + '" data-id="' + it.id + '">' +
           '<div class="row-left"><span class="st-pad"><span class="st-grip" title="Drag to reorder or move to another feature"><i data-lucide="grip-vertical"></i></span></span>' +
           (st.done ? '<span class="r-doneck st-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
+          typeIconHtml(st, 'story') +
           (view === 'scoping'
             // scoping: the story title edits in place like the feature titles
             ? '<div class="st-title st-name' + (st.done ? ' done' : '') + '" contenteditable="true" spellcheck="false" aria-label="Story title">' + esc(st.title) + '</div>'
@@ -4017,6 +4062,7 @@
       '<div id="panelRz"></div>' +
       '<div class="p-top"><span class="p-lead"><span class="p-num">#<input class="p-num-edit" data-f="num" value="' + it.num +
       '" style="width:' + (String(it.num).length + 1.6) + 'ch" title="Item #"></span>' +
+      typeChipHtml('itype', 'feature', it) +
       (it.milestone ? '<button class="p-mschip" data-act="msstyle" title="Milestone">' +
         MS_STYLE_GLYPHS[RM.msStyleOf(it)] + ' Milestone · ' + msStyleLabel(RM.msStyleOf(it)) + '</button>' : '') +
       '</span><button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
@@ -4151,6 +4197,7 @@
       '<div class="p-top">' +
       '<button class="p-crumb" data-stf="up" title="Back to #' + it.num + '">' +
       '<i data-lucide="corner-left-up"></i>#' + it.num + ' ' + esc(shorten(it.feature || '(untitled)', 26)) + '</button>' +
+      typeChipHtml('stype', 'story', st) +
       '<button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-stf="title" rows="1" placeholder="' + esc(lvl('story') + ' title') + '">' + esc(st.title) + '</textarea>' +
       '<label class="p-check fixed" style="margin:6px 0 8px"><input type="checkbox" data-stf="done"' + (st.done ? ' checked' : '') + '> Done</label>' +
@@ -4316,6 +4363,18 @@
       '<div class="m-sec"><label>Label</label><input id="epName" style="width:100%" value="' + esc(epicName) + '">' +
       '<div class="m-hint">Renames the epic on all ' + count + ' item(s) that carry it.</div></div>' +
       '<div class="m-sec"><label>Icon</label><div class="iswatches">' + icons + '</div></div>' +
+      '<div class="m-sec"><label>Type</label><select id="epType" style="width:100%">' +
+      (function () {
+        var curKey = RM.typeOf(state, epicName, 'epic').key;
+        var list = RM.typesFor(state, 'epic').slice();
+        if (!list.some(function (t) { return t.key === curKey; })) {
+          var cur = RM.itemType(state, curKey);
+          if (cur) list.push(cur);
+        }
+        return list.map(function (t) {
+          return '<option value="' + esc(t.key) + '"' + (t.key === curKey ? ' selected' : '') + '>' + esc(t.label) + '</option>';
+        }).join('');
+      })() + '</select></div>' +
       '<div class="m-sec"><label>Jira key</label><input id="epJira" style="width:100%" placeholder="e.g. HW-1" value="' + esc(state.epicJira[epicName] || '') + '">' +
       '<div class="m-hint">The Jira epic these features parent to in the Jira CSV export.</div></div>' +
       '</div>' +
@@ -4333,16 +4392,20 @@
         $('#epSave', host).onclick = function () {
           var newName = $('#epName', host).value.trim();
           var jira = RM.jiraKeyOf($('#epJira', host).value);
+          var typeKey = $('#epType', host).value;
           closeModal();
           commit('edit epic', function (s) {
             var name2 = newName || epicName;
             if (name2 !== epicName) {
               s.items.forEach(function (x) { if (x.epic === epicName) x.epic = name2; });
               if (s.epicIcons[epicName] != null) { s.epicIcons[name2] = s.epicIcons[epicName]; delete s.epicIcons[epicName]; }
+              if (s.epicTypes[epicName] != null) { s.epicTypes[name2] = s.epicTypes[epicName]; delete s.epicTypes[epicName]; }
               delete s.epicJira[epicName];
             }
             if (picked) s.epicIcons[name2] = picked;
             else delete s.epicIcons[name2];
+            if (!RM.itemType(s, typeKey) || typeKey === RM.defaultTypeFor(s, 'epic')) delete s.epicTypes[name2];
+            else s.epicTypes[name2] = typeKey;
             if (jira) s.epicJira[name2] = jira;
             else delete s.epicJira[name2];
           });
@@ -4533,12 +4596,20 @@
     if (!it) return;
     var msChip = e.target.closest('[data-act="msstyle"]');
     if (msChip) { openDropdown(msChip, msStyleItems(it.id, it)); return; }
+    var tyChip = e.target.closest('[data-act="itype"]');
+    if (tyChip) { openDropdown(tyChip, typeMenuItems('feature', it.type, function (k) { setItemType(it.id, k); })); return; }
     var secBtn = e.target.closest('[data-sectoggle]');
     if (secBtn) {
       var sk = secBtn.dataset.sectoggle;
       panelSec[sk] = secOpen(sk); // open → store collapsed=true, and vice versa
       saveLocal();
       renderPanel();
+      return;
+    }
+    var stChip = e.target.closest('[data-act="stype"]');
+    if (stChip && selStory) {
+      var stForType = storyById(it, selStory);
+      if (stForType) openDropdown(stChip, typeMenuItems('story', stForType.type, function (k) { setStoryType(it.id, selStory, k); }));
       return;
     }
     // story-panel controls
@@ -5462,6 +5533,9 @@
             if (st) { st.startDay = null; st.durDays = null; }
           });
         } } : null,
+        { icon: RM.typeOf(state, stm, 'story').icon, label: 'Type: ' + RM.typeOf(state, stm, 'story').label + '…', fn: function () {
+          openContextMenu(cx, cy, typeMenuItems('story', stm.type, function (k) { setStoryType(stmItemId, stmId, k); }));
+        } },
         { icon: 'trash-2', label: 'Delete story', fn: function () {
           commit('delete story', function (s) {
             var t = RM.itemById(s, stmItemId);
@@ -5492,6 +5566,9 @@
         { sep: true },
         { icon: 'folder-input', label: 'Move to phase…', fn: function () { openContextMenu(cx, cy, movePhaseMenu(itemId)); } },
         { icon: 'tag', label: 'Set epic…', fn: function () { openContextMenu(cx, cy, setEpicMenu(itemId, false)); } },
+        { icon: RM.typeOf(state, it, 'feature').icon, label: 'Type: ' + RM.typeOf(state, it, 'feature').label + '…', fn: function () {
+          openContextMenu(cx, cy, typeMenuItems('feature', it.type, function (k) { setItemType(itemId, k); }));
+        } },
         state.meta.workstreamsEnabled
           ? { icon: 'layers', label: 'Set workstream…', fn: function () {
               openContextMenu(cx, cy, wsMenuItems(itemId, function () {
@@ -5650,6 +5727,16 @@
             fn: function () { each('epic', function (s, t) { t.epic = ep; }); } });
         });
         openContextMenu(cx, cy, eItems);
+      } },
+      { icon: 'tag', label: 'Type…', fn: function () {
+        openContextMenu(cx, cy, typeMenuItems('feature', sel.length && sel.every(function (t) { return t.type === sel[0].type; }) ? sel[0].type : null, function (k) {
+          commit('type', function (s) {
+            ids.forEach(function (id) {
+              var t = RM.itemById(s, id);
+              if (t && RM.itemType(s, k)) t.type = k;
+            });
+          });
+        }));
       } },
       state.meta.workstreamsEnabled
         ? { icon: 'layers', label: 'Set workstream…', fn: function () {
@@ -10941,6 +11028,8 @@
     releaseNotesFor: releaseNotesFor,
     maybeShowReleaseNotes: maybeShowReleaseNotes,
     openReleaseNotes: openReleaseNotes,
-    setExportSink: function (fn) { exportSink = typeof fn === 'function' ? fn : null; }
+    setExportSink: function (fn) { exportSink = typeof fn === 'function' ? fn : null; },
+    setItemType: setItemType,
+    selectItem: select
   };
 })();
