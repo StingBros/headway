@@ -197,7 +197,6 @@
   // persisted with the doc): who made the change, what it was, and when.
   // Rapid same-kind edits by the same person coalesce into one entry.
   var USER_KEY = 'headway-user-v1';
-  var HISTORY_COALESCE_MS = 5 * 60 * 1000;
   var sessionStart = Date.now(); // for stamping this session's anonymous edits
   var namePromptShown = false;
   function userName() {
@@ -230,6 +229,11 @@
       var m = {};
       (list || []).forEach(function (x) { if (x && x.id) m[x.id] = x; });
       return m;
+    }
+    // deps hold item ids; history shows them as #num from whichever snapshot has the item
+    function depLabel(id) {
+      var d = RM.itemById(b, id) || RM.itemById(a, id);
+      return d ? '#' + d.num : '#?';
     }
     function names(st, ids) {
       return (ids || []).map(function (id) {
@@ -269,8 +273,8 @@
       push('scope', lbl + ' — ' + RM.riskColLabel(b), p.risk, it.risk);
       push('scope', lbl + ' — Priority', p.priority, it.priority);
       push('scope', lbl + ' — Role', p.teamType, it.teamType);
-      push('scope', lbl + ' — Depends on', (p.deps || []).map(function (n) { return '#' + n; }).join(', '),
-        (it.deps || []).map(function (n) { return '#' + n; }).join(', '));
+      push('scope', lbl + ' — Depends on', (p.deps || []).map(depLabel).join(', '),
+        (it.deps || []).map(depLabel).join(', '));
       (b.meta.scopeCols || []).forEach(function (c) {
         push('scope', lbl + ' — ' + RM.scopeColLabel(c), txt(RM.scopeValue(p, c.key)), txt(RM.scopeValue(it, c.key)));
       });
@@ -382,31 +386,7 @@
     ops = ops.filter(function (op) { return op[1] !== 'Setup — rateCard' && op[1] !== 'Setup — statuses'; });
     return { ops: ops, tl: tl };
   }
-  // merge coalesced ops: same field keeps its FIRST old and LAST new value
-  function mergeOps(base, add) {
-    var out = base.slice();
-    var at = {};
-    out.forEach(function (op, i) { at[op[0] + '' + op[1]] = i; });
-    add.forEach(function (op) {
-      var k = op[0] + '' + op[1];
-      if (at[k] != null) out[at[k]] = [op[0], op[1], out[at[k]][2], op[3]];
-      else { at[k] = out.length; out.push(op); }
-    });
-    return out.filter(function (op) { return op[2] !== op[3]; });
-  }
-  // coalesced schedule moves keep each item's FIRST before and LAST after
-  function mergeTl(base, add) {
-    var out = base.slice();
-    var by = {};
-    out.forEach(function (t, i) { by[t.id] = i; });
-    add.forEach(function (t) {
-      if (by[t.id] != null) {
-        var b = out[by[t.id]];
-        out[by[t.id]] = { id: t.id, n: t.n, f: t.f, ms: t.ms, s0: b.s0, d0: b.d0, s1: t.s1, d1: t.d1 };
-      } else { by[t.id] = out.length; out.push(t); }
-    });
-    return out.filter(function (t) { return !(t.s0 === t.s1 && t.d0 === t.d1); });
-  }
+  // coalescing helpers (mergeOps / mergeTl / HISTORY_COALESCE_MS) live in core
   function recordHistory(label, prevJson) {
     if (!label) return;
     var u = userName();
@@ -423,13 +403,13 @@
     ops = ops.filter(function (op) { return op[1].indexOf('history') === -1; });
     var last = h[h.length - 1];
     var now = Date.now();
-    if (last && last.label === label && last.u === u && now - last.t < HISTORY_COALESCE_MS) {
+    if (last && last.label === label && last.u === u && now - last.t < RM.HISTORY_COALESCE_MS) {
       last.t = now;
       last.n = (last.n || 1) + 1;
-      var merged = mergeOps(last.d || [], ops);
+      var merged = RM.mergeOps(last.d || [], ops);
       last.x = (last.x || 0) + Math.max(0, merged.length - RM.HISTORY_OPS_MAX);
       last.d = merged.slice(0, RM.HISTORY_OPS_MAX);
-      var mtl = mergeTl(last.tl || [], tl).slice(0, 60);
+      var mtl = RM.mergeTl(last.tl || [], tl).slice(0, 60);
       if (mtl.length) last.tl = mtl; else delete last.tl;
       return;
     }
@@ -506,6 +486,8 @@
   }
   function afterChange() {
     docSaved = false;
+    // a freshly-inserted row is held in place only until it has a start date
+    state.items.forEach(function (it) { if (it.holdPos && it.startDay != null) delete it.holdPos; });
     validation = RM.validate(state);
     saveLocal();
     render();
@@ -843,13 +825,39 @@
   });
 
   // ------------------------------------------------------------ geometry
+  // Rows as the user sees them: by start day inside each phase while
+  // auto-order is on, else by order key. Always a NEW array — the document's
+  // items array (and its order keys) only change when the user reorders.
+  function viewItemsOf(st) { return RM.viewItems(st, { autoOrder: autoOrder }); }
+  function inPhase(list, phaseId) {
+    return list.filter(function (it) { return it.phaseId === phaseId; });
+  }
+  // the document with its items in view order — for the exporters, which lay
+  // rows out from the array (a shallow copy; nothing is written back)
+  function viewState() {
+    var out = {};
+    Object.keys(state).forEach(function (k) { out[k] = state[k]; });
+    out.items = viewItemsOf(state);
+    return out;
+  }
+  // an order key for a row about to be spliced in at index at: between the
+  // nearest KEYED neighbours, so keyless rows in between (added this session,
+  // keyed on the next load) cannot pull the key out of sequence
+  function orderAt(list, at) {
+    var prev = null, next = null, i;
+    for (i = at - 1; i >= 0 && prev == null; i--) if (list[i].order) prev = list[i].order;
+    for (i = at; i < list.length && next == null; i++) if (list[i].order) next = list[i].order;
+    if (prev != null && next != null && next <= prev) return RM.orderAfterAll(list);
+    return RM.orderBetween(prev, next);
+  }
   function visibleSequence() {
     // ordered visible rows: bands and items (stories excluded)
     var seq = [];
+    var vitems = viewItemsOf(state);
     state.phases.forEach(function (p) {
       seq.push({ kind: 'band', phaseId: p.id });
       if (!p.collapsed && detailMode !== 'phase') {
-        RM.itemsInPhase(state, p.id).filter(matchesFilter).forEach(function (it) {
+        inPhase(vitems, p.id).filter(matchesFilter).forEach(function (it) {
           seq.push({ kind: 'item', id: it.id, phaseId: p.id });
         });
       }
@@ -1490,7 +1498,7 @@
   function itemsInSprint(num) {
     var meta = state.meta;
     var r = RM.sprintRange(meta, num);
-    return state.items.filter(function (it) {
+    return viewItemsOf(state).filter(function (it) { // board rows in on-screen order
       return RM.itemInWeeks(meta, it, r.w0, r.w1) && matchesFilter(it);
     });
   }
@@ -1503,7 +1511,7 @@
     var inIds = {};
     items.forEach(function (it) { inIds[it.id] = true; });
     var out = [];
-    state.items.forEach(function (it) {
+    viewItemsOf(state).forEach(function (it) {
       if (!matchesFilter(it)) return;
       (it.stories || []).forEach(function (st) {
         var own = st.startDay != null && st.durDays != null;
@@ -2563,8 +2571,9 @@
   function renderRows() {
     var html = [];
     var cyclic = RM.cycleMembers(state);
+    var vitems = viewItemsOf(state);
     state.phases.forEach(function (p) {
-      var items = RM.itemsInPhase(state, p.id).filter(matchesFilter);
+      var items = inPhase(vitems, p.id).filter(matchesFilter);
       // phase detail: the band's lane carries the phase's span as a bar (the
       // whole plan reads phase-by-phase, items tucked away)
       var bandLane = p.description ? '<span class="band-desc" title="' + esc(RM.htmlToText(p.description)) + '">' + esc(RM.htmlToText(p.description)) + '</span>' : '';
@@ -2705,7 +2714,7 @@
       var viol = it.startDay != null && it.startDay < RM.itemEnd(dep) && !dep.done;
       var related = selectedId && (selectedId === dep.id || selectedId === it.id);
       var crit = showCrit && critCache && critCache.edges[dep.id + '>' + it.id];
-      var explicit = it.deps.indexOf(dep.num) !== -1;
+      var explicit = it.deps.indexOf(dep.id) !== -1;
       var edgeSel = selectedEdge && selectedEdge.fromId === dep.id && selectedEdge.toId === it.id;
       // arrows ON: every specifically-defined dependency renders (selected
       // item's in blue, critical path orange, violations dashed amber)
@@ -2744,7 +2753,7 @@
     if (!from || !to) { requestAnimationFrame(renderArrows); return true; }
     commit('remove dep', function (s) {
       var t = RM.itemById(s, to.id);
-      t.deps = t.deps.filter(function (n) { return n !== from.num; });
+      t.deps = t.deps.filter(function (id) { return id !== from.id; });
     });
     toast('Removed: #' + to.num + ' no longer depends on #' + from.num);
     return true;
@@ -2901,11 +2910,11 @@
         '<div class="seg">' + riskBtns + '</div>';
     }
 
-    var depChips = it.deps.map(function (n) {
-      var d = RM.itemByNum(state, n);
-      if (!d) return '<span class="dep-chip unknown" title="No item #' + n + '"><i>#' + n + '</i> missing<button class="x" data-deprm="' + n + '"><i data-lucide="x"></i></button></span>';
-      return '<span class="dep-chip" data-depgo="' + d.id + '" title="' + esc(d.feature) + '"><i>#' + n + '</i> ' +
-        esc(shorten(d.feature, 26)) + '<button class="x" data-deprm="' + n + '"><i data-lucide="x"></i></button></span>';
+    var depChips = it.deps.map(function (id) {
+      var d = RM.itemById(state, id);
+      if (!d) return '<span class="dep-chip unknown" title="Depends on a deleted item"><i>#?</i> missing<button class="x" data-deprm="' + esc(id) + '"><i data-lucide="x"></i></button></span>';
+      return '<span class="dep-chip" data-depgo="' + d.id + '" title="' + esc(d.feature) + '"><i>#' + d.num + '</i> ' +
+        esc(shorten(d.feature, 26)) + '<button class="x" data-deprm="' + esc(id) + '"><i data-lucide="x"></i></button></span>';
     }).join('');
     var depTextChips = (it.depsText || []).map(function (t, i) {
       return '<span class="dep-chip text" title="Free-text dependency">' + esc(shorten(t, 30)) +
@@ -2914,7 +2923,7 @@
 
     // items that list THIS one as a dependency
     var dependentChips = state.items
-      .filter(function (o) { return o.deps.indexOf(it.num) !== -1; })
+      .filter(function (o) { return o.deps.indexOf(it.id) !== -1; })
       .map(function (o) {
         return '<span class="dep-chip" data-depgo="' + o.id + '" title="' + esc(o.feature) + '"><i>#' + o.num + '</i> ' +
           esc(shorten(o.feature || '(untitled)', 26)) +
@@ -3439,15 +3448,15 @@
       commit('remove dependent', function (s) {
         var d2 = RM.itemById(s, depId);
         var me = RM.itemById(s, it.id);
-        if (d2 && me) d2.deps = d2.deps.filter(function (n) { return n !== me.num; });
+        if (d2 && me) d2.deps = d2.deps.filter(function (id) { return id !== me.id; });
       });
       return;
     }
     if (dep) {
-      var n = parseInt(dep.dataset.deprm, 10);
+      var rmId = dep.dataset.deprm;
       commit('remove dep', function (s) {
         var t = RM.itemById(s, it.id);
-        t.deps = t.deps.filter(function (x) { return x !== n; });
+        t.deps = t.deps.filter(function (x) { return x !== rmId; });
       });
       return;
     }
@@ -3555,7 +3564,6 @@
     if (f === 'snap') {
       var r = RM.snapEarliest(state, it.id);
       if (r.changed) {
-        if (autoOrder) RM.sortItemsByStart(r.state);
         replaceState('snap', r.state);
         toast('Snapped #' + it.num + ' to its earliest open slot' + (r.note ? ' — ' + r.note : ''));
       } else {
@@ -3717,7 +3725,6 @@
         var nd2 = Math.max(0, day2);
         if (t.startDay != null) RM.shiftStories(t, nd2 - t.startDay);
         t.startDay = nd2;
-        if (autoOrder) RM.sortItemsByStart(s);
       });
       return;
     }
@@ -3768,13 +3775,13 @@
   });
 
   // dependency search-by-name combobox
-  function addDep(itemId, num) {
-    var target = RM.itemByNum(state, num);
+  function addDep(itemId, depId) {
+    var target = RM.itemById(state, depId);
     var it = RM.itemById(state, itemId);
     if (!target || !it || target.id === it.id) return;
-    if (it.deps.indexOf(num) !== -1) { toast('#' + it.num + ' already depends on #' + num); return; }
-    commit('add dep', function (s) { RM.itemById(s, itemId).deps.push(num); });
-    toast('#' + it.num + ' now depends on #' + num);
+    if (it.deps.indexOf(depId) !== -1) { toast('#' + it.num + ' already depends on #' + target.num); return; }
+    commit('add dep', function (s) { RM.itemById(s, itemId).deps.push(depId); });
+    toast('#' + it.num + ' now depends on #' + target.num);
   }
   $('#panel').addEventListener('input', function (e) {
     if (e.target.dataset.f !== 'depsearch') return;
@@ -3784,12 +3791,12 @@
     var sug = e.target.parentElement.querySelector('.dep-sug');
     if (!q) { sug.hidden = true; sug.innerHTML = ''; return; }
     var hits = state.items.filter(function (o) {
-      if (o.id === it.id || it.deps.indexOf(o.num) !== -1) return false;
+      if (o.id === it.id || it.deps.indexOf(o.id) !== -1) return false;
       return (o.feature || '').toLowerCase().indexOf(q) !== -1 ||
         (o.epic || '').toLowerCase().indexOf(q) !== -1;
     }).slice(0, 8);
     sug.innerHTML = hits.map(function (o) {
-      return '<button data-addep="' + o.num + '"><i>#' + o.num + '</i> ' + esc(shorten(o.feature || '(untitled)', 44)) +
+      return '<button data-addep="' + o.id + '"><i>#' + o.num + '</i> ' + esc(shorten(o.feature || '(untitled)', 44)) +
         (o.epic ? ' <em>' + esc(o.epic) + '</em>' : '') + '</button>';
     }).join('') || '<div class="dep-sug-none">No match — Enter keeps it as a text note</div>';
     if (!hits.length) {
@@ -3803,7 +3810,7 @@
     if (!add && !addTxt) return;
     var it = selectedId && RM.itemById(state, selectedId);
     if (!it) return;
-    if (add) { addDep(it.id, parseInt(add.dataset.addep, 10)); return; }
+    if (add) { addDep(it.id, add.dataset.addep); return; }
     var inp = $('#panel [data-f=depsearch]');
     var tv = inp ? inp.value.trim() : '';
     if (tv) commit('add text dep', function (s) { RM.itemById(s, it.id).depsText.push(tv); });
@@ -4456,14 +4463,7 @@
     var it = RM.itemById(state, itemId);
     return state.phases.map(function (p) {
       return { label: esc(p.name) + (p.bucket ? ' <small>(backlog)</small>' : ''), checked: p.id === it.phaseId, fn: function () {
-        commit('move phase', function (s) {
-          var t = RM.itemById(s, itemId);
-          t.phaseId = p.id;
-          s.items = s.items.filter(function (x) { return x.id !== t.id; });
-          var lastIdx = -1;
-          s.items.forEach(function (x, i2) { if (x.phaseId === p.id) lastIdx = i2; });
-          s.items.splice(lastIdx + 1, 0, t);
-        });
+        commit('move phase', function (s) { RM.placeItem(s, itemId, p.id, null); }); // end of that phase
       } };
     });
   }
@@ -4535,8 +4535,17 @@
       it.id = newId;
       it.num = RM.nextNum(s);
       it.holdPos = true;
-      var idx = s.items.indexOf(RM.itemById(s, itemId));
-      s.items.splice(idx + offset, 0, it);
+      // the held row shows at its array slot inside the phase, so aim that
+      // slot at the anchor's ON-SCREEN position: the new key lands right
+      // above/below the anchor row however the phase is currently sorted.
+      // This leans on RM.sortItemsByStart splicing a holdPos row back in at
+      // its array index — change that and this insert lands in the wrong
+      // place under auto-order without any test failing.
+      var a2 = RM.itemById(s, itemId);
+      var vi = inPhase(viewItemsOf(s), a2.phaseId).indexOf(a2);
+      var before = inPhase(s.items, a2.phaseId)[vi + offset];
+      s.items.push(it);
+      RM.placeItem(s, newId, a2.phaseId, before ? before.id : null);
     });
     var row = rowsEl.querySelector('.row[data-id="' + newId + '"]');
     if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
@@ -4553,7 +4562,11 @@
       copy.num = RM.nextNum(s);
       copy.feature = t.feature + ' (copy)';
       copy.stories.forEach(function (st) { st.id = RM.uid('s'); });
-      s.items.splice(s.items.indexOf(t) + 1, 0, copy);
+      // right after the original: before the original's next key neighbour
+      var peers = inPhase(s.items, t.phaseId);
+      var next = peers[peers.indexOf(t) + 1];
+      s.items.push(copy);
+      RM.placeItem(s, copy.id, t.phaseId, next ? next.id : null);
       selectedId = copy.id;
     });
   }
@@ -4613,7 +4626,6 @@
       t2.durDays = t2.milestone ? 0
         : (t2.durDays != null ? t2.durDays
           : RM.stretchSpan(s2.meta, pDay, RM.effortDays(s2, t2) || 5));
-      if (autoOrder) RM.sortItemsByStart(s2);
     });
     select(itemId);
   }
@@ -5060,11 +5072,11 @@
     // out-port: target depends on source; in-port: source depends on target
     var depOn = d.port === 'out' ? src : tgt;
     var dependent = d.port === 'out' ? tgt : src;
-    if (dependent.deps.indexOf(depOn.num) !== -1) {
+    if (dependent.deps.indexOf(depOn.id) !== -1) {
       toast('#' + dependent.num + ' already depends on #' + depOn.num);
       return;
     }
-    commit('link', function (s) { RM.itemById(s, dependent.id).deps.push(depOn.num); });
+    commit('link', function (s) { RM.itemById(s, dependent.id).deps.push(depOn.id); });
     toast('#' + dependent.num + ' now depends on #' + depOn.num);
   }
 
@@ -5436,7 +5448,6 @@
         rippleMoved = RM.shiftDependents(s, t.id, endDelta, { rigid: true });
       }
       if (vr) applyDrop(s, d.itemId, vr);
-      if (autoOrder) RM.sortItemsByStart(s);
     });
     if (rippleMoved) toast('Moved ' + rippleMoved + ' chained item(s) along');
   }
@@ -5521,7 +5532,6 @@
       t.startDay = d.day;
       t.durDays = t.milestone ? 0 : d.dur;
       t.riskDays = RM.stretchSpan(s.meta, t.startDay + t.durDays, RM.riskEffortDays(s, t));
-      if (autoOrder) RM.sortItemsByStart(s);
     });
   }
 
@@ -5614,12 +5624,13 @@
       if (!st) return;
       from.stories = from.stories.filter(function (x) { return x.id !== d.stId; });
       var to = RM.itemById(s, toItemId);
-      if (!to || to.milestone) { from.stories.push(st); return; }
+      if (!to || to.milestone) { st.order = RM.orderAfterAll(from.stories); from.stories.push(st); return; }
       var at = to.stories.length;
       if (beforeStId) {
         var bi = to.stories.map(function (x) { return x.id; }).indexOf(beforeStId);
         if (bi !== -1) at = bi;
       }
+      st.order = orderAt(to.stories, at); // the key follows the row
       to.stories.splice(at, 0, st);
     });
   }
@@ -5667,21 +5678,10 @@
   function applyDrop(s, itemId, r) {
     var t = RM.itemById(s, itemId);
     if (!t) return;
-    s.items = s.items.filter(function (x) { return x.id !== t.id; });
-    t.phaseId = r.phaseId;
     if (groupEpic && r.epicTo !== undefined) t.epic = r.epicTo || '';
     if (groupWs && r.wsTo !== undefined) t.workstream = r.wsTo || '';
-    var insertAt = s.items.length;
-    if (r.beforeItemId) {
-      insertAt = s.items.indexOf(RM.itemById(s, r.beforeItemId));
-    } else {
-      // end of phase: after last item with phaseId (or global end)
-      var lastIdx = -1;
-      s.items.forEach(function (x, i2) { if (x.phaseId === r.phaseId) lastIdx = i2; });
-      insertAt = lastIdx + 1;
-      if (lastIdx === -1) insertAt = s.items.length;
-    }
-    s.items.splice(insertAt, 0, t);
+    // one order key changes (the array mirrors the move); null = end of phase
+    RM.placeItem(s, itemId, r.phaseId, r.beforeItemId || null);
   }
 
   // ------------------------------------------------------------ topbar: title, tabs, menus
@@ -5868,8 +5868,8 @@
     if (vhPick.length === 2) {
       var lo = Math.min(vhPick[0], vhPick[1]), hi = Math.max(vhPick[0], vhPick[1]);
       for (var k = lo + 1; k <= hi; k++) {
-        ops = mergeOps(ops, h[k].d || []);
-        tlSel = mergeTl(tlSel, h[k].tl || []);
+        ops = RM.mergeOps(ops, h[k].d || []);
+        tlSel = RM.mergeTl(tlSel, h[k].tl || []);
         overflow += h[k].x || 0;
         if (!h[k].d) noDetail = 'Some of the compared changes predate change tracking — their details aren’t included.';
       }
@@ -6112,10 +6112,10 @@
         setDetailMode('feature');
       } },
       { icon: 'arrow-down-narrow-wide', label: 'Auto-order rows by start', checked: autoOrder, fn: function () {
+        // a view preference: rows re-sort on screen, the document is untouched
         autoOrder = !autoOrder;
         saveLocal();
-        if (autoOrder) commit('auto-order', function (s) { RM.sortItemsByStart(s); });
-        else renderTopbar();
+        render();
         toast('Auto-order ' + (autoOrder ? 'on — rows follow the timeline' : 'off'));
       } },
       { sep: true },
@@ -6227,9 +6227,8 @@
       }).items[0];
       it.id = newId;
       it.num = RM.nextNum(s);
-      var lastIdx = -1;
-      s.items.forEach(function (x, i2) { if (x.phaseId === phaseId) lastIdx = i2; });
-      s.items.splice(lastIdx === -1 ? s.items.length : lastIdx + 1, 0, it);
+      s.items.push(it);
+      RM.placeItem(s, newId, phaseId, null); // end of the phase, keyed after its last row
       s.phases.forEach(function (p) { if (p.id === phaseId) p.collapsed = false; });
       selectedId = newId;
     });
@@ -6314,11 +6313,12 @@
   }
   function movePhase(phaseId, dir) {
     commit('move phase', function (s) {
-      var i = -1;
-      s.phases.forEach(function (p, k) { if (p.id === phaseId) i = k; });
+      var i = RM.phaseIndex(s, phaseId);
       var j = i + dir;
       if (i < 0 || j < 0 || j >= s.phases.length) return;
-      var tmp = s.phases[i]; s.phases[i] = s.phases[j]; s.phases[j] = tmp;
+      // swap with the neighbour = land before it (up) or before the one past it (down)
+      var before = dir < 0 ? s.phases[j] : s.phases[j + 1];
+      RM.movePhaseTo(s, phaseId, before ? before.id : null);
     });
   }
 
@@ -6327,7 +6327,7 @@
   $('#btnValidation').addEventListener('click', validationModal);
   function validationModal() {
     var groups = { error: [], warn: [], info: [] };
-    state.items.forEach(function (it) {
+    viewItemsOf(state).forEach(function (it) { // issues listed in row order
       (validation.byItem[it.id] || []).forEach(function (v) {
         groups[v.level === 'error' ? 'error' : v.level].push({ it: it, v: v });
       });
@@ -7816,9 +7816,7 @@
         } else if (dd.kind === 'scol') {
           s2.meta.scopeColOrder = moveKeyBefore(s2.meta.scopeColOrder, dd.key, dd.before);
         } else if (dd.kind === 'phase') {
-          var ids = s2.phases.map(function (p2) { return p2.id; });
-          var order = moveKeyBefore(ids, dd.key, dd.before);
-          s2.phases.sort(function (a, b) { return order.indexOf(a.id) - order.indexOf(b.id); });
+          RM.movePhaseTo(s2, dd.key, dd.before == null ? null : dd.before); // null = last
         }
       });
     });
@@ -8380,6 +8378,7 @@
       s.team = s.team.filter(function (x) { return x.id !== d.mid; });
       var at = d.before ? s.team.map(function (x) { return x.id; }).indexOf(d.before) : s.team.length;
       if (at < 0) at = s.team.length;
+      m.order = orderAt(s.team, at); // the key follows the row
       s.team.splice(at, 0, m);
     });
   }
@@ -8441,10 +8440,7 @@
       if (key === 'deps') depsMode = on ? 'on' : 'none';
       else if (key === 'crit') showCrit = on;
       else if (key === 'cap') showCap = on;
-      else if (key === 'autoOrder') {
-        autoOrder = on;
-        if (on) commit('auto-order', function (s) { RM.sortItemsByStart(s); });
-      }
+      else if (key === 'autoOrder') autoOrder = on; // view-only; render() below re-sorts
       else if (key === 'groupWs') groupWs = on;
       else if (key === 'groupEpic') groupEpic = on;
       else if (key === 'autoSave') { autoSave = on; if (on) scheduleAutoSave(); }
@@ -8703,8 +8699,9 @@
     // the exact document JSON this export embeds — the desktop shell keeps it
     // to recognize a sync client's rewrite of this very save (same document,
     // different bytes) and not reload over it
-    var stateJson = RMExcel.stateJsonOf(state);
-    return RMExcel.exportWorkbook(state, uiSnapshot()).then(function (blob) {
+    var vs = viewState(); // sheet rows in on-screen order; the blob re-sorts by key on load
+    var stateJson = RMExcel.stateJsonOf(vs);
+    return RMExcel.exportWorkbook(vs, uiSnapshot()).then(function (blob) {
       var name = saveFileName();
       if (window.HeadwayDesktop) { // desktop: write straight to disk
         return HeadwayDesktop.saveBlob(blob, name, forceDialog, stateJson).then(function (path) {
@@ -9042,18 +9039,19 @@
   function safeName(s) { return String(s).replace(/[\\/:*?"<>|]+/g, '').trim(); }
 
   function exportPngTo(exOpts) {
-    var entries = RM_EXPORT.plan(state, exOpts);
+    var vs = viewState(); // rows in on-screen order
+    var entries = RM_EXPORT.plan(vs, exOpts);
     if (!entries.length) { toast('Nothing to export in this selection', 'err'); return; }
     var split = exOpts.byPhase || exOpts.byWs;
     if (!split) {
-      RM_EXPORT.toBlob(state, entries[0].opts)
+      RM_EXPORT.toBlob(vs, entries[0].opts)
         .then(function (r) { return saveExport(r, PNG_KIND); })
         .catch(function (err) { toast('Export failed: ' + (err && err.message || err), 'err'); });
       return;
     }
     var docName = safeName(state.meta.title || '') || 'Roadmap';
     Promise.all(entries.map(function (e) {
-      return RM_EXPORT.toBlob(state, e.opts).then(function (r) {
+      return RM_EXPORT.toBlob(vs, e.opts).then(function (r) {
         return { blob: r.blob, name: docName + ' — ' + safeName(e.name) + '.png' };
       });
     })).then(function (files) {
@@ -9079,7 +9077,7 @@
   }
 
   function exportPptxTo(exOpts) {
-    RM_PPTX.toBlob(state, exOpts)
+    RM_PPTX.toBlob(viewState(), exOpts)
       .then(function (r) { return saveExport(r, PPTX_KIND); })
       .catch(function (err) { toast('Export failed: ' + (err && err.message || err), 'err'); });
   }

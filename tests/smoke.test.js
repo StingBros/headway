@@ -298,9 +298,93 @@ depInput.dispatchEvent(new window.Event('input', { bubbles: true }));
 const sugBtn = doc.querySelector('#panel .dep-sug [data-addep]');
 ok(!!sugBtn, 'dep search suggests matches by name');
 if (sugBtn) {
-  const num = parseInt(sugBtn.getAttribute('data-addep'), 10);
+  // deps hold item IDS (num is display-only): the suggestion carries the id,
+  // the stored dep is that id, and the chip still reads #num
+  const depId = sugBtn.getAttribute('data-addep');
+  const depItem = state().items.find(i => i.id === depId);
+  ok(!!depItem && !/^\d+$/.test(depId), 'suggestions carry the item id, not its number');
   click(sugBtn);
-  ok(state().items.find(i => i.id === itId).deps.indexOf(num) !== -1, 'clicking a suggestion adds the dependency');
+  const depsNow = state().items.find(i => i.id === itId).deps;
+  ok(depsNow.indexOf(depId) !== -1, 'clicking a suggestion adds the dependency by id');
+  ok(depsNow.every(d => typeof d === 'string' && state().items.some(i => i.id === d)),
+    'every stored dep is an existing item id');
+  const chip = doc.querySelector('#panel .dep-chip[data-depgo="' + depId + '"]');
+  ok(!!chip && chip.firstElementChild.textContent === '#' + depItem.num,
+    'the dependency chip reads #' + depItem.num);
+  click(doc.querySelector('#panel .dep-chip [data-deprm="' + depId + '"]'));
+  ok(state().items.find(i => i.id === itId).deps.indexOf(depId) === -1, 'the chip\'s x removes the dependency');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(state().items.find(i => i.id === itId).deps.indexOf(depId) !== -1, 'undo restores the dependency');
+}
+
+// ---------------------------------------------------------------- row reorder = ONE order key; auto-order = view sort
+{
+  const st0 = state();
+  const byId = (s, id) => s.items.find(i => i.id === id);
+  const rowSeq = () => [...doc.querySelectorAll('#rows .row.item')].map(r => r.dataset.id);
+  ok(st0.items.every(i => typeof i.order === 'string' && i.order.length), 'every item carries an order key after load');
+  // an adjacent on-screen pair in one expanded phase, A strictly earlier than B
+  let A = null, B = null;
+  const seq0 = rowSeq();
+  for (let k = 0; k + 1 < seq0.length && !A; k++) {
+    const a = byId(st0, seq0[k]), b = byId(st0, seq0[k + 1]);
+    if (a && b && a.phaseId === b.phaseId &&
+      a.startDay != null && b.startDay != null && a.startDay < b.startDay) { A = a; B = b; }
+  }
+  ok(!!A, 'an adjacent scheduled pair exists in an expanded phase for the reorder test');
+  if (A) {
+    const ph0 = A.phaseId;
+    // drag A's row to the end of its phase = drop just above the NEXT phase's
+    // band. jsdom rects are all zero, so give that one band a real rect and
+    // aim the pointer above its midline (no next band: far below = last phase)
+    const pi = st0.phases.findIndex(p => p.id === ph0);
+    const nextBand = pi + 1 < st0.phases.length && doc.querySelector('#rows .row.band[data-phase="' + st0.phases[pi + 1].id + '"]');
+    let dropY = 9999;
+    if (nextBand) {
+      nextBand.getBoundingClientRect = () => ({ top: 100, bottom: 120, height: 20, left: 0, right: 100, width: 100 });
+      dropY = 50;
+    }
+    doc.querySelector('#rows .row.item[data-id="' + A.id + '"] .row-left').dispatchEvent(
+      new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 30, clientY: 30, button: 0 }));
+    window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: 30, clientY: dropY }));
+    window.dispatchEvent(new window.MouseEvent('pointerup', { clientX: 30, clientY: dropY }));
+    click(doc.querySelector('#rows')); // the click a browser fires after the drop (the app swallows it)
+    const st1 = state();
+    const changed = st1.items.filter(i => byId(st0, i.id).order !== i.order).map(i => i.id);
+    ok(changed.length === 1 && changed[0] === A.id, 'dragging a row rewrites exactly one order key (' + changed.length + ')');
+    ok(st1.items.every(i => i.phaseId === byId(st0, i.id).phaseId) && st1.items.length === st0.items.length,
+      'the reorder moves nothing else');
+    const keysPh0 = st1.items.filter(i => i.phaseId === ph0 && i.id !== A.id).map(i => i.order);
+    ok(keysPh0.every(k => k < byId(st1, A.id).order), 'the moved row now keys after every other row of its phase');
+    // the arrangement survives a save/load cycle: normalizeState re-sorts by
+    // key and lands on the same per-phase order with the same keys
+    const rt = window.RM.normalizeState(JSON.parse(JSON.stringify(st1)));
+    const perPhase = (s) => s.phases.map(p => s.items.filter(i => i.phaseId === p.id).map(i => i.id + ':' + i.order).join(',')).join('|');
+    ok(perPhase(rt) === perPhase(st1), 'the reordered document round-trips through normalizeState (per-phase order + keys)');
+
+    // auto-order (default on) is a view sort: A still shows by start…
+    const seqOn = rowSeq();
+    ok(seqOn.indexOf(A.id) !== -1 && seqOn.indexOf(A.id) < seqOn.indexOf(B.id),
+      'with auto-order on the moved row still renders by start day, before its later neighbour');
+    const toggleAuto = () => {
+      window.eval("document.querySelector('[data-menu=\"view\"]').click()");
+      click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Auto-order rows by start/.test(b.textContent)));
+    };
+    toggleAuto();
+    ok(JSON.stringify(state().items) === JSON.stringify(st1.items),
+      'toggling auto-order off leaves the items array — order keys included — byte-identical');
+    ok(window.localStorage.getItem('headway-ui-v1').includes('"autoOrder":false'),
+      'auto-order is a per-machine UI pref, not document state');
+    const seqOff = rowSeq();
+    ok(seqOff.join() !== seqOn.join() && seqOff.indexOf(A.id) > seqOff.indexOf(B.id),
+      'with auto-order off the rows follow the order keys — the moved row renders after its neighbour');
+    toggleAuto();
+    ok(JSON.stringify(state().items) === JSON.stringify(st1.items), 'toggling it back on is a no-op for the document too');
+    ok(rowSeq().join() === seqOn.join(), 'rows return to start order');
+    // put the row back for the tests that follow
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    ok(byId(state(), A.id).order === A.order, 'undo restores the original order key');
+  }
 }
 
 // ---------------------------------------------------------------- holidays are day-granular
@@ -1234,6 +1318,11 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   const fresh = s3.items[anchorIdx - 1];
   ok(fresh && fresh.feature === '' && fresh.startDay == null, 'new item sits immediately above the anchor');
   ok(fresh.holdPos === true, 'inserted item carries holdPos until a date is set');
+  const anchorIt = s3.items[anchorIdx];
+  ok(typeof fresh.order === 'string' && fresh.order < anchorIt.order,
+    'the inserted item is keyed just before its anchor');
+  const rowsNow = [...doc.querySelectorAll('#rows .row.item')].map(r => r.dataset.id);
+  ok(rowsNow.indexOf(fresh.id) === rowsNow.indexOf(anchorId) - 1, 'and renders directly above it');
   ok(!doc.querySelector('#panel .p-name'), 'insert does not open an item in the edit panel');
   ok(!!doc.querySelector('#panel .p-empty'), 'persistent panel shows its no-selection state');
   const focused = doc.activeElement;
