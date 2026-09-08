@@ -192,6 +192,10 @@
   //       legacy one-argument call means xlsx).
   //   beforeClose() → Promise|void               from the window close request;
   //       the window is destroyed once it settles (3 s cap).
+  //   planShardChanged(planId)                   an entity shard of a plan OTHER
+  //       than the active one changed (its cached Compare copy is stale).
+  //   resumeBundle()                             called once desktop.js has loaded,
+  //       so the app can re-link the folder its ui snapshot names.
   var ENTITY_DIRS = { items: 'item', phases: 'phase', team: 'team', costs: 'cost' };
   var RENAME_RETRY_MS = [120, 400, 1200];
   var CLOSE_HOOK_MS = 3000;
@@ -485,7 +489,11 @@
             if (isObj(hw) && a && typeof a.plansChanged === 'function') a.plansChanged(hw);
           });
         }
-        if (c.planId !== activePlanId) return;
+        if (c.planId !== activePlanId) {
+          // not applied live — but a Compare overlay may be showing that plan
+          if (c.entityKind && a && typeof a.planShardChanged === 'function') a.planShardChanged(c.planId);
+          return;
+        }
         if (kind === 'remove') return; // deletes are tombstones, never file removals
         return readJsonRetry(dir + '/' + r).then(function (env) {
           if (!isEnvelope(env)) return;
@@ -673,6 +681,50 @@
         return dir ? window.HeadwayDesktop.openBundle(dir) : null;
       });
     },
+    // a parent folder for a new / converted bundle; null on cancel
+    pickFolder: function () {
+      return dialog.open({ directory: true, multiple: false }).then(function (d) { return d || null; });
+    },
+    // so Create/Convert can refuse a <parent>/<title>.headway that already exists
+    // (createBundle would otherwise write into — and merge with — someone's bundle)
+    pathExists: function (p) {
+      return fs.exists(norm(p).replace(/\/+$/, '')).catch(function () { return false; });
+    },
+    readHeadway: function (dir) {
+      return readJsonRetry(norm(dir).replace(/\/+$/, '') + '/headway.json');
+    },
+    // headway.json read-merge-write: hw.plans merge by id into what is on
+    // disk (a peer's concurrent create / rename / tombstone survives), other
+    // keys overwrite. Resolves the document that landed.
+    writeHeadway: function (dir, hw) {
+      dir = norm(dir).replace(/\/+$/, '');
+      var p = dir + '/headway.json';
+      return readJsonRetry(p).then(function (disk) {
+        var base = isObj(disk) ? disk : {};
+        var out = {};
+        Object.keys(base).forEach(function (k) { out[k] = base[k]; });
+        Object.keys(hw || {}).forEach(function (k) { if (k !== 'plans') out[k] = hw[k]; });
+        out.format = out.format || RB().FORMAT;
+        out.plans = RB().mergePlanList(base.plans || [], (hw && hw.plans) || []);
+        return atomicWriteText(p, JSON.stringify(out, null, 2) + '\n').then(function () { return out; });
+      });
+    },
+    // write a blob where the user says and adopt NOTHING: currentPath, the
+    // watcher and the bundle session are untouched (a bundle's .xlsx export).
+    // Resolves the path, or null on cancel.
+    exportBlob: function (blob, suggestedName, ext, filterName) {
+      ext = ext || 'xlsx';
+      return dialog.save({
+        defaultPath: suggestedName,
+        filters: [{ name: filterName || 'File', extensions: [ext] }]
+      }).then(function (p) {
+        if (!p) return null;
+        if (!new RegExp('\\.' + ext + '$', 'i').test(p)) p += '.' + ext;
+        return blob.arrayBuffer().then(function (buf) {
+          return fs.writeFile(p, new Uint8Array(buf));
+        }).then(function () { return p; });
+      });
+    },
     // unwatch, drop our presence file, forget the folder
     closeBundle: function () {
       return leaveBundle().then(function () { markTitle(); });
@@ -796,6 +848,15 @@
     basename: basename,
     appVersion: '' // filled asynchronously below
   };
+
+  // the app booted before this file loaded: let it re-link the shared folder
+  // its ui snapshot names (a reload mid-session). Optional, like the rest of
+  // the app-side contract.
+  (function () {
+    var a = app();
+    if (!a || typeof a.resumeBundle !== 'function') return;
+    try { a.resumeBundle(); } catch (e) { /* the app toasts its own failures */ }
+  })();
 
   // app version (start page footer)
   if (window.__TAURI__.app && window.__TAURI__.app.getVersion) {

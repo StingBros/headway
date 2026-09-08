@@ -25,7 +25,7 @@ function section(name) { console.log('— ' + name); }
 const tick = (n) => new Promise((res) => setTimeout(res, n || 5));
 
 // boot core + bundle + desktop in a bare jsdom against one fake Tauri
-function boot(tauri) {
+function boot(tauri, extra) {
   const dom = new JSDOM(
     '<!doctype html><html><body><div id="topbar"><div class="tb-right"></div></div>' +
     '<span id="docTitle"></span><div id="toasts"></div></body></html>',
@@ -41,8 +41,9 @@ function boot(tauri) {
   window.HeadwayApp = {
     toast: rec('toast'), noteRecent: rec('noteRecent'), applyExternalEntities: rec('applyExternalEntities'),
     presenceChanged: rec('presenceChanged'), plansChanged: rec('plansChanged'), loadBuffer: rec('loadBuffer'),
-    beforeClose: rec('beforeClose'),
+    beforeClose: rec('beforeClose'), planShardChanged: rec('planShardChanged'),
   };
+  (extra || []).forEach((n) => { window.HeadwayApp[n] = rec(n); });
   const errors = [];
   window.addEventListener('error', (e) => errors.push(e.message));
   for (const f of ['js/core.js', 'js/bundle.js', 'js/desktop.js']) {
@@ -402,6 +403,11 @@ async function main() {
   await tick();
   eq(b5.named('applyExternalEntities').length, before, 'the merged write is recognised as our own echo');
 
+  section('pathExists');
+  eq(await HD.pathExists(DIR), true, 'pathExists: the bundle folder exists');
+  eq(await HD.pathExists(DIR + '/'), true, 'pathExists tolerates a trailing slash');
+  eq(await HD.pathExists('C:/Users/me/OneDrive/Nope.headway'), false, 'pathExists: a missing folder is false');
+
   section('readPresence skips one unreadable file instead of failing the scan');
   const t6 = makeFakeTauri();
   const b6 = boot(t6);
@@ -435,6 +441,77 @@ async function main() {
   ok(newToasts7.length && String(newToasts7[0].args[0]).indexOf('fs:allow-read-text-file') >= 0, 'the toast names the missing capability: ' + (newToasts7[0] && newToasts7[0].args[0]));
   ok(b7.HD.bundleWarnings().some((w) => /fs:allow-read-text-file/.test(w.err)), 'and the warning records it too');
   t7.deny.delete('readTextFile');
+
+  section('writeHeadway / readHeadway: the plan list merges by id');
+  const t8 = makeFakeTauri({ dialogOpen: () => 'C:/picked/Parent', dialogSave: (o) => 'C:/picked/' + ((o && o.defaultPath) || 'out') });
+  const b8 = boot(t8);
+  t8.dirs.add('C:/picked'); // the dialog only ever returns folders that exist
+  ['pickFolder', 'exportBlob', 'readHeadway', 'writeHeadway'].forEach((m) => ok(typeof b8.HD[m] === 'function', 'HeadwayDesktop.' + m + ' exists'));
+  await b8.HD.createBundle(DIR, c2);
+  const hw0 = await b8.HD.readHeadway(DIR);
+  eq(hw0.plans.length, c2.headway.plans.length, 'readHeadway parses the plan list');
+  eq(await b8.HD.readHeadway('C:/nowhere/None.headway'), null, 'readHeadway of a missing folder is null');
+  const entry = b8.RB.newPlanEntry('plan-b', 'Plan B', T1);
+  const hw1 = await b8.HD.writeHeadway(DIR, { plans: [entry] });
+  eq(hw1.plans.map((p) => p.name), c2.headway.plans.map((p) => p.name).concat('Plan B'), 'a new entry is appended, existing ones kept');
+  eq([hw1.format, hw1.docId, hw1.title], ['headway-bundle-v1', c2.headway.docId, c2.headway.title], 'other keys kept');
+  ok(/\n  "plans"/.test(t8.files.get(DIR + '/headway.json')), 'pretty-printed');
+  ok(!t8.files.has(DIR + '/headway.json.tmp'), 'written atomically (no tmp left)');
+  ok(t8.log.some((l) => l.op === 'rename' && l.to === DIR + '/headway.json'), 'tmp → rename observed');
+  // a peer's concurrent entry on disk survives our write
+  const disk8 = JSON.parse(t8.files.get(DIR + '/headway.json'));
+  disk8.plans.push(b8.RB.newPlanEntry('plan-c', 'Peer plan', T1));
+  t8.files.set(DIR + '/headway.json', JSON.stringify(disk8));
+  const hw2 = await b8.HD.writeHeadway(DIR, { plans: [Object.assign({}, entry, { name: 'Plan B2', updatedAt: T2 })] });
+  eq(hw2.plans.filter((p) => p.id === 'plan-b')[0].name, 'Plan B2', 'rename lands (later updatedAt wins)');
+  ok(hw2.plans.some((p) => p.id === 'plan-c'), 'the peer\'s entry survives our write');
+  const hw3 = await b8.HD.writeHeadway(DIR, { plans: [{ id: 'plan-b', name: 'Plan B2', deleted: true, createdAt: T1, updatedAt: T2 }] });
+  eq(hw3.plans.filter((p) => p.id === 'plan-b')[0].deleted, true, 'a tombstone entry lands');
+  const hw4 = await b8.HD.writeHeadway(DIR, { plans: [Object.assign({}, entry, { name: 'Late rename', updatedAt: '2026-09-01T11:00:00.000Z' })] });
+  eq(hw4.plans.filter((p) => p.id === 'plan-b')[0].deleted, true, 'a later rename does not undelete');
+  eq(JSON.parse(t8.files.get(DIR + '/headway.json')).plans.length, hw4.plans.length, 'what resolved is what is on disk');
+
+  section('pickFolder / exportBlob adopt nothing');
+  eq(await b8.HD.pickFolder(), 'C:/picked/Parent', 'pickFolder resolves the chosen folder');
+  const o8 = await b8.HD.openBundle(DIR);
+  const blob8 = { arrayBuffer: () => Promise.resolve(new Uint8Array([1, 2, 3]).buffer) };
+  const ep = await b8.HD.exportBlob(blob8, 'Roadmap.xlsx', 'xlsx', 'Excel workbook');
+  eq(ep, 'C:/picked/Roadmap.xlsx', 'exportBlob resolves the written path');
+  eq(Array.from(t8.files.get('C:/picked/Roadmap.xlsx')), [1, 2, 3], 'bytes written');
+  eq(await b8.HD.exportBlob(blob8, 'Plain', 'xlsx'), 'C:/picked/Plain.xlsx', 'the extension is appended when missing');
+  eq(b8.HD.currentPath(), null, 'currentPath untouched');
+  eq(b8.HD.bundleDir(), DIR, 'bundle session untouched');
+  ok(t8.watching() && t8.watchOpts().recursive === true, 'the recursive bundle watch is still the active one');
+  eq(b8.named('noteRecent').filter((c) => c.args[0] === 'C:/picked/Roadmap.xlsx').length, 0, 'an export is not a recent');
+  const t8b = makeFakeTauri({ dialogSave: () => null, dialogOpen: () => null });
+  const b8b = boot(t8b);
+  eq(await b8b.HD.exportBlob(blob8, 'x.xlsx'), null, 'cancelled save → null');
+  eq(await b8b.HD.pickFolder(), null, 'cancelled folder pick → null');
+
+  section('planShardChanged for a shard of a plan we are not viewing');
+  const idX = o8.doc.items[0].id;
+  const otherPath = DIR + '/plans/other-plan/items/' + idX + '.json';
+  t8.files.set(otherPath, t8.files.get(DIR + '/plans/' + o8.planId + '/items/' + idX + '.json'));
+  before = b8.named('planShardChanged').length;
+  const applied8 = b8.named('applyExternalEntities').length;
+  await t8.emitPaths(otherPath);
+  await tick();
+  eq(b8.named('planShardChanged').length, before + 1, 'planShardChanged called once');
+  eq(b8.named('planShardChanged').slice(-1)[0].args, ['other-plan'], '…with that plan\'s id');
+  eq(b8.named('applyExternalEntities').length, applied8, 'and nothing applied live');
+  await t8.emitPaths(DIR + '/plans/other-plan/meta.json');
+  await tick();
+  eq(b8.named('planShardChanged').length, before + 2, 'a meta shard of another plan reports too');
+  await t8.emitPaths(DIR + '/headway.json');
+  await tick();
+  eq(b8.named('planShardChanged').length, before + 2, 'headway.json is not a plan shard');
+
+  section('resumeBundle is called once desktop.js has loaded');
+  const b9 = boot(makeFakeTauri(), ['resumeBundle']);
+  eq(b9.named('resumeBundle').length, 1, 'HeadwayApp.resumeBundle() called at load');
+  ok(b9.errors.length === 0, 'no window errors');
+  const b9b = boot(makeFakeTauri());
+  ok(b9b.errors.length === 0 && b9b.HD, 'an app without resumeBundle still loads (optional contract)');
 
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
