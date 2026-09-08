@@ -362,6 +362,69 @@
     }
     state.epicTypes = et;
   };
+  function typeSlug(label) {
+    return String(label || 'type').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'type';
+  }
+  RM.addItemType = function (state, label, icon, jira) {
+    RM.normalizeTypes(state);
+    var base = typeSlug(label), key = base, n = 2;
+    while (RM.itemType(state, key)) key = base + '-' + (n++);
+    state.meta.itemTypes.push({ key: key, label: String(label || 'New type'), icon: String(icon || 'tag'), jira: String(jira || '') });
+    return key;
+  };
+  RM.renameItemType = function (state, key, label) {
+    var t = RM.itemType(state, key);
+    if (t && String(label || '').trim()) t.label = String(label).trim();
+  };
+  RM.setItemTypeIcon = function (state, key, icon) {
+    var t = RM.itemType(state, key);
+    if (t) t.icon = String(icon || 'tag');
+  };
+  RM.setItemTypeJira = function (state, key, jira) {
+    var t = RM.itemType(state, key);
+    if (t) t.jira = String(jira || '').trim();
+  };
+  RM.setLevelLabel = function (state, kind, label) {
+    RM.normalizeTypes(state);
+    var lv = RM.levelOf(state, kind);
+    if (String(label || '').trim()) lv.label = String(label).trim();
+  };
+  RM.setAnyTypeAnyLevel = function (state, on) {
+    RM.normalizeTypes(state);
+    state.meta.hierarchy.anyTypeAnyLevel = !!on;
+  };
+  // allow / disallow a type at a level; refuses to empty a level
+  RM.setTypeAllowed = function (state, kind, key, on) {
+    RM.normalizeTypes(state);
+    if (!RM.itemType(state, key)) return false;
+    var lv = RM.levelOf(state, kind);
+    var i = lv.types.indexOf(key);
+    if (on) { if (i === -1) lv.types.push(key); return true; }
+    if (i === -1) return true;
+    if (lv.types.length === 1) return false;
+    lv.types.splice(i, 1);
+    return true;
+  };
+  // remove a type: refused while it is the only type of some level;
+  // otherwise items, stories and epics of that type fall back to their
+  // level default and the key leaves every level list
+  RM.removeItemType = function (state, key) {
+    RM.normalizeTypes(state);
+    if (!RM.itemType(state, key)) return false;
+    var levels = state.meta.hierarchy.levels;
+    if (levels.some(function (l) { return l.types.length === 1 && l.types[0] === key; })) return false;
+    levels.forEach(function (l) { l.types = l.types.filter(function (k) { return k !== key; }); });
+    state.meta.itemTypes = state.meta.itemTypes.filter(function (t) { return t.key !== key; });
+    var fF = RM.defaultTypeFor(state, 'feature'), fS = RM.defaultTypeFor(state, 'story'), fE = RM.defaultTypeFor(state, 'epic');
+    (state.items || []).forEach(function (it) {
+      if (it.type === key) it.type = fF;
+      (it.stories || []).forEach(function (s) { if (s.type === key) s.type = fS; });
+    });
+    Object.keys(state.epicTypes || {}).forEach(function (name) {
+      if (state.epicTypes[name] === key) { if (fE === 'epic') delete state.epicTypes[name]; else state.epicTypes[name] = fE; }
+    });
+    return true;
+  };
   RM.SCOPE_FIXED_KEYS = ['assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream', 'epic'];
   RM.SCOPE_DEFAULT_ORDER = ['description', 'ac', 'epic', 'assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream'];
 
@@ -2060,6 +2123,21 @@
       if (it.deps.indexOf(it.num) !== -1) add(it, 'warn', 'SELF_DEP', 'Depends on itself (ignored)');
       if (!it.feature.trim()) add(it, 'warn', 'NO_TITLE', 'Feature has no title');
 
+      if (!RM.anyTypeAnyLevel(state)) {
+        var okTypes = RM.levelOf(state, 'feature').types;
+        if (okTypes.indexOf(it.type) === -1) {
+          add(it, 'warn', 'TYPE_LEVEL', RM.levelLabel(state, 'feature') + ' #' + it.num + ' is a ' + RM.typeOf(state, it, 'feature').label +
+            ', which is not allowed at the ' + RM.levelLabel(state, 'feature') + ' level');
+        }
+        var okStory = RM.levelOf(state, 'story').types;
+        (it.stories || []).forEach(function (st) {
+          if (okStory.indexOf(st.type) === -1) {
+            global.push({ level: 'warn', code: 'TYPE_LEVEL', msg: RM.levelLabel(state, 'story') + ' "' + (st.title || '(untitled)') + '" under #' + it.num +
+              ' is a ' + RM.typeOf(state, st, 'story').label + ', which is not allowed at the ' + RM.levelLabel(state, 'story') + ' level' });
+          }
+        });
+      }
+
       var scheduled = it.startDay != null && it.durDays != null;
       var phase = phaseById[it.phaseId];
       if (scheduled) {
@@ -2079,6 +2157,16 @@
       }
 
     });
+
+    if (!RM.anyTypeAnyLevel(state)) {
+      var okEpic = RM.levelOf(state, 'epic').types;
+      Object.keys(state.epicTypes || {}).forEach(function (name) {
+        if (okEpic.indexOf(state.epicTypes[name]) === -1) {
+          global.push({ level: 'warn', code: 'TYPE_LEVEL', msg: RM.levelLabel(state, 'epic') + ' "' + name + '" is a ' + RM.typeOf(state, name, 'epic').label +
+            ', which is not allowed at the ' + RM.levelLabel(state, 'epic') + ' level' });
+        }
+      });
+    }
 
     var cap = RM.capacity(state);
     cap.weeks.forEach(function (cell, w) {

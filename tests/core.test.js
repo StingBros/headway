@@ -1297,6 +1297,43 @@ section('item types & hierarchy');
   eq(RM.levelLabel(sT4, 'story', true), 'Tasks', 'plural of a custom label');
 }
 
+section('item type mutations & validation');
+{
+  var sM = mkState([
+    { num: 1, feature: 'A', type: 'bug', epic: 'E', stories: [{ id: 's1', title: 'x', type: 'bug' }] }
+  ]);
+  var nk = RM.addItemType(sM, 'Spike', 'zap', 'Spike');
+  eq(nk, 'spike', 'addItemType slugs the label into a key');
+  eq(RM.addItemType(sM, 'Spike', 'zap', 'Spike'), 'spike-2', 'duplicate labels get a suffixed key');
+  ok(RM.setTypeAllowed(sM, 'feature', 'spike', true), 'allow a type at a level');
+  eq(RM.levelOf(sM, 'feature').types.slice(-1)[0], 'spike', 'allowed list grows');
+  ok(!RM.setTypeAllowed(sM, 'epic', 'epic', false), 'cannot remove the last type of a level');
+  ok(RM.setTypeAllowed(sM, 'feature', 'spike', false), 'disallow again');
+  RM.renameItemType(sM, 'spike', 'Research');
+  eq(RM.itemType(sM, 'spike').label, 'Research', 'rename keeps the key');
+  RM.setItemTypeJira(sM, 'spike', 'Research task');
+  eq(RM.jiraTypeName(sM, 'spike'), 'Research task', 'jira name edit');
+  RM.setItemTypeIcon(sM, 'spike', 'flask-conical');
+  eq(RM.itemType(sM, 'spike').icon, 'flask-conical', 'icon edit');
+  RM.setLevelLabel(sM, 'story', 'Task');
+  eq(RM.levelLabel(sM, 'story'), 'Task', 'level label edit');
+  ok(!RM.removeItemType(sM, 'epic'), 'cannot remove the only type of a level');
+  ok(RM.removeItemType(sM, 'bug'), 'remove a type');
+  eq(sM.items[0].type, 'feature', 'items of the removed type fall back to the level default');
+  eq(sM.items[0].stories[0].type, 'story', 'stories too');
+  eq(RM.levelOf(sM, 'story').types, ['story', 'subtask'], 'removed key leaves every level list');
+  ok(!RM.itemType(sM, 'bug'), 'record gone');
+
+  var sV2 = mkState([{ num: 1, feature: 'A', type: 'subtask', epic: 'E', stories: [{ id: 's1', title: 'x', type: 'task' }] }], { epicTypes: { E: 'feature' } });
+  var vv = RM.validate(sV2);
+  ok((vv.byItem[sV2.items[0].id] || []).some(function (f) { return f.code === 'TYPE_LEVEL' && /Subtask/.test(f.msg); }), 'item with a disallowed type warns');
+  ok(vv.global.some(function (f) { return f.code === 'TYPE_LEVEL' && /story/i.test(f.msg) && /Task/.test(f.msg); }), 'story with a disallowed type warns globally');
+  ok(vv.global.some(function (f) { return f.code === 'TYPE_LEVEL' && /Epic/.test(f.msg) && /Feature/.test(f.msg); }), 'epic with a disallowed type warns globally');
+  RM.setAnyTypeAnyLevel(sV2, true);
+  var vv2 = RM.validate(sV2);
+  ok(!(vv2.byItem[sV2.items[0].id] || []).some(function (f) { return f.code === 'TYPE_LEVEL'; }) && !vv2.global.some(function (f) { return f.code === 'TYPE_LEVEL'; }), 'switch on silences TYPE_LEVEL');
+}
+
   console.log('\n' + passed + ' passed, ' + failed + ' failed' + (skipped ? ', ' + skipped + ' skipped' : ''));
   process.exit(failed ? 1 : 0);
 }
