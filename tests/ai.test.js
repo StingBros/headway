@@ -377,6 +377,38 @@ function done() {
     eq(AI.md('[doc](https://x.y/z) <script>'), '<p><a href="https://x.y/z" target="_blank" rel="noopener">doc</a> &lt;script&gt;</p>', 'links and escaping');
   }
 
+  console.log('— model labels + effort levels');
+  {
+    eq(AI.shortModel('bedrock/global.us.claude-opus-5'), 'claude-opus-5', 'provider + region prefixes drop from the label');
+    eq(AI.shortModel('bedrock/global.anthropic.claude-opus-5'), 'claude-opus-5', 'vendor prefix drops too');
+    eq(AI.shortModel('anthropic.claude-3-5-sonnet-20241022-v2:0'), 'claude-3-5-sonnet-20241022-v2:0', 'bedrock-style ids keep their version tail');
+    eq(AI.shortModel('gpt-4.1'), 'gpt-4.1', 'dots inside a model name survive');
+    eq(AI.shortModel('openai/gpt-4o'), 'gpt-4o', 'a bare provider path shortens');
+    eq(AI.shortModel(''), '', 'empty stays empty');
+    var lit = { provider: 'litellm', model: 'bedrock/x' };
+    AI.modelInfo = null;
+    eq(AI.effortsFor(lit).map(function (e) { return e[0]; }), ['low', 'medium', 'high', 'max'], 'no gateway info: every level offered');
+    AI.modelInfo = { 'bedrock/x': { reasoning: true }, 'plain': { reasoning: false } };
+    eq(AI.effortsFor(lit).map(function (e) { return e[0]; }), ['low', 'medium', 'high'], 'a reasoning model offers the gateway levels');
+    eq(AI.effortsFor({ provider: 'litellm', model: 'plain' }), [], 'a model without reasoning offers no effort');
+    eq(AI.effortsFor({ provider: 'litellm', model: 'unknown' }).length, 4, 'a model the gateway did not describe keeps every level');
+    eq(AI.effortsFor({ provider: 'claude', claudeModel: 'opus' }).length, 4, 'the Claude CLI keeps every level');
+    eq(AI.effortAllowed({ provider: 'litellm', model: 'plain', effort: 'high' }), false, 'effort is not sent to a model that lacks it');
+    eq(AI.effortAllowed({ provider: 'litellm', model: 'bedrock/x', effort: 'max' }), false, 'max is not sent when the gateway only knows low/medium/high');
+    eq(AI.effortAllowed({ provider: 'litellm', model: 'bedrock/x', effort: 'high' }), true, 'a listed level is sent');
+    AI.modelInfo = null;
+    ok(!/aiEffortSeg|>Effort</.test(AI.settingsHtml()), 'the settings page no longer carries an effort control');
+  }
+
+  console.log('— desktop transport');
+  {
+    // The Tauri http plugin's reqwest trusts only bundled Mozilla roots unless
+    // native roots are enabled; behind corporate TLS inspection (Netskope,
+    // Zscaler) every gateway call then dies with "error sending request for url".
+    var cargo = require('fs').readFileSync(require('path').join(__dirname, '..', 'src-tauri', 'Cargo.toml'), 'utf8');
+    ok(/^reqwest\s*=.*rustls-tls-native-roots/m.test(cargo), 'Cargo.toml enables reqwest native TLS roots for the http plugin');
+  }
+
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
 }

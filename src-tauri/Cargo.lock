@@ -1600,10 +1600,11 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "headway"
-version = "1.0.10"
+version = "1.0.11"
 dependencies = [
  "objc2",
  "objc2-foundation",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tauri",
@@ -1720,6 +1721,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "rustls",
+ "rustls-native-certs",
  "tokio",
  "tokio-rustls",
  "tower-service",
@@ -3283,6 +3285,7 @@ dependencies = [
  "pin-project-lite",
  "quinn",
  "rustls",
+ "rustls-native-certs",
  "rustls-pki-types",
  "serde",
  "serde_json",

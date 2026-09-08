@@ -81,6 +81,75 @@ ok(doc.querySelector('#startBody [data-sp-new]') && doc.querySelector('#startBod
   ok(window.localStorage.getItem('headway-theme-v1') === 'system', 'theme choice persists');
   click(doc.querySelector('#modalHost [data-m="x2"]'));
 }
+// ------------------------------------------------------ release notes
+// the browser build has no version → no footer, no update button
+ok(!doc.querySelector('#startBody [data-sp-notes]') && !doc.querySelector('#startBody [data-sp-update]'),
+  'browser build shows neither the version button nor the update button');
+{
+  const md = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
+  const { releaseNotesFor } = window.__headway;
+  const notes = releaseNotesFor(md, '1.0.10');
+  ok(/\*\*AI assistant\*\*/.test(notes) && !/Sprinting page/.test(notes),
+    'releaseNotesFor picks exactly the 1.0.10 section');
+  ok(releaseNotesFor(md, 'v1.0.9') === releaseNotesFor(md, '1.0.9') && /Sprinting page/.test(releaseNotesFor(md, '1.0.9')),
+    'releaseNotesFor accepts a v-prefix and finds an inner section');
+  ok(releaseNotesFor(md, '1.0.1') === '' && releaseNotesFor(md, '9.9.9') === '',
+    'releaseNotesFor: "1.0.1" does not match "1.0.10"; unknown versions are empty');
+  ok(releaseNotesFor('## 2.0.0\r\n- **A**: b\r\n## 1.0.0\r\n- c', '2.0.0') === '- **A**: b',
+    'releaseNotesFor tolerates CRLF');
+
+  // fake desktop version so the start page grows its footer + update button
+  window.HeadwayDesktop = { appVersion: '1.0.10', updater: { state: 'idle', version: '', check() { this.checked = true; }, install() {} } };
+  window.HeadwayApp.renderStartPage();
+  const verBtn = doc.querySelector('#startBody [data-sp-notes]');
+  ok(verBtn && /1\.0\.10/.test(verBtn.textContent), 'desktop start page footer is a version button');
+  const upBtn = doc.querySelector('#startBody [data-sp-update]');
+  ok(upBtn && /Check for updates/.test(upBtn.textContent) &&
+    upBtn.previousElementSibling === doc.querySelector('#startBody [data-sp-settings]'),
+    'update button sits right of Settings and offers a check');
+  click(upBtn);
+  ok(window.HeadwayDesktop.updater.checked === true, 'clicking Check for updates asks the updater');
+  window.HeadwayDesktop.updater.state = 'ready';
+  window.HeadwayDesktop.updater.version = '1.0.11';
+  window.HeadwayApp.renderStartPage();
+  const readyBtn = doc.querySelector('#startBody [data-sp-update]');
+  ok(readyBtn && /Update to 1\.0\.11/.test(readyBtn.textContent) && readyBtn.classList.contains('sp-update-ready'),
+    'a downloaded update turns the button into "Update to 1.0.11"');
+
+  // once per version: first call shows, second is silent, new version shows again
+  window.localStorage.removeItem('headway-notes-seen-v1');
+  ok(window.__headway.maybeShowReleaseNotes(md) === true && !doc.querySelector('#modalHost').hidden &&
+    /What.s new in Headway 1\.0\.10/.test(doc.querySelector('#modalHost h2').textContent) &&
+    doc.querySelectorAll('#modalHost .notes-md li').length >= 4 &&
+    doc.querySelector('#modalHost .notes-md b') && /AI assistant/.test(doc.querySelector('#modalHost .notes-md b').textContent),
+    'first launch on a version opens What\'s new with rendered bullets and bold titles');
+  click(doc.querySelector('#modalHost [data-m="ok"]'));
+  ok(doc.querySelector('#modalHost').hidden, 'Got it closes the notes');
+  ok(window.__headway.maybeShowReleaseNotes(md) === false && doc.querySelector('#modalHost').hidden,
+    'the same version never shows the notes twice');
+  ok(window.localStorage.getItem('headway-notes-seen-v1') === '1.0.10', 'seen version is remembered');
+  window.HeadwayDesktop.appVersion = '1.0.9';
+  ok(window.__headway.maybeShowReleaseNotes(md) === true && /1\.0\.9/.test(doc.querySelector('#modalHost h2').textContent),
+    'a different version shows its own notes');
+  click(doc.querySelector('#modalHost [data-m="x"]'));
+  window.HeadwayDesktop.appVersion = '1.0.10';
+  // a version with no section stays quiet but is still marked seen
+  window.HeadwayDesktop.appVersion = '0.0.1';
+  ok(window.__headway.maybeShowReleaseNotes(md) === true && doc.querySelector('#modalHost').hidden &&
+    window.localStorage.getItem('headway-notes-seen-v1') === '0.0.1',
+    'a version without notes shows nothing');
+  window.HeadwayDesktop.appVersion = '1.0.10';
+
+  // the footer button reopens the notes any time
+  window.__headway.openReleaseNotes(md);
+  ok(!doc.querySelector('#modalHost').hidden && /1\.0\.10/.test(doc.querySelector('#modalHost h2').textContent),
+    'openReleaseNotes reopens the current version\'s notes');
+  click(doc.querySelector('#modalHost [data-m="ok"]'));
+
+  delete window.HeadwayDesktop;
+  window.HeadwayApp.renderStartPage();
+}
+
 const contBtn = doc.querySelector('#startBody [data-sp-continue]');
 ok(!!contBtn, 'browser session offers Continue where you left off');
 click(contBtn);
@@ -135,8 +204,15 @@ ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidd
   ok(AI.loadSettings().provider === 'claude' && !doc.querySelector('#aiSettingsCard #aiClaude').hidden,
     'picking the Claude provider persists and reveals its fields');
   click(doc.querySelector('#aiSettingsCard [data-aiprov="litellm"]'));
-  click(doc.querySelector('#aiSettingsCard [data-aieffort="high"]'));
-  ok(AI.loadSettings().effort === 'high', 'effort persists from the settings tab');
+  ok(!doc.querySelector('#aiSettingsCard [data-aieffort]'), 'the settings tab carries no effort control (it lives in the drawer)');
+  {
+    const effSel = doc.querySelector('#aiDrawer #aiEffortSel');
+    effSel.value = 'high';
+    effSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(AI.loadSettings().effort === 'high', 'effort persists from the drawer select');
+    ok([...doc.querySelectorAll('#aiDrawer #aiModelSel option')].every(o => o.textContent.indexOf('/') === -1),
+      'model labels in the drawer drop provider prefixes');
+  }
   // tools run against the live app bridge and land in history as "· AI"
   const before = state().items.length;
   const res = AI.runTool('add_items', { items: [{ feature: 'AI-made feature', start: state().meta.timelineStart, durDays: 5 }] }, window.HeadwayApp);
@@ -146,6 +222,34 @@ ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidd
   ok(AI.runTool('navigate', { view: 'planning', num: res.created[0].num }, window.HeadwayApp).selected === true, 'navigate selects the new feature');
   AI.runTool('update_items', { updates: [{ num: res.created[0].num, delete: true }] }, window.HeadwayApp);
   ok(state().items.length === before, 'update_items can delete it again');
+  window.HeadwayApp.ai.setView('planning');
+}
+
+// ---------------------------------------------------------------- Setup → Apps (per-project tab switch)
+{
+  const openApps = () => { click(doc.querySelector('#btnSetup')); click(doc.querySelector('#setupView [data-sutab="apps"]')); };
+  openApps();
+  const tabs = [...doc.querySelectorAll('#setupView .su-tab')].map(b => b.dataset.sutab);
+  ok(tabs.indexOf('apps') === tabs.indexOf('timeline') + 1, 'Apps sits right after Timeline in the Project rail');
+  const boxes = doc.querySelectorAll('#setupView [data-suapp]');
+  ok(boxes.length === window.RM.APPS.length && [...boxes].every(b => b.checked), 'every app is listed and on by default');
+  ok(doc.querySelector('#setupView [data-suapp="planning"]').disabled, 'Planning cannot be switched off');
+  const sc = doc.querySelector('#setupView [data-suapp="scoping"]');
+  sc.checked = false; sc.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.apps.scoping === false, 'unchecking Scoping commits to the document');
+  ok(doc.querySelector('#viewTabs [data-view="scoping"]').hidden && !doc.querySelector('#viewTabs [data-view="planning"]').hidden,
+    'the Scoping tab hides from the header while the others stay');
+  ok(window.HeadwayApp.ai.setView('scoping') === false && doc.body.dataset.view !== 'scoping', 'the AI cannot open a hidden app');
+  window.HeadwayApp.ai.setView('sprints');
+  ok(doc.body.dataset.view === 'sprints', 'Sprinting still opens while on');
+  openApps();
+  const spBox = doc.querySelector('#setupView [data-suapp="sprints"]');
+  spBox.checked = false; spBox.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.apps.sprints === false && doc.querySelector('#viewTabs [data-view="sprints"]').hidden, 'Sprinting switches off and its tab hides');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(state().meta.apps.scoping === true && state().meta.apps.sprints === true && !doc.querySelector('#viewTabs [data-view="scoping"]').hidden,
+    'undo restores both apps and their tabs');
   window.HeadwayApp.ai.setView('planning');
 }
 ok(doc.querySelectorAll('#rows .row.band').length === 6, 'six phase bands rendered');
@@ -405,7 +509,7 @@ click(doc.querySelector('#resManage'));
 ok(doc.body.dataset.view === 'setup', 'resources "manage" jumps to the Setup view');
 ok(doc.querySelector('#setupView [data-sutab="team"]').classList.contains('on'),
   'resources "manage" lands on the Team tab');
-ok(doc.querySelectorAll('#setupView .su-tab').length === 10 &&
+ok(doc.querySelectorAll('#setupView .su-tab').length === 11 &&
   doc.querySelectorAll('#setupView .su-rail-hd').length === 2,
   'settings rail: 10 vertical tabs under Project + Personal sections');
 ok(doc.querySelectorAll('#setupView .su-card').length === 3 && !!doc.querySelector('#suCapEnable'),
@@ -692,17 +796,17 @@ ok(doc.body.dataset.view === 'scoping', 'view switches to scoping');
 ok(doc.querySelectorAll('#rows .sc-cell').length > 400, 'scoping cells rendered (' + doc.querySelectorAll('#rows .sc-cell').length + ')');
 ok(doc.querySelectorAll('#rows .bar').length === 0, 'no bars in scoping view');
 ok(doc.querySelectorAll('#hdrSprints .sc-hcell.sc-fixh').length === 8, 'fixed columns: assignees/size/risk/priority/duration/start/deadline/workstream/epic');
-ok(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]').length === 13, 'default columns are 8 fixed + 5 text (incl. Description)');
+ok(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]').length === 14, 'default columns are 8 fixed + 6 text (incl. Description, Acceptance criteria)');
 ok(!!doc.querySelector('#hdrSprints [data-col="description"]'), 'Description column shown by default');
 {
   const hdrOrder = Array.from(doc.querySelectorAll('#hdrSprints .sc-hcell[data-col]')).map(c => c.dataset.col);
   ok(hdrOrder.indexOf('description') !== -1 && hdrOrder.indexOf('description') < hdrOrder.indexOf('enables'),
     'Description sits left of Enables');
-  ok(hdrOrder.indexOf('description') === 0 && hdrOrder.indexOf('epic') === 1 && hdrOrder.indexOf('epic') < hdrOrder.indexOf('size'),
+  ok(hdrOrder.indexOf('description') === 0 && hdrOrder.indexOf('ac') === 1 && hdrOrder.indexOf('epic') === 2 && hdrOrder.indexOf('epic') < hdrOrder.indexOf('size'),
     'default order leads with Description and Epic before Size');
   ok(hdrOrder.indexOf('start') === hdrOrder.indexOf('duration') + 1, 'Start column follows Duration');
 }
-ok(doc.querySelectorAll('#hdrSprints .sc-rz').length === 13, 'column resize handles present');
+ok(doc.querySelectorAll('#hdrSprints .sc-rz').length === 14, 'column resize handles present');
 const cell = doc.querySelector('#rows .row.item[data-id="' + itId + '"] [data-scope="notes"]');
 ok(cell.getAttribute('contenteditable') === 'true', 'scoping cells are rich editors');
 cell.innerHTML = 'noted in the grid';
@@ -1006,7 +1110,7 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
       'dragging the fill handle downward spreads the value to the roles below');
   }
 
-  // zoom cluster: shown on Budgeting, expand lives there now
+  // zoom cluster: shown on Budgeting
   ok(!doc.querySelector('#zoomCtl').hidden, 'zoom cluster visible on Budgeting');
   {
     const wpx0 = window.__headway.getState() && doc.documentElement.style.getPropertyValue('--week-px');
@@ -1014,15 +1118,11 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
     ok(doc.documentElement.style.getPropertyValue('--week-px') !== wpx0, 'zoom + changes the week width on Budgeting');
     window.eval("document.querySelector('#zoomOutBtn').click()");
   }
-  window.eval("document.querySelector('#btnPresent').click()");
-  ok(doc.body.classList.contains('present') && doc.body.dataset.view === 'budget',
-    'Expand enters present mode from Budgeting');
-  ok(!doc.querySelector('#zoomCtl').hidden, 'zoom cluster stays put in expand mode');
-  window.eval("document.querySelector('#btnPresent').click()");
-  ok(!doc.body.classList.contains('present'), 'clicking it again restores the full Budgeting UI');
-  // Expand is gone from Scoping (the cluster only exists on Planning/Budgeting)
+  ok(!doc.querySelector('#btnPresent') && doc.querySelectorAll('#zoomCtl button').length === 2,
+    'the cluster is zoom in / zoom out only (no expand button)');
+  // the cluster only exists on Planning/Budgeting
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
-  ok(doc.querySelector('#zoomCtl').hidden, 'no zoom/expand cluster on Scoping');
+  ok(doc.querySelector('#zoomCtl').hidden, 'no zoom cluster on Scoping');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
@@ -1127,19 +1227,6 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
   capChk2.dispatchEvent(new window.Event('change', { bubbles: true }));
   window.eval("document.querySelector('#viewTabs [data-view=\"planning\"]').click()");
   ok(!doc.body.classList.contains('no-cap'), 're-enabling restores the capacity row');
-}
-
-// ---------------------------------------------------------------- timeline-only preview
-{
-  const pbtn = doc.querySelector('#zoomCtl #btnPresent');
-  ok(!!pbtn, 'expand button lives in the zoom cluster');
-  click(pbtn);
-  ok(doc.body.classList.contains('present'), 'expand enters the preview');
-  ok(!doc.querySelector('#btnPresentExit'), 'no floating exit button — the cluster button toggles in place');
-  ok(doc.querySelector('#topbar') && !doc.querySelector('#zoomCtl').hidden,
-    'the app header and the zoom cluster stay during expand');
-  click(doc.querySelector('#zoomCtl #btnPresent'));
-  ok(!doc.body.classList.contains('present'), 'clicking again restores the full UI');
 }
 
 // ---------------------------------------------------------------- critical path toggle
@@ -1374,20 +1461,20 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
     ok(state().items.find(i => i.id === withStories.id).stories[0].jiraKey === 'HW-8', 'story Jira key commits');
   }
   const sd = doc.querySelector('#panel .wz-ed[data-f="stcol:description"]');
-  const sa = doc.querySelector('#panel .wz-ed[data-f="stac"]');
+  const sa = doc.querySelector('#panel .wz-ed[data-f="stcol:ac"]');
   ok(!!sd && !!sa && sd.getAttribute('contenteditable') === 'true' && sa.getAttribute('contenteditable') === 'true',
-    'story panel has rich Description and Acceptance Criteria editors');
+    'story panel has rich Description and Acceptance criteria editors');
   sd.innerHTML = 'Does <b>things</b>';
   sd.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
   // the commit re-rendered the panel — re-query the AC editor
-  const sa2 = doc.querySelector('#panel .wz-ed[data-f="stac"]');
+  const sa2 = doc.querySelector('#panel .wz-ed[data-f="stcol:ac"]');
   sa2.innerHTML = '<ul><li>works offline</li></ul>';
   sa2.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
   const st0 = state().items.find(i => i.id === withStories.id).stories[0];
   ok(st0.description === 'Does <b>things</b>', 'story description saves');
   ok(st0.ac === '<ul><li>works offline</li></ul>', 'story acceptance criteria save');
   // a custom scope column edits into st.custom
-  const scEd = doc.querySelector('#panel .wz-ed[data-f^="stcol:"]:not([data-f="stcol:description"])');
+  const scEd = doc.querySelector('#panel .wz-ed[data-f^="stcol:"]:not([data-f="stcol:description"]):not([data-f="stcol:ac"])');
   if (scEd) {
     scEd.innerHTML = 'story-scoped value';
     scEd.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
@@ -1557,7 +1644,6 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 {
   const tbRight = doc.querySelector('#topbar .tb-right');
   const kids = Array.from(tbRight.querySelectorAll('button')).map(b => b.id);
-  ok(kids.indexOf('btnPresent') === -1, 'Expand button moved out of the topbar');
   ok(kids.indexOf('btnExport') !== -1 && kids.indexOf('btnExport') < kids.indexOf('btnSave'),
     'Export sits before Save');
   ok(!!doc.querySelector('#btnSetup') && !doc.querySelector('#viewTabs [data-view="setup"]'),
@@ -1771,6 +1857,37 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#prFieldsBtn'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Description/.test(b.textContent)));
   ok(!doc.querySelector('#prioView .pr-rich'), 'unchecking returns cards to compact');
+  // feature level: the Columns dropdown swaps phases for a feature field's ladder
+  {
+    const heads = () => [...doc.querySelectorAll('#prioView .pr-phhd')].map(h => h.firstChild.textContent.trim());
+    const colsBtn = () => doc.querySelector('#prioView [data-prdd="cols"]');
+    ok(!!colsBtn() && /Phase/.test(colsBtn().textContent), 'feature level offers a Columns dropdown reading Phase');
+    click(colsBtn());
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Size/.test(b.textContent)));
+    const so = window.RM.sizeOrderOf(state());
+    ok(heads().length === so.length + 1 && heads()[0] === so[0] && heads()[heads().length - 1] === 'Unset' &&
+      JSON.parse(window.localStorage.getItem('headway-ui-v1')).prioFeatCol === 'size',
+      'Columns → Size lays features out by size plus Unset and persists');
+    ok(doc.querySelectorAll('#prioView .pr-card').length > 0 && !doc.querySelector('#prioView .pr-card [data-pract="size"]'),
+      'the size chip leaves the cards');
+    ok(!doc.querySelector('#prioView .pr-add'), 'Add hides while the columns are not phases');
+    const fcard = doc.querySelector('#prioView .pr-card');
+    const fid = fcard.dataset.prcard;
+    const sizeOf = () => state().items.find(i => i.id === fid).size || '';
+    const was = sizeOf();
+    const tgtSize = so.find(v => v !== was);
+    fcard.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 }));
+    doc.querySelector('#prioView .sp-col[data-prcol="' + tgtSize + '"]').dispatchEvent(new window.MouseEvent('pointermove', { bubbles: true, clientX: 80, clientY: 80 }));
+    window.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true, clientX: 80, clientY: 80 }));
+    doc.querySelector('#prioView .pr-table').dispatchEvent(new window.MouseEvent('click', { bubbles: true })); // the browser's trailing click
+    ok(sizeOf() === tgtSize && !!doc.querySelector('#prioView .sp-col[data-prcol="' + tgtSize + '"] [data-prcard="' + fid + '"]'),
+      'dragging a feature card to a size column sets its size');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    ok(sizeOf() === was, 'undo restores the size');
+    click(colsBtn());
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Phase/.test(b.textContent)));
+    ok(heads().length === state().phases.length && !!doc.querySelector('#prioView .pr-add'), 'Columns → Phase brings the phase board and Add back');
+  }
   // the Feature / Story dropdown leads the toolbar, like every other view
   {
     const prBar = doc.querySelector('#prioView .pr-bar');
@@ -1783,21 +1900,68 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     ok(/Story/.test(doc.querySelector('#prioView [data-prdd="level"]').textContent) &&
       JSON.parse(window.localStorage.getItem('headway-ui-v1')).prioLevel === 'story',
       'Story level toggles and persists with the view prefs');
-    ok(withStories && doc.querySelectorAll('#prioView [data-prcard="' + withStories.id + '"] .pr-story').length === withStories.stories.length,
-      'Story level lists every story inside its feature card');
-    const stIn = doc.querySelector('#prioView [data-prcard="' + withStories.id + '"] .pr-story input');
+    // story level is a board of STORY cards in priority columns
+    const stCards = () => [...doc.querySelectorAll('#prioView .pr-stcard')];
+    const allStories = state().items.filter(i => !i.milestone).reduce((a, i) => a.concat((i.stories || []).map(st => ({ it: i, st }))), []);
+    ok(!doc.querySelector('#prioView .pr-card:not(.pr-stcard)') && allStories.length > 0 && stCards().length === allStories.length,
+      'Story level shows one card per story and no feature cards (' + stCards().length + ')');
+    const priOrder = window.RM.priorityOrderOf(state(), 'story');
+    const heads = () => [...doc.querySelectorAll('#prioView .pr-phhd')].map(h => h.firstChild.textContent.trim());
+    ok(heads().length === priOrder.length + 1 && heads()[0] === 'Critical' && heads()[heads().length - 1] === 'Unset',
+      'columns are the story priority ladder plus Unset');
+    const card0 = stCards()[0];
+    const fid = card0.dataset.prcard, sid = card0.dataset.prst;
+    const feat0 = state().items.find(i => i.id === fid);
+    ok(!!card0.querySelector('.pr-stfeat') && card0.querySelector('.pr-stfeat').textContent.indexOf(feat0.feature) !== -1,
+      'each story card names its feature');
+    ok(!card0.querySelector('[data-prstact="st-pri"]') && !!card0.querySelector('[data-prstact="st-size"]'),
+      'the column field\'s own chip is dropped from the card');
+    ok(!doc.querySelector('#prFieldsBtn') && !doc.querySelector('#prioView .pr-add') && !doc.querySelector('#prioView [data-prstadd]'),
+      'Fields, Add and Add story leave in story mode');
+    const stIn = card0.querySelector('input[data-prstf="title"]');
     stIn.value = 'Renamed on the board';
     stIn.dispatchEvent(new window.Event('change', { bubbles: true }));
-    ok(state().items.find(i => i.id === withStories.id).stories[0].title === 'Renamed on the board',
+    ok(state().items.find(i => i.id === fid).stories.find(x => x.id === sid).title === 'Renamed on the board',
       'a story title edits inline on the card');
-    click(doc.querySelector('#prioView [data-prcard="' + withStories.id + '"] [data-prstadd]'));
-    ok(state().items.find(i => i.id === withStories.id).stories.length === withStories.stories.length + 1,
-      'Add story appends a story to the card');
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    // drag a story card into the High column: its priority follows
+    const storyOf = () => state().items.find(i => i.id === fid).stories.find(x => x.id === sid);
+    const dragCardTo = (colKey) => {
+      const c = doc.querySelector('#prioView .pr-stcard[data-prst="' + sid + '"]');
+      const col = doc.querySelector('#prioView .sp-col[data-prcol="' + colKey + '"]');
+      c.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 }));
+      col.dispatchEvent(new window.MouseEvent('pointermove', { bubbles: true, clientX: 80, clientY: 80 }));
+      window.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true, clientX: 80, clientY: 80 }));
+      // a real browser fires a click after the pointerup; the view swallows it
+      doc.querySelector('#prioView .pr-table').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    };
+    const before = storyOf().priority || null;
+    const tgt = priOrder.find(v => v !== before); // a column the story is not in, so the drop commits
+    dragCardTo(tgt);
+    ok(storyOf().priority === tgt, 'dragging a story card to a column sets its priority');
+    ok(!!doc.querySelector('#prioView .sp-col[data-prcol="' + tgt + '"] .pr-stcard[data-prst="' + sid + '"]'), 'and the card now sits in that column');
+    dragCardTo('');
+    ok(storyOf().priority == null && !!doc.querySelector('#prioView .sp-col[data-prcol=""] .pr-stcard[data-prst="' + sid + '"]'),
+      'dropping on Unset clears the priority');
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    ok(storyOf().priority === tgt, 'undo steps the drop back');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    ok((storyOf().priority || null) === before, 'and again back to the original priority');
+    // the Columns dropdown swaps the field the columns represent
+    click(doc.querySelector('#prioView [data-prdd="cols"]'));
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Size/.test(b.textContent)));
+    const sizeOrder = window.RM.sizeOrderOf(state(), 'story');
+    ok(heads().length === sizeOrder.length + 1 && heads()[0] === sizeOrder[0] &&
+      JSON.parse(window.localStorage.getItem('headway-ui-v1')).prioStoryCol === 'size',
+      'Columns → Size lays the board out by story size and persists');
+    ok(!!stCards()[0].querySelector('[data-prstact="st-pri"]') && !stCards()[0].querySelector('[data-prstact="st-size"]'),
+      'the size chip leaves the cards and the priority chip returns');
+    click(doc.querySelector('#prioView [data-prdd="cols"]'));
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Priority/.test(b.textContent)));
+    ok(heads()[0] === 'Critical', 'Columns → Priority restores the priority ladder');
     click(doc.querySelector('#prioView [data-prdd="level"]'));
     click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
-    ok(!doc.querySelector('#prioView .pr-story'), 'back at Feature level the story rows go away');
+    ok(!doc.querySelector('#prioView .pr-stcard') && !!doc.querySelector('#prioView .pr-card'), 'back at Feature level the feature cards return');
   }
   // sort control: Title ordering applies inside a column
   click(doc.querySelector('#prioView [data-prdd="sort"]'));
@@ -1856,12 +2020,54 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const secs = doc.querySelectorAll('#sprintView .spv-sec');
   ok(side.length > 2 && side.length === secs.length,
     'sidebar lists Unscheduled plus every sprint, one page section each (' + side.length + ')');
-  ok(side[0].dataset.spside === 'u' && /Unscheduled/.test(side[0].textContent), 'Unscheduled comes first');
+  ok(side[side.length - 1].dataset.spside === 'u' && /Unscheduled/.test(side[side.length - 1].textContent) &&
+    secs[secs.length - 1].dataset.spsec === 'u' && side[0].dataset.spside !== 'u',
+    'Unscheduled comes last in the sidebar and on the page');
   const unsched = state().items.filter(i => i.startDay == null).length;
   ok(doc.querySelectorAll('#sprintView .spv-sec[data-spsec="u"] .spv-row').length === unsched,
     'the Unscheduled section lists every unscheduled item');
   const spf = doc.querySelector('#spFilter');
   ok(!!spf && !!spf.closest('.filter-wrap').querySelector('.filter-ico'), 'the row filter carries the search icon');
+  // phase / epic / workstream dropdowns narrow the rows, like the prioritizing board
+  {
+    const rowsOf = () => [...doc.querySelectorAll('#sprintView .spv-row')];
+    const itemOf = r => state().items.find(i => i.id === r.dataset.spid);
+    const pick = re => click([...doc.querySelectorAll('#popover .menu-list button')].find(b => re.test(b.textContent)));
+    const before = rowsOf().length;
+    const spBar = doc.querySelector('#sprintView .pr-bar');
+    ok(!!spBar.querySelector('[data-spdd="fphase"]') && !!spBar.querySelector('[data-spdd="fepic"]') && !!spBar.querySelector('[data-spdd="fws"]'),
+      'the sprinting toolbar offers phase, epic and workstream filters');
+    const ph = state().phases[1];
+    click(spBar.querySelector('[data-spdd="fphase"]'));
+    pick(new RegExp('^' + ph.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'));
+    ok(rowsOf().length > 0 && rowsOf().length < before && rowsOf().every(r => itemOf(r).phaseId === ph.id),
+      'the phase filter narrows the sprint rows to that phase');
+    const fphBtn = doc.querySelector('#sprintView [data-spdd="fphase"]');
+    ok(fphBtn.classList.contains('pr-on') && fphBtn.textContent.indexOf(ph.name) !== -1,
+      'an active phase filter lights up and names the phase');
+    ok(Number(doc.querySelector('#sprintView .spv-sbtn[data-spside="u"] .pr-lanect').textContent) ===
+      doc.querySelectorAll('#sprintView .spv-sec[data-spsec="u"] .spv-row').length,
+      'sidebar counts follow the filtered rows');
+    click(fphBtn); pick(/All phases/);
+    ok(rowsOf().length === before && !doc.querySelector('#sprintView [data-spdd="fphase"]').classList.contains('pr-on'),
+      'clearing the phase filter restores every row and dims the button');
+    click(doc.querySelector('#sprintView [data-spdd="fepic"]'));
+    const epBtn = [...doc.querySelectorAll('#popover .menu-list button')].filter(b => !/All epics|no epic/.test(b.textContent))[0];
+    const epName = epBtn.textContent.trim();
+    click(epBtn);
+    ok(rowsOf().length > 0 && rowsOf().every(r => itemOf(r).epic === epName), 'the epic filter narrows the sprint rows to that epic');
+    ok(doc.querySelector('#sprintView [data-spdd="fepic"]').classList.contains('pr-on'), 'an active epic filter lights up');
+    click(doc.querySelector('#sprintView [data-spdd="fepic"]')); pick(/All epics/);
+    click(doc.querySelector('#sprintView [data-spdd="fws"]'));
+    const wsBtn = [...doc.querySelectorAll('#popover .menu-list button')].filter(b => !/All workstreams|default/.test(b.textContent))[0];
+    const wsName = wsBtn.textContent.trim();
+    click(wsBtn);
+    ok(rowsOf().length > 0 && rowsOf().every(r => itemOf(r).workstream === wsName), 'the workstream filter narrows the sprint rows to that stream');
+    ok(!!doc.querySelector('#sprintView [data-spdd="fws"].pr-on .dd-label .dd-dot'), 'an active workstream filter shows its color dot');
+    click(doc.querySelector('#sprintView [data-spdd="fws"]')); pick(/All workstreams/);
+    ok(rowsOf().length === before, 'clearing every dropdown restores the full list');
+    ok(!doc.querySelector('#prioView [data-prdd="fepic"].pr-on'), 'sprinting filters do not leak into the prioritizing board');
+  }
   const sched = state().items.find(i => i.startDay != null);
   const schedRow = doc.querySelector('#sprintView .spv-row[data-spid="' + sched.id + '"]');
   ok(!!schedRow && schedRow.dataset.spsec !== 'u', 'scheduled items list under a sprint');
@@ -1872,7 +2078,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   // sprint's start day and a span, and lists under that sprint
   const uRow = doc.querySelector('#sprintView .spv-sec[data-spsec="u"] .spv-row');
   const uId = uRow.dataset.spid;
-  const target = side[2];
+  const target = doc.querySelectorAll('#sprintView .spv-sbtn')[2]; // re-queried: the filters above re-rendered
   const tnum = Number(target.dataset.spside);
   uRow.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 10, clientY: 10 }));
   target.dispatchEvent(new window.MouseEvent('pointermove', { bubbles: true, clientX: 60, clientY: 60 }));
@@ -2820,7 +3026,8 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   let guard = 0;
   while (hdrOrder().indexOf(zed.key) > 0 && guard++ < 30) click(colMenu(/Move left/));
   ok(hdrOrder()[0] === zed.key, 'custom column moved to the first scoping column');
-  const textOrder = () => state().meta.scopeColOrder.filter(k => state().meta.scopeCols.some(c => c.key === k));
+  // the feature panel lists only the columns that show on features (Acceptance criteria is stories-only by default)
+  const textOrder = () => state().meta.scopeColOrder.filter(k => state().meta.scopeCols.some(c => c.key === k && window.RM.scopeColShows(c, 'feature')));
   const feat = doc.querySelector('#rows .row.item');
   click(feat.querySelector('.r-num'));
   const panelFields = () => Array.from(doc.querySelectorAll('#panel .p-sec[data-sec="fields"] .wz-ed[data-f^="col:"]')).map(e => e.dataset.f.slice(4));
@@ -3013,6 +3220,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   const msRow = doc.querySelector('#rows .row.item[data-id="' + msIt.id + '"]');
   ok(!!msRow && msIt.milestone && msIt.startDay != null, 'a scheduled milestone row is visible');
   ok(!!doc.querySelector('#rows .bar.ms.ms-diamond[data-bar="' + msIt.id + '"]'), 'milestones default to the diamond');
+  ok(!!doc.querySelector('#rows .row.item.ms[data-id="' + msIt.id + '"] .r-name'), 'a milestone row carries the ms class (bold title)');
   msRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 240, clientY: 240 }));
   const starBtn = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Star/.test(b.textContent));
   ok(!!starBtn, 'milestone context menu offers the Star style');
@@ -3168,6 +3376,35 @@ ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'co
 window.RMExcel.exportWorkbook(state()).then((buf) => {
   const bytes = buf.size != null ? buf.size : buf.byteLength;
   ok(buf && bytes > 20000, 'xlsx export produced a workbook (' + bytes + ' bytes)');
+  // a disk reload (third arg) swaps the data under the screen: the view, the
+  // selection and the file's saved UI prefs are left exactly as they were
+  const firstNum = state().items[0].num;
+  window.HeadwayAI.runTool('navigate', { view: 'scoping', num: firstNum }, window.HeadwayApp);
+  ok(window.HeadwayApp.ai.ui().view === 'scoping' && window.HeadwayApp.ai.ui().selectedNum === firstNum, 'setup: Scoping view with a selection');
+  const edited = state();
+  edited.items[0].feature = 'Renamed on disk';
+  // the file carries another machine's prefs (Planning view) — ignored on reload
+  return window.RMExcel.exportWorkbook(edited, { view: 'planning' }).then((b1) => b1.arrayBuffer ? b1.arrayBuffer() : b1).then((ab1) =>
+    window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab1)), 'Roadmap.xlsx', true)
+  ).then(() => {
+    ok(state().items[0].feature === 'Renamed on disk', 'disk reload: the data updated');
+    ok(window.HeadwayApp.ai.ui().view === 'scoping', 'disk reload: the view did not change');
+    ok(window.HeadwayApp.ai.ui().selectedNum === firstNum, 'disk reload: the selection survived');
+    ok(window.HeadwayApp.unsavedNow() === false, 'disk reload: nothing to save');
+    // priority chips and the panel picker carry a color tier class
+    const rowIds = [].slice.call(doc.querySelectorAll('#rows .row.item[data-id]')).map((r) => r.dataset.id);
+    ok(rowIds.length > 1, 'setup: rows on screen to color');
+    window.HeadwayApp.ai.commit('priority', (s) => {
+      window.RM.setPriorityScheme(s, 'moscow');
+      window.RM.itemById(s, rowIds[0]).priority = 'M';
+      window.RM.itemById(s, rowIds[1]).priority = 'W';
+    });
+    ok(!!doc.querySelector('.row[data-id="' + rowIds[0] + '"] .r-risk.pri.pt-crit'), 'a Must chip is tier crit');
+    ok(!!doc.querySelector('.row[data-id="' + rowIds[1] + '"] .r-risk.pri.pt-low'), 'a Won’t chip is tier low');
+    window.HeadwayAI.runTool('navigate', { view: 'scoping', num: state().items.find((i) => i.id === rowIds[0]).num }, window.HeadwayApp);
+    ok(!!doc.querySelector('#panel .seg button.pt-crit.on'), 'the panel picker lights Must in tier crit');
+    ok(!!doc.querySelector('#panel .seg button.pt-high'), 'Should sits in tier high');
+  }).then(() => {
   // opening a file is not an edit: no version-history entry, nothing unsaved
   const tpl = window.__headway.templateState();
   const tplHist = (tpl.history || []).length;
@@ -3179,6 +3416,7 @@ window.RMExcel.exportWorkbook(state()).then((buf) => {
       'opening a file adds no version-history entry (' + (state().history || []).length + ' vs ' + tplHist + ')');
     ok(!(state().history || []).some(h => h.label === 'open'), 'no "open" entry in the history');
     ok(window.HeadwayApp.unsavedNow() === false, 'a freshly opened doc has nothing to save');
+  });
   });
 }).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');

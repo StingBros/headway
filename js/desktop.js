@@ -127,7 +127,7 @@
           reloading = false;
           return;
         }
-        return app().loadBuffer(bytes.buffer, basename(p), true).then(function () {
+        return app().loadBuffer(bytes.buffer, basename(p), true /* reload in place */).then(function () {
           lastSig = sig;
           lastStateJson = json;
           app().toast('Reloaded “' + basename(p) + '” — changed on disk');
@@ -295,6 +295,8 @@
       if (document.body.classList.contains('start') && app() && app().renderStartPage) {
         app().renderStartPage();
       }
+      // first launch on a new version → "What's new" (once per version)
+      if (app() && app().maybeShowReleaseNotes) app().maybeShowReleaseNotes();
     }).catch(function () { /* fine without it */ });
   }
 
@@ -544,46 +546,89 @@
   })();
 
   // ------------------------------------------------------- auto-update
-  // Check on launch, download in the background, then flash an Update
-  // button on the right of the header; clicking it installs and relaunches.
+  // One updater shared by the header's flashing Update button and the start
+  // page's Check-for-updates button. Checks 4s after launch and then every
+  // hour; a found update downloads in the background and the buttons flip to
+  // "Update to x.y.z". Clicking installs and relaunches.
   (function autoUpdate() {
     var up = window.__TAURI__.updater;
     var proc = window.__TAURI__.process;
     if (!up || !proc) return;
 
-    function showUpdateButton(update) {
+    var CHECK_EVERY = 60 * 60 * 1000;
+    var U = {
+      state: 'idle',   // idle | checking | downloading | ready | installing
+      version: '',     // the downloaded update's version (state ready/installing)
+      error: '',       // last manual-check failure, for the start page
+      checkedAt: 0,
+      update: null,
+      listeners: []
+    };
+    function set(patch) {
+      Object.keys(patch).forEach(function (k) { U[k] = patch[k]; });
+      U.listeners.forEach(function (fn) { try { fn(U); } catch (e) { /* listener */ } });
+      // the start page renders the updater's state into its button
+      if (document.body.classList.contains('start') && app() && app().renderStartPage) app().renderStartPage();
+    }
+    U.onChange = function (fn) { U.listeners.push(fn); };
+
+    // manual: surface "up to date" / failures; automatic: silent
+    U.check = function (manual) {
+      if (U.state === 'ready' || U.state === 'installing') return Promise.resolve(U.update);
+      if (U.state === 'checking' || U.state === 'downloading') return Promise.resolve(null);
+      set({ state: 'checking', error: '' });
+      return up.check().then(function (update) {
+        if (!update) {
+          set({ state: 'idle', checkedAt: Date.now() });
+          if (manual && app()) app().toast('Headway ' + (window.HeadwayDesktop.appVersion || '') + ' is up to date');
+          return null;
+        }
+        set({ state: 'downloading', version: update.version, checkedAt: Date.now() });
+        return update.download().then(function () {
+          set({ state: 'ready', update: update });
+          showHeaderButton();
+          return update;
+        });
+      }).catch(function (err) {
+        // offline, dev build, or no release yet — silent unless asked for
+        var msg = (err && err.message) || String(err || 'unknown error');
+        set({ state: 'idle', error: manual ? msg : '' });
+        if (manual && app()) app().toast('Could not check for updates — ' + msg, 'err');
+        return null;
+      });
+    };
+
+    U.install = function () {
+      if (U.state !== 'ready' || !U.update) return Promise.resolve();
+      set({ state: 'installing' });
+      return U.update.install().then(function () {
+        return proc.relaunch(); // NSIS on Windows exits/relaunches itself
+      }).catch(function (err) {
+        set({ state: 'ready' });
+        if (app()) app().toast('Update failed: ' + (err && err.message || err), 'err');
+      });
+    };
+
+    function showHeaderButton() {
       if (document.getElementById('btnUpdate')) return;
       var right = document.querySelector('.tb-right');
       if (!right) return;
       var b = document.createElement('button');
       b.id = 'btnUpdate';
-      b.title = 'Version ' + update.version + ' downloaded';
+      b.title = 'Version ' + U.version + ' downloaded';
       b.innerHTML = '<i data-lucide="refresh-cw"></i>Update';
-      b.addEventListener('click', function () {
-        b.disabled = true;
-        b.textContent = 'Updating…';
-        update.install().then(function () {
-          return proc.relaunch(); // NSIS on Windows exits/relaunches itself
-        }).catch(function (err) {
-          b.disabled = false;
-          b.innerHTML = '<i data-lucide="refresh-cw"></i>Update';
-          if (window.lucide) lucide.createIcons();
-          app().toast('Update failed: ' + (err && err.message || err), 'err');
-        });
+      b.addEventListener('click', function () { U.install(); });
+      U.onChange(function (u) {
+        b.disabled = u.state === 'installing';
+        b.innerHTML = u.state === 'installing' ? 'Updating…' : '<i data-lucide="refresh-cw"></i>Update';
+        if (window.lucide) lucide.createIcons();
       });
       right.insertBefore(b, right.firstChild);
       if (window.lucide) lucide.createIcons();
     }
 
-    setTimeout(function () {
-      up.check().then(function (update) {
-        if (!update) return;
-        return update.download().then(function () {
-          showUpdateButton(update);
-        });
-      }).catch(function () {
-        // offline, dev build, or no release yet — silently fine
-      });
-    }, 4000);
+    window.HeadwayDesktop.updater = U;
+    setTimeout(function () { U.check(false); }, 4000);
+    setInterval(function () { U.check(false); }, CHECK_EVERY);
   })();
 })();

@@ -525,11 +525,14 @@ eq(sEd2.meta.endDate, '2026-10-16', 'endDate normalizes to that week\'s Friday')
 section('scope columns');
 var sSc = mkState([{ num: 1, feature: 'a' }]);
 eq(sSc.meta.scopeCols.map(function (c) { return c.key; }),
-  ['description'], 'new documents start with Description only');
+  ['description', 'ac'], 'new documents start with Description and Acceptance criteria');
 // legacy docs without a saved column list surface built-ins that hold content
 var sScLegacy = mkState([{ num: 1, feature: 'a', enables: 'x', notes: 'y' }]);
 eq(sScLegacy.meta.scopeCols.map(function (c) { return c.key; }),
-  ['description', 'enables', 'notes'], 'legacy content infers its columns');
+  ['description', 'ac', 'enables', 'notes'], 'legacy content infers its columns');
+eq(sSc.meta.scopeCols[1].scope, 'story', 'Acceptance criteria defaults to stories only');
+eq(sSc.meta.scopeColOrder.indexOf('ac'), sSc.meta.scopeColOrder.indexOf('description') + 1, 'Acceptance criteria orders right after Description');
+RM.removeScopeCol(sSc, 'ac');
 var ck = RM.addScopeCol(sSc, 'Owner');
 eq(sSc.meta.scopeCols.length, 2, 'custom column appended');
 eq(RM.scopeColLabel(sSc.meta.scopeCols[1]), 'Owner', 'custom label kept');
@@ -558,11 +561,38 @@ eq(RM.scopeColLabel(sSc2.meta.scopeCols[0]), 'Field notes', 'built-in rename sur
 RM.renameScopeCol(sSc, 'notes', '');
 eq(RM.scopeColLabel(sSc.meta.scopeCols[0]), 'Notes', 'clearing a rename restores the canonical name');
 RM.setScopeValue(sSc.items[0], 'x9', 'keep');
+// a saved doc keeps its column list: removing Acceptance criteria sticks
+var sScNoAc = RM.normalizeState(RM.normalizeState(sSc));
+ok(!sScNoAc.meta.scopeCols.some(function (c) { return c.key === 'ac'; }), 'a removed Acceptance criteria column stays removed on reload');
+// pre-migration docs with a custom "Acceptance Criteria" column hand it over to the built-in
+var sAcMig = RM.normalizeState({
+  meta: { timelineStart: '2026-07-27', scopeCols: [{ key: 'description' }, { key: 'cx', label: 'Acceptance Criteria', scope: 'story' }, { key: 'notes' }],
+    scopeColOrder: ['description', 'notes', 'cx', 'epic'] },
+  phases: [{ id: 'p' }],
+  items: [{ num: 1, feature: 'a', custom: { cx: 'feat crit' }, stories: [{ title: 's', custom: { cx: '<ul><li>crit</li></ul>' } }] }]
+});
+eq(sAcMig.meta.scopeCols.map(function (c) { return c.key; }), ['description', 'ac', 'notes'], 'custom Acceptance Criteria column becomes the built-in in place');
+eq(sAcMig.meta.scopeCols[1].scope, 'story', 'migrated column keeps its scope');
+eq(sAcMig.meta.scopeColOrder.indexOf('ac'), sAcMig.meta.scopeColOrder.indexOf('notes') + 1, 'migrated column keeps its position');
+eq(sAcMig.items[0].stories[0].ac, '<ul><li>crit</li></ul>', 'story values move to story.ac');
+eq(sAcMig.items[0].stories[0].custom.cx, undefined, 'old custom story value removed');
+eq(sAcMig.items[0].ac, 'feat crit', 'feature values move to item.ac');
+eq(RM.storyScopeValue(sAcMig.items[0].stories[0], 'ac'), '<ul><li>crit</li></ul>', 'storyScopeValue reads ac as a story field');
+RM.setStoryScopeValue(sAcMig.items[0].stories[0], 'notes', 'n');
+eq(sAcMig.items[0].stories[0].custom.notes, 'n', 'other columns land in story.custom');
+// a doc saved before the built-in existed gets it after Description, stories only
+var sAcNew = RM.normalizeState({ meta: { timelineStart: '2026-07-27', scopeCols: [{ key: 'notes' }, { key: 'description' }], scopeColOrder: ['notes', 'description', 'epic'] }, phases: [{ id: 'p' }], items: [] });
+eq(sAcNew.meta.scopeCols.map(function (c) { return c.key; }), ['notes', 'description', 'ac'], 'existing docs gain Acceptance criteria after Description');
+eq(sAcNew.meta.scopeColOrder.slice(0, 3), ['notes', 'description', 'ac'], 'saved column order slots it after Description');
+RM.setScopeColScope(sAcNew, 'ac', 'both');
+eq(RM.normalizeState(sAcNew).meta.scopeCols[2].scope, 'both', 'choosing both for Acceptance criteria survives reload');
+ok(RM.scopeColShows({ key: 'ac', scope: 'both' }, 'feature'), 'an explicit both shows on features');
 eq(RM.normalizeState(sSc).items[0].custom.x9, 'keep', 'custom values survive normalize');
 
 // ------------------------------------------------------------- column scope
 section('column scope');
 var sCol = mkState([{ num: 1, feature: 'a' }]);
+RM.removeScopeCol(sCol, 'ac');
 RM.addScopeCol(sCol, null, 'notes');
 RM.addScopeCol(sCol, null, 'enables');
 sCol.meta.scopeCols[0].scope = 'story';
@@ -1205,6 +1235,17 @@ if (!ExcelJS) {
 }
 
 function finish() {
+section('apps switch');
+{
+  var ap = RM.normalizeState({ meta: { title: 'A', timelineStart: '2026-07-27', numWeeks: 8 }, phases: [], items: [] });
+  ok(RM.APPS.every(function (a) { return ap.meta.apps[a[0]] === true; }), 'a fresh document has every app on');
+  var ap2 = RM.normalizeState({ meta: { title: 'A', timelineStart: '2026-07-27', numWeeks: 8, apps: { scoping: false, planning: false, bogus: false } }, phases: [], items: [] });
+  eq([ap2.meta.apps.scoping, ap2.meta.apps.planning, ap2.meta.apps.prio, 'bogus' in ap2.meta.apps], [false, true, true, false],
+    'off flags stick, Planning is forced on, unknown keys drop');
+  eq([RM.appEnabled(ap2, 'scoping'), RM.appEnabled(ap2, 'planning'), RM.appEnabled(ap2, 'setup'), RM.appEnabled(ap2, 'history')], [false, true, true, true],
+    'appEnabled: off app, forced Planning, and non-apps always reachable');
+}
+
   console.log('\n' + passed + ' passed, ' + failed + ' failed' + (skipped ? ', ' + skipped + ' skipped' : ''));
   process.exit(failed ? 1 : 0);
 }
@@ -1227,6 +1268,15 @@ RM.setPriorityScheme(sPr, 'moscow');
 eq(RM.priorityOrderOf(sPr).join(''), 'MSCW', 'MoSCoW priority options');
 RM.setPriorityScheme(sPr, 'levels');
 eq(RM.priorityOrderOf(sPr).join(''), 'CHML', 'Critical/High/Medium/Low options');
+// every value maps to a color tier: critical red, high orange, medium green, low gray
+eq(['C', 'H', 'M', 'L'].map(function (v) { return RM.priorityTier(sPr, v); }).join(' '), 'crit high med low', 'levels ladder tiers');
+eq(RM.priorityTier(sPr, null), null, 'no value has no tier');
+eq(RM.priorityTier(sPr, 'W'), null, 'a value outside the scheme has no tier');
+RM.setPriorityScheme(sPr, 'moscow');
+eq(['M', 'S', 'C', 'W'].map(function (v) { return RM.priorityTier(sPr, v); }).join(' '), 'crit high med low', 'MoSCoW ladder tiers');
+sPr.items[0].priority = 'M';
+eq(RM.colorForPriority(sPr, sPr.items[0]), RM.PRIORITY_RAMP[0], 'Must paints the hottest ramp color');
+eq(RM.PRIORITY_RAMP.length, 4, 'four ramp colors, one per tier');
 // a doc saved when MoSCoW lived under Risk migrates its values across
 var sPrMig = RM.normalizeState({
   meta: { timelineStart: '2026-07-27', numWeeks: 8, riskScheme: 'moscow', holidaysV2026: true },

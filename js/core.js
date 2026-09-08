@@ -129,6 +129,22 @@
   };
   RM.RISK_SCHEME_ORDER = ['none', 'risk', 'auto', 'confidence'];
 
+  // the header apps, in tab order: [key, name, icon, what it does]
+  RM.APPS = [
+    ['scoping', 'Scoping', 'table-properties', 'Spreadsheet of descriptions and scope'],
+    ['prio', 'Prioritizing', 'square-kanban', 'Kanban of features and stories'],
+    ['planning', 'Planning', 'chart-gantt', 'Timeline, dependencies and capacity (always on)'],
+    ['sprints', 'Sprinting', 'calendar-range', 'Sprint-by-sprint list'],
+    ['budget', 'Budgeting', 'wallet', 'Rates, costs and role hours'],
+    ['reports', 'Reporting', 'chart-pie', 'Project reporting dashboard']
+  ];
+  RM.appEnabled = function (state, key) {
+    var a = state && state.meta && state.meta.apps;
+    if (key === 'planning') return true;
+    if (!RM.APPS.some(function (x) { return x[0] === key; })) return true; // not an app (setup, history)
+    return !a || a[key] !== false;
+  };
+
   // Priority is its own column (risk measures uncertainty; priority ranks
   // importance): MoSCoW or Critical/High/Medium/Low ladders.
   RM.PRIORITY_SCHEMES = {
@@ -218,15 +234,19 @@
   // ('c…' keys) store their text in item.custom.
   RM.SCOPE_BUILTIN_LABELS = {
     description: 'Description',
+    ac: 'Acceptance criteria',
     enables: 'Enables',
     outOfScope: 'Out of scope',
     extDeps: 'External dependencies',
     notes: 'Notes'
   };
-  // New documents start with Description only; the rest stay available in
-  // the add-column menu. Legacy docs infer their list from actual content.
-  RM.DEFAULT_SCOPE_COLS = ['description'];
-  RM.SCOPE_BUILTIN_ORDER = ['description', 'enables', 'outOfScope', 'extDeps', 'notes'];
+  // New documents start with Description and Acceptance criteria; the rest
+  // stay available in the add-column menu. Legacy docs infer their list from
+  // actual content.
+  RM.DEFAULT_SCOPE_COLS = ['description', 'ac'];
+  RM.SCOPE_BUILTIN_ORDER = ['description', 'ac', 'enables', 'outOfScope', 'extDeps', 'notes'];
+  // built-ins that restrict to one row kind unless the user says otherwise
+  RM.SCOPE_BUILTIN_SCOPE = { ac: 'story' };
   // fixed (chip) scoping columns and the canonical full-order template
   // milestone marker shapes; the first is the default
   RM.MS_STYLES = ['diamond', 'star', 'circle'];
@@ -234,7 +254,7 @@
     return RM.MS_STYLES.indexOf(it && it.msStyle) > 0 ? it.msStyle : 'diamond';
   };
   RM.SCOPE_FIXED_KEYS = ['assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream', 'epic'];
-  RM.SCOPE_DEFAULT_ORDER = ['description', 'epic', 'assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream'];
+  RM.SCOPE_DEFAULT_ORDER = ['description', 'ac', 'epic', 'assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream'];
 
   // 2026 US holiday calendar (company observance table). Merged once into a
   // document's holidays (meta.holidaysV2026 flags the merge so user deletions
@@ -351,7 +371,18 @@
     return hslToHex(hashOf(RM.memberLabel(m)) % 360, 52, 42);
   };
   // priority: a fixed ladder from hottest to coolest across the scheme's order
-  RM.PRIORITY_RAMP = ['C2402E', 'D9822B', '3273BD', '6E7883'];
+  // (critical = bright red, high = orange, medium = green, low = gray)
+  RM.PRIORITY_RAMP = ['E0261B', 'EF8A1F', '2E9E52', '8A929B'];
+  RM.PRIORITY_TIERS = ['crit', 'high', 'med', 'low'];
+  // which of the four tiers a picked value sits in — Must/Critical are 'crit',
+  // Won't/Low are 'low'; null for no value or a scheme without a ladder
+  RM.priorityTier = function (state, value, kind) {
+    if (!value) return null;
+    var order = RM.priorityOrderOf(state, kind);
+    var idx = order.indexOf(value);
+    if (idx === -1) return null;
+    return RM.PRIORITY_TIERS[Math.min(3, Math.floor(idx * 4 / order.length))];
+  };
   RM.colorForPriority = function (state, it) {
     var sch = RM.prioritySchemeOf(state);
     if (sch === 'none') return RM.PALETTE.neutral;
@@ -885,6 +916,11 @@
     // capacity feature switch — roster-based scheduling constraints and the
     // capacity header row. OFF by default; enabled per-document in Setup.
     m.capacityEnabled = !!m.capacityEnabled;
+    // apps switch (Setup → Apps): which header tabs this project shows. All
+    // on by default; Planning is the home view and can never go off.
+    var apps = (m.apps && typeof m.apps === 'object') ? m.apps : {};
+    m.apps = {};
+    RM.APPS.forEach(function (a) { m.apps[a[0]] = a[0] === 'planning' ? true : apps[a[0]] !== false; });
     // the saved project end date (last working day) wins over numWeeks
     if (m.endDate && /^\d{4}-\d{2}-\d{2}$/.test(m.endDate)) {
       var endWeeks = Math.floor((RM.parseISO(m.endDate) - RM.parseISO(m.timelineStart)) / (7 * 86400000)) + 1;
@@ -943,7 +979,7 @@
     var inheritedCols = m.scopeCols;
     if (!inheritedCols) {
       inheritedCols = RM.SCOPE_BUILTIN_ORDER.filter(function (k) {
-        return k === 'description' || (state.items || []).some(function (it) { return it && it[k]; });
+        return RM.DEFAULT_SCOPE_COLS.indexOf(k) !== -1 || (state.items || []).some(function (it) { return it && it[k]; });
       }).map(function (k) { return { key: k }; });
     }
     m.scopeCols = inheritedCols
@@ -956,8 +992,12 @@
         } else {
           col = { key: c.key, label: String(c.label || 'Column') };
         }
-        // which rows show the column: 'feature' / 'story'; absent = both
+        // which rows show the column: 'feature' / 'story'; absent = both.
+        // Built-ins with a default scope store an explicit 'both' so the
+        // user's choice sticks across loads.
+        var defScope = RM.SCOPE_BUILTIN_SCOPE[c.key];
         if (c.scope === 'feature' || c.scope === 'story') col.scope = c.scope;
+        else if (defScope) col.scope = c.scope === 'both' ? 'both' : defScope;
         return col;
       })
       .filter(function (c) {
@@ -972,6 +1012,36 @@
       if (!seenCol.description) {
         var descAt = m.scopeCols.findIndex(function (c) { return c.key === 'enables'; });
         m.scopeCols.splice(descAt === -1 ? 0 : descAt, 0, { key: 'description' });
+      }
+    }
+    // one-time migration: Acceptance criteria became a built-in (stories
+    // only by default) right after Description. A custom column by that
+    // name takes over the built-in key — its values move to item/story .ac
+    // and its position and scope are kept — so nothing shows up twice.
+    if (!m.scopeAcV1) {
+      m.scopeAcV1 = true;
+      if (!seenCol.ac) {
+        var acAt = m.scopeCols.findIndex(function (c) {
+          return !RM.SCOPE_BUILTIN_LABELS[c.key] && /^acceptance\s+criteria$/i.test(String(c.label || '').trim());
+        });
+        if (acAt !== -1) {
+          var oldKey = m.scopeCols[acAt].key, oldScope = m.scopeCols[acAt].scope;
+          m.scopeCols[acAt] = { key: 'ac', scope: oldScope || 'both' };
+          if (Array.isArray(m.scopeColOrder)) {
+            m.scopeColOrder = m.scopeColOrder.map(function (k) { return k === oldKey ? 'ac' : k; });
+          }
+          (state.items || []).forEach(function (it) {
+            if (!it) return;
+            if (it.custom && it.custom[oldKey] != null) { it.ac = it.custom[oldKey]; delete it.custom[oldKey]; }
+            (it.stories || []).forEach(function (s) {
+              if (s && s.custom && s.custom[oldKey] != null) { s.ac = s.custom[oldKey]; delete s.custom[oldKey]; }
+            });
+          });
+        } else {
+          var afterDesc = m.scopeCols.findIndex(function (c) { return c.key === 'description'; });
+          m.scopeCols.splice(afterDesc === -1 ? 0 : afterDesc + 1, 0, { key: 'ac', scope: 'story' });
+        }
+        seenCol.ac = true;
       }
     }
     // full column order across FIXED and text columns (user-reorderable).
@@ -989,6 +1059,11 @@
       if (savedOrder.length && savedOrder.indexOf('deadline') === -1) {
         var atStart = savedOrder.indexOf('start');
         savedOrder.splice(atStart === -1 ? savedOrder.length : atStart + 1, 0, 'deadline');
+      }
+      // likewise Acceptance criteria slots right after Description (when
+      // Description itself is unsaved both come from the default order)
+      if (savedOrder.indexOf('ac') === -1 && savedOrder.indexOf('description') !== -1) {
+        savedOrder.splice(savedOrder.indexOf('description') + 1, 0, 'ac');
       }
       savedOrder.forEach(take);
       RM.SCOPE_DEFAULT_ORDER.forEach(take);
@@ -1136,6 +1211,7 @@
         phaseId: phaseIds[it.phaseId] ? it.phaseId : fallbackPhase,
         feature: it.feature || '',
         description: it.description || '',
+        ac: it.ac || '',
         workstream: it.workstream || '',
         epic: it.epic || '',
         enables: it.enables || '',
@@ -1469,15 +1545,29 @@
   };
   // does a column show on rows of this kind ('feature' | 'story')?
   RM.scopeColShows = function (col, kind) {
-    return !col.scope || col.scope === kind;
+    return !col.scope || col.scope === 'both' || col.scope === kind;
   };
   // 'feature' / 'story' restrict the column; 'both' (or anything else) clears
   RM.setScopeColScope = function (state, key, scope) {
     if (scope !== 'feature' && scope !== 'story' && scope !== 'both') return;
     state.meta.scopeCols.forEach(function (c) {
       if (c.key !== key) return;
-      if (scope === 'both') delete c.scope; else c.scope = scope;
+      if (scope !== 'both') c.scope = scope;
+      else if (RM.SCOPE_BUILTIN_SCOPE[key]) c.scope = 'both'; // explicit: overrides the default
+      else delete c.scope;
     });
+  };
+  // stories keep Description and Acceptance criteria as own fields; every
+  // other column (built-in or custom) lives in story.custom
+  RM.STORY_FIELD_KEYS = { description: true, ac: true };
+  RM.storyScopeValue = function (st, key) {
+    if (RM.STORY_FIELD_KEYS[key]) return st[key] || '';
+    return (st.custom && st.custom[key]) || '';
+  };
+  RM.setStoryScopeValue = function (st, key, val) {
+    if (RM.STORY_FIELD_KEYS[key]) { st[key] = val; return; }
+    if (!st.custom) st.custom = {};
+    if (val) st.custom[key] = val; else delete st.custom[key];
   };
   RM.scopeValue = function (it, key) {
     if (RM.SCOPE_BUILTIN_LABELS[key]) return it[key] || '';
@@ -1497,7 +1587,11 @@
   RM.addScopeCol = function (state, label, key) {
     var cols = state.meta.scopeCols;
     if (key && RM.SCOPE_BUILTIN_LABELS[key]) {
-      if (!cols.some(function (c) { return c.key === key; })) cols.push({ key: key });
+      if (!cols.some(function (c) { return c.key === key; })) {
+        var col = { key: key };
+        if (RM.SCOPE_BUILTIN_SCOPE[key]) col.scope = RM.SCOPE_BUILTIN_SCOPE[key];
+        cols.push(col);
+      }
       orderAppend(state.meta, key);
       return key;
     }

@@ -46,13 +46,13 @@
   var validation;            // RM.validate cache
   var undoStack = [], redoStack = [];
   var selectedId = null;
+  var reloadingDoc = false;  // true while a disk reload re-renders (focus is put back afterwards)
   var expanded = {};         // itemId -> true (stories open)
   var weekPx = 28;
   var view = 'planning';     // planning (timeline) | scoping (spreadsheet)
   var depsMode = 'on';       // on: selected item's explicit deps + violations + critical path | none
   var showCrit = true;       // orange critical-path highlight (bars + arrows)
   var showCap = true;        // weekly capacity row in the planning header
-  var presentMode = false;   // timeline-only preview (hides topbar + left pane); transient
   var repCollapsed = true;   // bottom Reports drawer starts tucked away
   var leftWBudget = 806;     // frozen left-pane width, budgeting view
   var repMode = 'workstream'; // reports grouping: workstream | phase | phase-ws
@@ -118,7 +118,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, leftCollapsed: leftCollapsed, colorBy: colorBy };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy };
   }
   var COLOR_MODES = [['workstream', 'Workstream'], ['epic', 'Epic'], ['assignee', 'Assignee'], ['priority', 'Priority']];
   var colorBy = 'workstream'; // what bar colors follow: 'workstream' | 'epic' | 'assignee' | 'priority'
@@ -128,11 +128,16 @@
   }
   var prioGroup = 'none';   // Prioritizing view swimlanes: 'none' | 'ws' | 'epic'
   var sprLevel = 'feature'; // Sprinting view rows: 'feature' | 'story'
-  var prioLevel = 'feature'; // Prioritizing cards: 'feature' | 'story' (stories listed inside each card)
+  var prioLevel = 'feature'; // Prioritizing cards: 'feature' | 'story' (a board of story cards)
+  var prioStoryCol = 'priority'; // Story-level columns: 'priority' | 'size' | 'risk'
+  var prioFeatCol = 'phase';     // Feature-level columns: 'phase' | 'priority' | 'size' | 'risk'
   var prioFields = [];      // scope-column keys shown on prioritizing cards (compact by default)
   var prioSort = 'priority'; // Prioritizing order: 'priority' | 'doc' | 'title' | 'size'
   var prioFEpic = null;     // Prioritizing epic filter: null = all, '' = no epic, else the epic
   var prioFWs = null;       // Prioritizing workstream filter: null = all, '' = default, else the stream
+  var sprFPhase = null;     // Sprinting phase filter: null = all, else a phase id
+  var sprFEpic = null;      // Sprinting epic filter: null = all, '' = no epic, else the epic
+  var sprFWs = null;        // Sprinting workstream filter: null = all, '' = default, else the stream
   var uiExpandedLoaded = false; // boot skips the auto-expand default when true
 
   function applyUi(ui) {
@@ -178,6 +183,8 @@
     setColorBy(ui.colorBy);
     sprLevel = ui.sprLevel === 'story' ? 'story' : 'feature';
     prioLevel = ui.prioLevel === 'story' ? 'story' : 'feature';
+    prioStoryCol = ['priority', 'size', 'risk'].indexOf(ui.prioStoryCol) !== -1 ? ui.prioStoryCol : 'priority';
+    prioFeatCol = ['phase', 'priority', 'size', 'risk'].indexOf(ui.prioFeatCol) !== -1 ? ui.prioFeatCol : 'phase';
     if (Array.isArray(ui.prioFields)) prioFields = ui.prioFields.map(String);
     prioSort = ['doc', 'title', 'size'].indexOf(ui.prioSort) !== -1 ? ui.prioSort : 'priority';
     if (ui.expanded && typeof ui.expanded === 'object') {
@@ -564,7 +571,8 @@
     }, 1500);
   }
 
-  function matchesFilter(it) {
+  // ownOnly: judge the feature by its own fields, not its stories' titles
+  function matchesFilter(it, ownOnly) {
     if (!filterText) return true;
     var q = filterText.toLowerCase();
     return (it.feature || '').toLowerCase().indexOf(q) !== -1 ||
@@ -573,9 +581,9 @@
       state.meta.scopeCols.some(function (c) {
         return RM.htmlToText(RM.scopeValue(it, c.key)).toLowerCase().indexOf(q) !== -1;
       }) ||
-      (it.stories || []).some(function (st) {
+      (!ownOnly && (it.stories || []).some(function (st) {
         return (st.title || '').toLowerCase().indexOf(q) !== -1;
-      });
+      }));
   }
 
   // ------------------------------------------------------------ toasts, popover, modal
@@ -1171,6 +1179,16 @@
     var mp = PRIORITY_VALUE_LABELS[RM.prioritySchemeOf(state, kind)] || {};
     return mp[v] || v || '';
   }
+  // ' pt-crit' / ' pt-high' / ' pt-med' / ' pt-low' — the color tier class
+  // every priority chip and picker button carries
+  function priTierClass(v, kind) {
+    var t = RM.priorityTier(state, v, kind);
+    return t ? ' pt-' + t : '';
+  }
+  function priTierColor(v, kind) {
+    var t = RM.PRIORITY_TIERS.indexOf(RM.priorityTier(state, v, kind));
+    return t === -1 ? RM.PALETTE.neutral : RM.PRIORITY_RAMP[t];
+  }
 
   function riskValueLabel(v) {
     var mp = RISK_VALUE_LABELS[RM.riskSchemeOf(state)] || {};
@@ -1273,22 +1291,21 @@
 
   function render() {
     var sx = board.scrollLeft, sy = board.scrollTop;
+    if (!RM.appEnabled(state, view)) view = 'planning'; // an app switched off under us (or in a loaded file)
+    $$('#viewTabs button[data-view]').forEach(function (b) { b.hidden = !RM.appEnabled(state, b.dataset.view); });
     critCache = RM.criticalPath(state);
     document.documentElement.style.setProperty('--week-px', weekPx + 'px');
-    if (presentMode && view === 'setup') setPresent(false);
     document.body.classList.toggle('no-cap', !showCap || !state.meta.capacityEnabled);
-    document.body.classList.toggle('present', presentMode);
     document.body.classList.toggle('cap-off', !state.meta.capacityEnabled);
     document.body.classList.toggle('no-size', !RM.sizingEnabled(state));
     var boardView = view === 'planning' || view === 'scoping' || view === 'budget';
-    document.body.classList.toggle('left-collapsed', leftCollapsed && boardView && !presentMode);
+    document.body.classList.toggle('left-collapsed', leftCollapsed && boardView);
     document.documentElement.style.setProperty('--left-w',
-      (presentMode && (view === 'planning' || view === 'budget') ? 0
-        : leftCollapsed && boardView ? 0
+      (leftCollapsed && boardView ? 0
         : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan)) + 'px');
     // folded: the pane is gone; only the floating reopen button remains
     var lp = $('#leftPeek');
-    if (lp) lp.hidden = !(leftCollapsed && boardView && !presentMode);
+    if (lp) lp.hidden = !(leftCollapsed && boardView);
     document.documentElement.style.setProperty('--panel-w', panelW + 'px');
     applyBuColWidths();
     renderHlCols();
@@ -1679,6 +1696,7 @@
       commit('priority', function (s) { RM.itemById(s, itemId).priority = null; });
     } }].concat(RM.priorityOrderOf(state).map(function (pv) {
       return { icon: RM.prioritySchemeOf(state) === 'levels' ? LEVEL_GLYPHS[pv] : undefined,
+        dot: '#' + priTierColor(pv),
         label: (RM.prioritySchemeOf(state) === 'levels' ? '' : pv + ' · ') + esc(priorityValueLabel(pv)),
         checked: it.priority === pv, fn: function () {
         commit('priority', function (s) { RM.itemById(s, itemId).priority = pv; });
@@ -1698,6 +1716,7 @@
     openDropdown(anchor, [{ label: '<i>None</i>', checked: !stPri, fn: function () { setPri(null); } }]
       .concat(RM.priorityOrderOf(state, 'story').map(function (pv) {
         return { icon: stLevels ? LEVEL_GLYPHS[pv] : undefined,
+          dot: '#' + priTierColor(pv, 'story'),
           label: (stLevels ? '' : pv + ' · ') + esc(priorityValueLabel(pv, 'story')),
           checked: stPri === pv, fn: function () { setPri(pv); } };
       })));
@@ -1787,7 +1806,7 @@
     }
     if (key === 'pri') {
       if (!RM.priorityEnabled(state, 'story')) return '';
-      return '<span class="r-risk pri' + (st.priority ? ' has-risk' : '') + '" tabindex="0" role="button" ' + attr + '="st-pri" title="' +
+      return '<span class="r-risk pri' + (st.priority ? ' has-risk' : '') + priTierClass(st.priority, 'story') + '" tabindex="0" role="button" ' + attr + '="st-pri" title="' +
         esc('Story priority' + (st.priority ? '\nNow: ' + priorityValueLabel(st.priority, 'story') : '')) + '">' +
         (st.priority ? (RM.prioritySchemeOf(state, 'story') === 'levels' ? levelGlyph(st.priority) : esc(st.priority)) : blank) + '</span>';
     }
@@ -1841,7 +1860,7 @@
     }
     if (key === 'pri') {
       if (!RM.priorityEnabled(state)) return '';
-      return '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + '" tabindex="0" role="button" ' + attr + '="priority" title="' +
+      return '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) + '" tabindex="0" role="button" ' + attr + '="priority" title="' +
         esc(priChipTitle(it)) + '">' + (priChipContent(it) || '·') + '</span>';
     }
     if (key === 'risk') {
@@ -1939,14 +1958,14 @@
       '<input class="pr-title" data-prf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
       fields + stories +
       '<div class="pr-chips">' +
-      (RM.sizingEnabled(state)
+      (RM.sizingEnabled(state) && prioFeatCol !== 'size' // the column field's chip is redundant
         ? '<span class="r-size" tabindex="0" role="button" data-pract="size" title="Size">' +
           (it.size ? esc(it.size) : '·') + '</span>' : '') +
-      (RM.priorityEnabled(state)
-        ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') +
+      (RM.priorityEnabled(state) && prioFeatCol !== 'priority'
+        ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) +
           '" tabindex="0" role="button" data-pract="priority" title="' + esc(priChipTitle(it)) + '">' +
           (priChipContent(it) || '·') + '</span>' : '') +
-      itemChipHtml('risk', it, 'data-pract') + itemChipHtml('dur', it, 'data-pract') +
+      (prioFeatCol === 'risk' ? '' : itemChipHtml('risk', it, 'data-pract')) + itemChipHtml('dur', it, 'data-pract') +
       (prioGroup === 'epic' ? '' : // the swimlane already names the epic
         '<span class="pr-chip" tabindex="0" role="button" data-pract="epic" title="Epic">' +
         '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>') +
@@ -1955,11 +1974,117 @@
           '<span class="dd-dot" style="background:#' + wsColor + '"></span>' + esc(it.workstream || RM.defaultWsName(state)) + '</span>' : '') +
       '</div></div>';
   }
-  function prColHtml(p, items, laneAttr) {
-    var mine = prSortItems(items.filter(function (it) { return it.phaseId === p.id && prMatches(it); }));
-    return '<div class="sp-col" data-prcol="' + p.id + '"' + (laneAttr || '') + '>' +
+  // ---- Story level: a board of story cards in columns of one story field
+  // (priority / size / risk); dragging a card sets that field on the story
+  var PR_STORY_COLS = { priority: ['arrow-down-wide-narrow', 'Priority'], size: ['ruler', 'Size'], risk: ['triangle-alert', 'Risk'] };
+  function prStoryColKinds() {
+    var out = [];
+    if (RM.priorityEnabled(state, 'story')) out.push('priority');
+    if (RM.sizingEnabled(state, 'story')) out.push('size');
+    if (RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto') out.push('risk');
+    return out;
+  }
+  function prStoryColLabel(v) {
+    if (v === '') return 'Unset';
+    if (prioStoryCol === 'priority') return priorityValueLabel(v, 'story');
+    if (prioStoryCol === 'risk') return riskValueLabel(v);
+    return v;
+  }
+  // [{ key, name }] — the field's ladder in scheme order, then Unset
+  function prStoryColumns() {
+    var vals = prioStoryCol === 'priority' ? RM.priorityOrderOf(state, 'story')
+      : prioStoryCol === 'risk' ? RM.riskOrderOf(state) : RM.sizeOrderOf(state, 'story');
+    return vals.map(function (v) { return { key: v, name: prStoryColLabel(v) }; }).concat([{ key: '', name: 'Unset' }]);
+  }
+  // the story's value for the column field; anything the ladder does not
+  // know (an old scheme's value) files under Unset instead of vanishing
+  function prStoryVal(st) {
+    var v = st[prioStoryCol] || '';
+    if (!v) return '';
+    return prStoryColumns().some(function (c) { return c.key === v; }) ? v : '';
+  }
+  // a story shows when its feature passes the dropdowns and either the story
+  // title or the feature itself matches the text filter
+  function prStoryMatches(it, st) {
+    if (prioFEpic != null && (it.epic || '') !== prioFEpic) return false;
+    if (prioFWs != null && (it.workstream || '') !== prioFWs) return false;
+    if (!filterText) return true;
+    return (st.title || '').toLowerCase().indexOf(filterText.toLowerCase()) !== -1 || matchesFilter(it, true);
+  }
+  // every visible story as { it, st } pairs, in document order
+  function prStoryPairs(items) {
+    var out = [];
+    items.forEach(function (it) {
+      if (it.milestone) return;
+      (it.stories || []).forEach(function (st) { if (prStoryMatches(it, st)) out.push({ it: it, st: st }); });
+    });
+    return out;
+  }
+  function prSortStories(pairs) {
+    var rank;
+    if (prioSort === 'title') {
+      return pairs.map(function (x, i) { return { x: x, i: i }; })
+        .sort(function (a, b) { return (a.x.st.title || '').localeCompare(b.x.st.title || '') || (a.i - b.i); })
+        .map(function (y) { return y.x; });
+    } else if (prioSort === 'size' && RM.sizingEnabled(state, 'story')) {
+      var so = RM.sizeOrderOf(state, 'story');
+      rank = function (st) { var i2 = st.size ? so.indexOf(st.size) : -1; return i2 === -1 ? Infinity : -i2; };
+    } else if (prioSort === 'priority' && RM.priorityEnabled(state, 'story')) {
+      var po = RM.priorityOrderOf(state, 'story');
+      rank = function (st) { var i3 = st.priority ? po.indexOf(st.priority) : -1; return i3 === -1 ? Infinity : i3; };
+    } else return pairs.slice();
+    return pairs.map(function (x, i) { return { x: x, i: i }; })
+      .sort(function (a, b) { return (rank(a.x.st) - rank(b.x.st)) || (a.i - b.i); })
+      .map(function (y) { return y.x; });
+  }
+  function prStoryCardHtml(it, st) {
+    var wsColor = it.workstream ? RM.colorForWs(state, it.workstream) : RM.defaultWsColor(state);
+    var chips = ['size', 'pri', 'risk', 'dur'].filter(function (k) {
+      return !(k === 'pri' && prioStoryCol === 'priority') && !(k === 'size' && prioStoryCol === 'size') && !(k === 'risk' && prioStoryCol === 'risk');
+    }).map(function (k) { return storyChipHtml(k, st, 'data-prstact'); }).join('');
+    return '<div class="sp-card pr-card pr-stcard' + (st.done ? ' done' : '') + '" data-prcard="' + it.id + '" data-prst="' + st.id + '" style="--ws-c:#' + wsColor + '">' +
+      '<div class="pr-stfeat" title="Feature"><span class="r-num">#' + it.num + '</span>' +
+      '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' +
+      '<span class="pr-stfeatname">' + esc(it.feature || '(untitled)') + '</span></div>' +
+      '<input class="pr-title pr-st-title" data-prstf="title" placeholder="Story" value="' + esc(st.title || '') + '">' +
+      '<div class="pr-chips">' + chips + '</div></div>';
+  }
+  function prStoryColHtml(col, pairs, laneAttr) {
+    var mine = prSortStories(pairs.filter(function (x) { return prStoryVal(x.st) === col.key; }));
+    return '<div class="sp-col" data-prcol="' + esc(col.key) + '"' + (laneAttr || '') + '>' +
+      '<div class="sp-colbody">' + mine.map(function (x) { return prStoryCardHtml(x.it, x.st); }).join('') + '</div></div>';
+  }
+  // ---- Feature level columns: the phases (default) or one feature field's
+  // ladder — priority / size / risk — plus Unset; dragging a card sets it
+  var PR_FEAT_COLS = { phase: ['flag', 'Phase'], priority: ['arrow-down-wide-narrow', 'Priority'], size: ['ruler', 'Size'], risk: ['triangle-alert', 'Risk'] };
+  function prFeatColKinds() {
+    var out = ['phase'];
+    if (RM.priorityEnabled(state) && RM.prioritySchemeOf(state) !== 'rice') out.push('priority'); // RICE is computed, no ladder
+    if (RM.sizingEnabled(state)) out.push('size');
+    if (RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto') out.push('risk');
+    return out;
+  }
+  function prFeatColumns() {
+    if (prioFeatCol === 'phase') return state.phases.map(function (p) { return { key: p.id, name: p.name }; });
+    var vals = prioFeatCol === 'priority' ? RM.priorityOrderOf(state)
+      : prioFeatCol === 'risk' ? RM.riskOrderOf(state) : RM.sizeOrderOf(state);
+    return vals.map(function (v) {
+      return { key: v, name: prioFeatCol === 'priority' ? priorityValueLabel(v) : prioFeatCol === 'risk' ? riskValueLabel(v) : v };
+    }).concat([{ key: '', name: 'Unset' }]);
+  }
+  // the feature's value for the column field; off-ladder values file under Unset
+  function prFeatVal(it) {
+    if (prioFeatCol === 'phase') return it.phaseId;
+    var v = it[prioFeatCol] || '';
+    if (!v) return '';
+    return prFeatColumns().some(function (c) { return c.key === v; }) ? v : '';
+  }
+  function prColHtml(col, items, laneAttr) {
+    var mine = prSortItems(items.filter(function (it) { return prFeatVal(it) === col.key && prMatches(it); }));
+    return '<div class="sp-col" data-prcol="' + esc(col.key) + '"' + (laneAttr || '') + '>' +
       '<div class="sp-colbody">' + mine.map(prCardHtml).join('') + '</div>' +
-      '<button class="pr-add" data-pradd="' + p.id + '"' + (laneAttr || '') + '><i data-lucide="plus"></i> Add</button>' +
+      (prioFeatCol === 'phase' // a new feature needs a phase to land in
+        ? '<button class="pr-add" data-pradd="' + col.key + '"' + (laneAttr || '') + '><i data-lucide="plus"></i> Add</button>' : '') +
       '</div>';
   }
   function prLaneKey(it) { return prioGroup === 'ws' ? (it.workstream || '') : (it.epic || ''); }
@@ -1971,15 +2096,46 @@
     var host = $('#prioView');
     if (!host) return;
     if (prioGroup === 'ws' && !state.meta.workstreamsEnabled) prioGroup = 'none';
+    var storyMode = prioLevel === 'story';
+    var stKinds = storyMode ? prStoryColKinds() : [];
+    if (storyMode && stKinds.indexOf(prioStoryCol) === -1 && stKinds.length) prioStoryCol = stKinds[0];
+    var ftKinds = storyMode ? [] : prFeatColKinds();
+    if (!storyMode && ftKinds.indexOf(prioFeatCol) === -1) prioFeatCol = 'phase';
     var phases = state.phases;
     var grouped = prioGroup !== 'none';
-    var head = (grouped ? '<div class="pr-corner"></div>' : '') + phases.map(function (p) {
-      var n = state.items.filter(function (it) { return it.phaseId === p.id && prMatches(it); }).length;
-      return '<div class="pr-phhd">' + esc(p.name) + '<span class="pr-lanect">' + n + '</span></div>';
+    // columns: phases (or a feature field's ladder) for features, a story field's ladder for stories
+    var cols = storyMode ? prStoryColumns() : prFeatColumns();
+    var allPairs = storyMode ? prStoryPairs(state.items) : null;
+    var head = (grouped ? '<div class="pr-corner"></div>' : '') + cols.map(function (c) {
+      var n = storyMode
+        ? allPairs.filter(function (x) { return prStoryVal(x.st) === c.key; }).length
+        : state.items.filter(function (it) { return prFeatVal(it) === c.key && prMatches(it); }).length;
+      return '<div class="pr-phhd">' + esc(c.name) + '<span class="pr-lanect">' + n + '</span></div>';
     }).join('');
     var rows;
-    if (!grouped) {
-      rows = phases.map(function (p) { return prColHtml(p, state.items); }).join('');
+    if (storyMode && !stKinds.length) {
+      rows = '<div class="p-none" style="grid-column:1/-1;padding:30px">Turn on a story priority, size or risk scheme in Setup to lay stories out in columns.</div>';
+    } else if (storyMode && !grouped) {
+      rows = cols.map(function (c) { return prStoryColHtml(c, allPairs); }).join('');
+    } else if (storyMode) {
+      var stLanes = prioGroup === 'ws'
+        ? [{ key: '', name: RM.defaultWsName(state), dot: RM.defaultWsColor(state) }]
+            .concat(allWorkstreams().map(function (w) { return { key: w, name: w, dot: RM.colorForWs(state, w) }; }))
+        : [{ key: '', name: 'No epic' }]
+            .concat(allEpics().map(function (ep) { return { key: ep, name: ep, icon: RM.iconForEpic(state, ep) || 'tag' }; }));
+      stLanes = stLanes.filter(function (ln) { return allPairs.some(function (x) { return prLaneKey(x.it) === ln.key; }); });
+      rows = stLanes.map(function (ln) {
+        var lanePairs = allPairs.filter(function (x) { return prLaneKey(x.it) === ln.key; });
+        var laneAttr = ' data-prlane="' + esc(ln.key) + '"';
+        return '<div class="pr-lanecell">' +
+          (ln.dot ? '<span class="dd-dot" style="background:#' + ln.dot + '"></span>' : '') +
+          (ln.icon ? '<i data-lucide="' + ln.icon + '"></i>' : '') +
+          '<span class="pr-lanename">' + esc(ln.name) + '</span>' +
+          '<span class="pr-lanect">' + lanePairs.length + '</span></div>' +
+          cols.map(function (c) { return prStoryColHtml(c, lanePairs, laneAttr); }).join('');
+      }).join('') || '<div class="p-none" style="grid-column:1/-1;padding:30px">Nothing matches.</div>';
+    } else if (!grouped) {
+      rows = cols.map(function (c) { return prColHtml(c, state.items); }).join('');
     } else {
       var lanes = prioGroup === 'ws'
         ? [{ key: '', name: RM.defaultWsName(state), dot: RM.defaultWsColor(state) }]
@@ -1997,7 +2153,7 @@
           (ln.icon ? '<i data-lucide="' + ln.icon + '"></i>' : '') +
           '<span class="pr-lanename">' + esc(ln.name) + '</span>' +
           '<span class="pr-lanect">' + laneItems.length + '</span></div>' +
-          phases.map(function (p) { return prColHtml(p, laneItems, laneAttr); }).join('');
+          cols.map(function (c) { return prColHtml(c, laneItems, laneAttr); }).join('');
       }).join('') || '<div class="p-none" style="grid-column:1/-1;padding:30px">Nothing matches.</div>';
     }
     // an active filter wears what it picked: the epic's own icon, the
@@ -2013,6 +2169,12 @@
           : '<span class="dd-dot" style="background:#' + (prioFWs ? RM.colorForWs(state, prioFWs) : RM.defaultWsColor(state)) + '"></span>' +
             esc(prioFWs || RM.defaultWsName(state))) + '</span>' +
         '<i data-lucide="chevron-down"></i></button>' : '';
+    // which field the columns represent (phases or a ladder for features; a ladder for stories)
+    var colsDd = (storyMode ? stKinds.length : ftKinds.length > 1)
+      ? '<span class="pr-lab">Columns</span>' +
+        '<button class="dd-btn" data-prdd="cols" title="' + (storyMode ? 'Which story field the columns represent' : 'Which feature field the columns represent') + '">' +
+        '<span class="dd-label">' + prDdLabel(storyMode ? PR_STORY_COLS[prioStoryCol] : PR_FEAT_COLS[prioFeatCol]) + '</span><i data-lucide="chevron-down"></i></button>'
+      : '';
     host.innerHTML = '<div class="sp-page">' +
       '<div class="pr-bar">' +
       levelBtnHtml('data-prdd="level"', LEVEL_MODES, prioLevel) +
@@ -2021,16 +2183,17 @@
       '<kbd class="kbd filter-kbd" aria-hidden="true">⌘F</kbd></span>' +
       epicFilterDd + wsFilterDd +
       '<div class="pr-settings">' +
+      colsDd +
       '<span class="pr-lab">Group</span>' +
       '<button class="dd-btn" data-prdd="group" title="Swimlanes">' +
       '<span class="dd-label">' + prDdLabel(PR_GROUPS[prioGroup]) + '</span><i data-lucide="chevron-down"></i></button>' +
       '<span class="pr-lab">Sort</span>' +
       '<button class="dd-btn" data-prdd="sort" title="Order cards inside each column">' +
       '<span class="dd-label">' + prDdLabel(PR_SORTS[prioSort]) + '</span><i data-lucide="chevron-down"></i></button>' +
-      '<button id="prFieldsBtn" title="Choose which fields cards show"><i data-lucide="list-checks"></i>Fields</button>' +
+      (storyMode ? '' : '<button id="prFieldsBtn" title="Choose which fields cards show"><i data-lucide="list-checks"></i>Fields</button>') +
       '</div></div>' +
-      '<div class="pr-table" style="grid-template-columns:' + (grouped ? '170px ' : '') +
-      'repeat(' + phases.length + ', minmax(230px, 1fr))">' + head + rows + '</div></div>';
+      '<div class="pr-table' + (storyMode ? ' pr-stboard' : '') + '" style="grid-template-columns:' + (grouped ? '170px ' : '') +
+      'repeat(' + cols.length + ', minmax(' + (storyMode ? '200px' : '230px') + ', 1fr))">' + head + rows + '</div></div>';
     if (window.lucide) lucide.createIcons();
   }
 
@@ -2106,6 +2269,7 @@
     if (e.key === 'Enter' && t.dataset && (t.dataset.prf === 'feature' || t.dataset.prstf === 'title')) t.blur();
   });
   $('#prioView').addEventListener('click', function (e) {
+    if (dragConsumedClick) { dragConsumedClick = false; return; } // the click that trails a card drag
     var dd = e.target.closest('[data-prdd]');
     if (dd) {
       var kind = dd.dataset.prdd;
@@ -2124,6 +2288,18 @@
         openDropdown(dd, Object.keys(PR_SORTS).map(function (k) {
           return { icon: PR_SORTS[k][0], label: esc(PR_SORTS[k][1]), checked: prioSort === k, fn: function () {
             prioSort = k; saveLocal(); render();
+          } };
+        }));
+      } else if (kind === 'cols' && prioLevel === 'story') {
+        openDropdown(dd, prStoryColKinds().map(function (k) {
+          return { icon: PR_STORY_COLS[k][0], label: PR_STORY_COLS[k][1], checked: prioStoryCol === k, fn: function () {
+            if (prioStoryCol !== k) { prioStoryCol = k; saveLocal(); render(); }
+          } };
+        }));
+      } else if (kind === 'cols') {
+        openDropdown(dd, prFeatColKinds().map(function (k) {
+          return { icon: PR_FEAT_COLS[k][0], label: PR_FEAT_COLS[k][1], checked: prioFeatCol === k, fn: function () {
+            if (prioFeatCol !== k) { prioFeatCol = k; saveLocal(); render(); }
           } };
         }));
       } else if (kind === 'fepic') {
@@ -2227,6 +2403,20 @@
     var itX = RM.itemById(state, cid);
     if (!itX) return;
     var cx = e.clientX, cy = e.clientY;
+    if (card.dataset.prst) { // a story card: jump to its feature, or delete the story
+      var stIdX = card.dataset.prst;
+      openContextMenu(cx, cy, [
+        { icon: 'rows-3', label: 'Go to feature', fn: function () { select(cid, true); } },
+        { sep: true },
+        { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
+          commit('delete story', function (s) {
+            var t = RM.itemById(s, cid);
+            if (t) t.stories = (t.stories || []).filter(function (st) { return st.id !== stIdX; });
+          });
+        } }
+      ]);
+      return;
+    }
     openContextMenu(cx, cy, [
       { icon: 'folder-input', label: 'Move to phase…', fn: function () { openContextMenu(cx, cy, movePhaseMenu(cid)); } },
       { icon: 'tag', label: 'Set epic…', fn: function () { openContextMenu(cx, cy, setEpicMenu(cid, false)); } },
@@ -2247,7 +2437,7 @@
     if (e.target.closest('input,textarea,button,select,[contenteditable="true"],[data-pract]')) return;
     var card = e.target.closest('[data-prcard]');
     if (!card) return;
-    drag = { kind: 'prcard', id: card.dataset.prcard, el: card,
+    drag = { kind: 'prcard', id: card.dataset.prcard, st: card.dataset.prst || null, el: card,
       x0: e.clientX, y0: e.clientY, moved: false, ghost: null, colEl: null };
     e.preventDefault();
   });
@@ -2256,13 +2446,14 @@
       drag.ghost = document.createElement('div');
       drag.ghost.className = 'sp-card sp-card-ghost';
       var t = RM.itemById(state, drag.id);
-      drag.ghost.textContent = (t && t.feature) || 'Card';
+      var stG = drag.st && t ? storyById(t, drag.st) : null;
+      drag.ghost.textContent = stG ? (stG.title || 'Story') : ((t && t.feature) || 'Card');
       document.body.appendChild(drag.ghost);
       drag.el.classList.add('sp-dragging');
     }
     drag.ghost.style.left = (e.clientX + 10) + 'px';
     drag.ghost.style.top = (e.clientY + 8) + 'px';
-    var under = document.elementFromPoint(e.clientX, e.clientY);
+    var under = (document.elementFromPoint && document.elementFromPoint(e.clientX, e.clientY)) || e.target;
     drag.colEl = under && under.closest ? under.closest('[data-prcol]') : null;
     $$('#prioView .sp-col').forEach(function (c) { c.classList.toggle('drop', c === drag.colEl); });
   }
@@ -2274,6 +2465,32 @@
     var toId = d.colEl && d.colEl.dataset.prcol;
     var lane = d.colEl ? d.colEl.getAttribute('data-prlane') : null; // null = no swimlanes
     var group = prioGroup;
+    if (d.st) { // story card: the column IS the field value ('' = unset)
+      var stD = t ? storyById(t, d.st) : null;
+      var field = prioStoryCol;
+      if (toId == null || !stD || (stD[field] || '') === toId) { render(); return; }
+      commit('story ' + field, function (s) {
+        var st2 = storyById(RM.itemById(s, d.id) || {}, d.st);
+        if (st2) st2[field] = toId || null;
+      });
+      return;
+    }
+    if (prioFeatCol !== 'phase') { // the column IS the field value ('' = unset)
+      var ff = prioFeatCol;
+      var laneSame = lane == null || prLaneKey(t) === lane;
+      if (toId == null || !t || ((t[ff] || '') === toId && laneSame)) { render(); return; }
+      commit(ff, function (s) {
+        var x = RM.itemById(s, d.id);
+        if (!x) return;
+        if ((x[ff] || '') !== toId) {
+          x[ff] = toId || null;
+          if (ff === 'size' && toId && isScheduled(x) && !x.locked) x.durDays = RM.stretchSpan(s.meta, x.startDay, RM.sizeDays(s, toId)); // as setItemSize
+          if (ff === 'risk') x.riskDays = 0; // as setItemRisk
+        }
+        if (lane != null) { if (group === 'ws') x.workstream = lane; else x.epic = lane; }
+      });
+      return;
+    }
     if (!toId || !t || (t.phaseId === toId && (lane == null || prLaneKey(t) === lane))) { render(); return; }
     commit('move card', function (s) {
       var x = RM.itemById(s, d.id);
@@ -2290,7 +2507,7 @@
   }
 
   // ------------------------------------------------------------ sprinting page
-  // Sprint by sprint: a sidebar of sprints (Unscheduled first) and ONE
+  // Sprint by sprint: a sidebar of sprints (Unscheduled last) and ONE
   // scrolling page of sections, rows per sprint — features or stories.
   // Dragging a row to another sprint moves it on the timeline (start = that
   // sprint's first day, span kept, stories ride along) and reorders the
@@ -2308,19 +2525,28 @@
       return num == null ? it.startDay == null : featIn;
     });
   }
+  // row-level match: the text filter plus the phase / epic / workstream dropdowns
+  function sprMatches(it) {
+    if (!matchesFilter(it)) return false;
+    if (sprFPhase != null && it.phaseId !== sprFPhase) return false;
+    if (sprFEpic != null && (it.epic || '') !== sprFEpic) return false;
+    if (sprFWs != null && (it.workstream || '') !== sprFWs) return false;
+    return true;
+  }
+  function sprFilterOn() { return !!filterText || sprFPhase != null || sprFEpic != null || sprFWs != null; }
   function sprSections() {
     var meta = state.meta;
-    var nums = [null].concat(sprintNums());
+    var nums = sprintNums().concat([null]); // Unscheduled trails the timeline
     return nums.map(function (n) {
       var items = n == null
-        ? state.items.filter(function (it) { return it.startDay == null && matchesFilter(it); })
-        : itemsInSprint(n);
+        ? state.items.filter(function (it) { return it.startDay == null && sprMatches(it); })
+        : itemsInSprint(n).filter(sprMatches);
       var inIds = {};
       items.forEach(function (it) { inIds[it.id] = true; });
       var feats = [];
       if (sprLevel === 'story') {
         state.items.forEach(function (it) {
-          if (!matchesFilter(it)) return;
+          if (!sprMatches(it)) return;
           var sts = sprStoriesOf(it, n, !!inIds[it.id]);
           if (sts.length) feats.push({ it: it, stories: sts });
         });
@@ -2403,14 +2629,33 @@
       '<div class="spv-sechd"><h3>' + esc(sec.title) + '</h3>' +
       (sec.dates ? '<span class="spv-secdates">' + esc(sec.dates) + '</span>' : '') +
       '<span class="pr-lanect">' + sec.count + '</span></div>' +
-      '<div class="spv-rows">' + (body || '<div class="spv-empty">Nothing here' + (filterText ? ' matches' : '') + '. Drop a row to move it into this sprint.</div>') + '</div>' +
+      '<div class="spv-rows">' + (body || '<div class="spv-empty">Nothing here' + (sprFilterOn() ? ' matches' : '') + '. Drop a row to move it into this sprint.</div>') + '</div>' +
       (sprLevel === 'feature' ? '<button class="spv-add" data-spadd="' + sec.key + '"><i data-lucide="plus"></i>Add feature</button>' : '') +
       '</section>';
   }
   function renderSprintPage() {
     var host = $('#sprintView');
     if (!host) return;
+    if (sprFPhase != null && !state.phases.some(function (p) { return p.id === sprFPhase; })) sprFPhase = null;
+    if (sprFWs != null && !state.meta.workstreamsEnabled) sprFWs = null;
     var secs = sprSections();
+    // filter buttons wear what they picked (phase name, epic icon, workstream dot) and a blue outline
+    var fPh = sprFPhase == null ? null : state.phases.filter(function (p) { return p.id === sprFPhase; })[0];
+    var phaseFilterDd = state.phases.length > 1
+      ? '<button class="dd-btn' + (fPh ? ' pr-on' : '') + '" data-spdd="fphase" title="Filter by phase">' +
+        '<span class="dd-label"><i data-lucide="milestone"></i>' + (fPh ? esc(fPh.name) : 'All phases') + '</span>' +
+        '<i data-lucide="chevron-down"></i></button>' : '';
+    var epicFilterDd = allEpics().length
+      ? '<button class="dd-btn' + (sprFEpic == null ? '' : ' pr-on') + '" data-spdd="fepic" title="Filter by epic">' +
+        '<span class="dd-label">' + (sprFEpic == null ? '<i data-lucide="tag"></i>All epics'
+          : '<i data-lucide="' + (sprFEpic ? (RM.iconForEpic(state, sprFEpic) || 'tag') : 'tag') + '"></i>' + esc(sprFEpic || 'No epic')) + '</span>' +
+        '<i data-lucide="chevron-down"></i></button>' : '';
+    var wsFilterDd = state.meta.workstreamsEnabled
+      ? '<button class="dd-btn' + (sprFWs == null ? '' : ' pr-on') + '" data-spdd="fws" title="Filter by workstream">' +
+        '<span class="dd-label">' + (sprFWs == null ? '<i data-lucide="layers"></i>All workstreams'
+          : '<span class="dd-dot" style="background:#' + (sprFWs ? RM.colorForWs(state, sprFWs) : RM.defaultWsColor(state)) + '"></span>' +
+            esc(sprFWs || RM.defaultWsName(state))) + '</span>' +
+        '<i data-lucide="chevron-down"></i></button>' : '';
     var cur = RM.sprintsEnabled(state.meta) ? currentSprintNum() : null;
     var side = secs.map(function (sec) {
       return '<button class="spv-sbtn' + (sec.num != null && sec.num === cur ? ' today' : '') +
@@ -2427,6 +2672,7 @@
       '<span class="filter-wrap pr-filter"><i data-lucide="search" class="filter-ico" aria-hidden="true"></i>' +
       '<input id="spFilter" type="search" placeholder="Filter rows" aria-label="Filter rows" value="' + esc(filterText) + '">' +
       '<kbd class="kbd filter-kbd" aria-hidden="true">⌘F</kbd></span>' +
+      phaseFilterDd + epicFilterDd + wsFilterDd +
       '</div>' +
       secs.map(sprSectionHtml).join('') + '</div></div>';
     if (window.lucide) lucide.createIcons();
@@ -2518,6 +2764,34 @@
       openLevelMenu(lv, LEVEL_MODES, sprLevel, function (mode) {
         if (sprLevel !== mode) { sprLevel = mode; saveLocal(); render(); }
       });
+      return;
+    }
+    var fdd = e.target.closest('[data-spdd]');
+    if (fdd) {
+      var fk = fdd.dataset.spdd;
+      if (fk === 'fphase') {
+        openDropdown(fdd, [{ label: '<i>All phases</i>', checked: sprFPhase == null, fn: function () { sprFPhase = null; render(); } }]
+          .concat(state.phases.map(function (p) {
+            return { label: esc(p.name), checked: sprFPhase === p.id, fn: function () { sprFPhase = p.id; render(); } };
+          })));
+      } else if (fk === 'fepic') {
+        openDropdown(fdd, [{ label: '<i>All epics</i>', checked: sprFEpic == null, fn: function () { sprFEpic = null; render(); } },
+          { label: '<i>— no epic —</i>', checked: sprFEpic === '', fn: function () { sprFEpic = ''; render(); } }]
+          .concat(allEpics().map(function (ep) {
+            return { icon: RM.iconForEpic(state, ep) || 'tag', label: esc(ep), checked: sprFEpic === ep, fn: function () {
+              sprFEpic = ep; render();
+            } };
+          })));
+      } else if (fk === 'fws') {
+        openDropdown(fdd, [{ label: '<i>All workstreams</i>', checked: sprFWs == null, fn: function () { sprFWs = null; render(); } },
+          { label: esc(RM.defaultWsName(state)) + ' <i>(default)</i>', dot: '#' + RM.defaultWsColor(state),
+            checked: sprFWs === '', fn: function () { sprFWs = ''; render(); } }]
+          .concat(allWorkstreams().map(function (w) {
+            return { label: esc(w), dot: '#' + RM.colorForWs(state, w), checked: sprFWs === w, fn: function () {
+              sprFWs = w; render();
+            } };
+          })));
+      }
       return;
     }
     var add = e.target.closest('[data-spadd]');
@@ -3114,7 +3388,7 @@
             esc('Hard deadline' + (lateC ? '\nThe item runs past its deadline' : '')) + '">' +
             (it.deadline ? esc(RM.fmtShort(RM.parseISO(it.deadline))) : '') + '</span>';
         })(),
-        priority: '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') +
+        priority: '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) +
           '" tabindex="0" role="button" data-act="priority" title="' +
           esc(priChipTitle(it)) + '">' + priChipContent(it) + '</span>',
         assignees: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="asg" title="Assignees">' +
@@ -3140,7 +3414,7 @@
       laneInner = cells.join('');
     }
     html.push(
-      '<div class="row item' + (view === 'scoping' ? ' scope' : '') +
+      '<div class="row item' + (view === 'scoping' ? ' scope' : '') + (it.milestone ? ' ms' : '') +
       // when one of its stories is the selection, the feature is only the
       // selection's parent — marked, but never in the selected background
       (isSel(it.id) ? (selStory && selectedId === it.id ? ' sel-parent' : ' selected') : '') + (it.done ? ' done' : '') +
@@ -3175,7 +3449,7 @@
             ? '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size">' + (it.size ? esc(it.size) : (it.milestone ? '' : '·')) + '</span>'
             : '<span class="r-size r-blank"></span>',
           pri: RM.priorityEnabled(state)
-            ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + '" tabindex="0" role="button" data-act="priority" title="' + esc(priChipTitle(it)) + '">' + (priChipContent(it) || '·') + '</span>'
+            ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) + '" tabindex="0" role="button" data-act="priority" title="' + esc(priChipTitle(it)) + '">' + (priChipContent(it) || '·') + '</span>'
             : '<span class="r-risk r-blank"></span>',
           risk: riskChipHtml(),
           dur: it.milestone
@@ -3224,7 +3498,7 @@
                     return '<div class="sc-cell sc-na" data-col="' + key + '" style="width:' + w +
                       'px" title="Features only"></div>';
                   }
-                  var sval = key === 'description' ? st.description : ((st.custom || {})[key] || '');
+                  var sval = RM.storyScopeValue(st, key);
                   return '<div class="sc-cell" data-col="' + key + '" style="width:' + w + 'px">' +
                     '<div class="sc-edit sc-rich" contenteditable="true" data-stscope="' + key + '">' + richDisplay(sval) + '</div></div>';
                 }
@@ -3523,11 +3797,33 @@
     render();
   }
 
+  // the panel is rebuilt from scratch on every render: keep its scroll offset,
+  // and during a disk reload hand focus back to the field that had it
   function renderPanel() {
+    var panel = $('#panel');
+    var keepTop = panel && !panel.hidden ? panel.scrollTop : 0;
+    var ae = document.activeElement;
+    var refocus = reloadingDoc && ae && panel && panel.contains(ae) ? panelFieldSelector(ae) : null;
+    renderPanelInner();
+    if (panel && !panel.hidden && keepTop) panel.scrollTop = keepTop;
+    if (refocus) {
+      var el = panel.querySelector(refocus);
+      if (el && el.focus) el.focus({ preventScroll: true });
+    }
+  }
+  function panelFieldSelector(el) {
+    if (el.id) return '#' + el.id;
+    var f = el.dataset && (el.dataset.f || el.dataset.stf);
+    if (!f) return null;
+    var key = el.dataset.f ? 'data-f' : 'data-stf';
+    return '[' + key + '="' + f + '"]' + (el.dataset.v != null ? '[data-v="' + el.dataset.v + '"]' : '') +
+      (el.dataset.k != null ? '[data-k="' + el.dataset.k + '"]' : '');
+  }
+  function renderPanelInner() {
     var panel = $('#panel');
     var peek = $('#panelPeek');
     // the panel lives on Planning AND Scoping: persistent, collapsible
-    if ((view !== 'planning' && view !== 'scoping') || presentMode) {
+    if (view !== 'planning' && view !== 'scoping') {
       panel.hidden = true; panel.innerHTML = '';
       if (peek) peek.hidden = true;
       return;
@@ -3589,7 +3885,7 @@
         '<div class="seg">' +
         ['<button data-f="priSet" data-v=""' + (!it.priority ? ' class="on"' : '') + ' title="Not set">None</button>']
           .concat(RM.priorityOrderOf(state).map(function (pv) {
-            return '<button data-f="priSet" data-v="' + pv + '"' + (it.priority === pv ? ' class="on"' : '') +
+            return '<button data-f="priSet" data-v="' + pv + '" class="' + (it.priority === pv ? 'on' : '') + priTierClass(pv) + '"' +
               ' title="' + esc(priorityValueLabel(pv)) + '">' + (priLevels ? levelGlyph(pv) : pv) + '</button>';
           })).join('') +
         '</div>';
@@ -3706,11 +4002,11 @@
 
     panel.innerHTML =
       '<div id="panelRz"></div>' +
-      '<div class="p-top"><span class="p-num">#<input class="p-num-edit" data-f="num" value="' + it.num +
-      '" title="Item #"></span>' +
+      '<div class="p-top"><span class="p-lead"><span class="p-num">#<input class="p-num-edit" data-f="num" value="' + it.num +
+      '" style="width:' + (String(it.num).length + 1.6) + 'ch" title="Item #"></span>' +
       (it.milestone ? '<button class="p-mschip" data-act="msstyle" title="Milestone">' +
         MS_STYLE_GLYPHS[RM.msStyleOf(it)] + ' Milestone · ' + msStyleLabel(RM.msStyleOf(it)) + '</button>' : '') +
-      '<button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
+      '</span><button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-f="feature" rows="1" placeholder="Feature name">' + esc(it.feature) + '</textarea>' +
 
       sec('fields', 'Fields', '', fieldEds) +
@@ -3791,7 +4087,7 @@
   function renderStoryPanel(panel, it, st) {
     var epIco = RM.iconForEpic(state, it.epic);
     var fieldEds = panelScopeCols('story').map(function (c) {
-      var v = c.key === 'description' ? st.description : ((st.custom || {})[c.key] || '');
+      var v = RM.storyScopeValue(st, c.key);
       return '<div class="p-fld"><label class="p-lab">' + esc(RM.scopeColLabel(c)) + '</label>' +
         wysHtml('stcol:' + c.key, v, '') + '</div>';
     }).join('');
@@ -3823,7 +4119,7 @@
       ? '<label class="p-lab" style="margin-top:10px">Priority</label><div class="seg">' +
         ['<button data-stf="priority" data-v=""' + (!st.priority ? ' class="on"' : '') + ' title="Not set">None</button>']
           .concat(RM.priorityOrderOf(state, 'story').map(function (pv) {
-            return '<button data-stf="priority" data-v="' + pv + '"' + (st.priority === pv ? ' class="on"' : '') +
+            return '<button data-stf="priority" data-v="' + pv + '" class="' + (st.priority === pv ? 'on' : '') + priTierClass(pv, 'story') + '"' +
               ' title="' + esc(priorityValueLabel(pv, 'story')) + '">' + (stPriLevels ? levelGlyph(pv) : pv) + '</button>';
           })).join('') + '</div>'
       : '';
@@ -3856,7 +4152,6 @@
       '</div><div class="m-hint">Stories inherit workstream and epic from their feature.</div></div></div>' +
 
       sec2('fields', 'Fields', fieldEds) +
-      sec2('ac', 'Acceptance criteria', wysHtml('stac', st.ac, 'When is it done?')) +
       sec2('people', 'People',
         '<label class="p-lab">Assignees</label>' +
         '<div class="chips">' +
@@ -4458,8 +4753,8 @@
 
   // rich editors commit on blur (contenteditable has no change event):
   //   col:<key>   — an item's scope column
-  //   stcol:<key> — a story's scope column ('description' maps to st.description)
-  //   stac        — a story's acceptance criteria
+  //   stcol:<key> — a story's scope column (Description / Acceptance criteria
+  //                 are story fields; the rest live in st.custom)
   $('#panel').addEventListener('focusout', function (e) {
     var ed = e.target.classList && e.target.classList.contains('wz-ed') ? e.target : null;
     if (!ed || !ed.dataset.f) return;
@@ -4470,22 +4765,16 @@
     if (!it) return;
     var f = ed.dataset.f;
     var v = sanitizeHtml(ed.innerHTML);
-    if (selStory && (f === 'stac' || f.indexOf('stcol:') === 0)) {
+    if (selStory && f.indexOf('stcol:') === 0) {
       var st = storyById(it, selStory);
       if (!st) return;
-      var cur = f === 'stac' ? st.ac
-        : (f === 'stcol:description' ? st.description : ((st.custom || {})[f.slice(6)] || ''));
+      var cur = RM.storyScopeValue(st, f.slice(6));
       if (v === cur || v === richDisplay(cur)) return;
       var stId = selStory;
       commit('story field', function (s) {
         var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
         if (!st2) return;
-        if (f === 'stac') st2.ac = v;
-        else if (f === 'stcol:description') st2.description = v;
-        else {
-          if (!st2.custom) st2.custom = {};
-          if (v) st2.custom[f.slice(6)] = v; else delete st2.custom[f.slice(6)];
-        }
+        RM.setStoryScopeValue(st2, f.slice(6), v);
       });
       return;
     }
@@ -5869,16 +6158,12 @@
     var sSt = sIt && storyById(sIt, sStId);
     if (!sSt) return;
     var sVal = sanitizeHtml(e.target.innerHTML);
-    var sCur = sf === 'description' ? sSt.description : ((sSt.custom || {})[sf] || '');
+    var sCur = RM.storyScopeValue(sSt, sf);
     if (sVal === sCur || sVal === richDisplay(sCur)) return;
     commit('story field', function (s) {
       var st2 = storyById(RM.itemById(s, sItemId) || {}, sStId);
       if (!st2) return;
-      if (sf === 'description') st2.description = sVal;
-      else {
-        if (!st2.custom) st2.custom = {};
-        if (sVal) st2.custom[sf] = sVal; else delete st2.custom[sf];
-      }
+      RM.setStoryScopeValue(st2, sf, sVal);
     });
   });
 
@@ -7303,14 +7588,14 @@
     requestAnimationFrame(renderArrows);
   }, { passive: false });
 
-  // floating zoom / expand cluster (bottom right of the timeline)
+  // floating zoom cluster (bottom right of the timeline)
   function syncZoomCtl() {
     var z = $('#zoomCtl');
     if (z) z.hidden = !(view === 'planning' || view === 'budget');
     // the cluster sits above the Resources panel when that is visible
     var rp = $('#resPanel');
     document.documentElement.style.setProperty('--res-total',
-      (rp && view === 'planning' && !presentMode ? rp.offsetHeight : 0) + 'px');
+      (rp && view === 'planning' ? rp.offsetHeight : 0) + 'px');
   }
   $('#zoomInBtn').addEventListener('click', function () { zoomBy(1.2); });
   $('#zoomOutBtn').addEventListener('click', function () { zoomBy(1 / 1.2); });
@@ -8592,6 +8877,16 @@
         '<div class="su-schemes">' + storyPriRows + '</div>' +
         '<div class="m-hint">Stories rank on their own ladder — Critical / High / Medium / Low by default. RICE scores features only.</div>' +
         '</section>',
+      apps:
+        '<section class="su-card"><h2>Apps</h2>' +
+        '<div class="m-hint" style="margin:0 0 10px">Which tabs this project shows. Turning an app off hides its tab; its data stays in the document.</div>' +
+        RM.APPS.map(function (a) {
+          var fixed = a[0] === 'planning';
+          return '<label class="p-check su-app' + (fixed ? ' fixed' : '') + '" title="' + esc(a[3]) + '">' +
+            '<input type="checkbox" data-suapp="' + a[0] + '"' + (RM.appEnabled(state, a[0]) ? ' checked' : '') + (fixed ? ' disabled' : '') + '> ' +
+            '<i data-lucide="' + a[2] + '"></i>' + esc(a[1]) + '<span class="su-app-desc">' + esc(a[3]) + '</span></label>';
+        }).join('') +
+        '</section>',
       appearance:
         '<section class="su-card">' + personalFieldsHtml('appearance') +
         '<div class="m-hint">System follows your OS.</div>' +
@@ -8637,6 +8932,7 @@
   var SETUP_SECTIONS = [
     ['Project', [
       ['timeline', 'Timeline', 'calendar-range'],
+      ['apps', 'Apps', 'layout-grid'],
       ['phases', 'Phases', 'flag'],
       ['workstreams', 'Workstreams', 'layers'],
       ['team', 'Team', 'users'],
@@ -8680,6 +8976,13 @@
       var wsOn = t.checked;
       commit('workstream feature', function (s2) { s2.meta.workstreamsEnabled = wsOn; });
       toast('Workstreams ' + (wsOn ? 'enabled' : 'disabled'));
+      return;
+    }
+    if (t.dataset.suapp) {
+      var appKey = t.dataset.suapp, appOn = t.checked;
+      var appName = (RM.APPS.filter(function (a) { return a[0] === appKey; })[0] || [])[1] || appKey;
+      commit('app ' + (appOn ? 'on' : 'off'), function (s2) { s2.meta.apps[appKey] = appOn; });
+      toast(appName + (appOn ? ' enabled' : ' hidden'));
       return;
     }
     if (t.dataset.suholname != null || t.dataset.suholstart != null || t.dataset.suholend != null) {
@@ -9709,8 +10012,10 @@
       '<div class="sp-hero">' +
       '<div class="tb-mark sp-mark" aria-hidden="true"><span></span><span></span><span></span></div>' +
       '<div class="sp-brand"><h1>Headway</h1><div class="sp-sub">Roadmap planner</div></div>' +
+      '<div class="sp-hero-btns">' +
       '<button data-sp-settings title="Personal settings"><i data-lucide="settings"></i>Settings</button>' +
-      '</div>' +
+      (desktop ? updateButtonHtml() : '') +
+      '</div></div>' +
       '<div class="sp-actions">' +
       '<button class="primary sp-big" data-sp-new><i data-lucide="file-plus-2"></i>New project…</button>' +
       '<button class="sp-big" data-sp-opendlg><i data-lucide="folder-open"></i>Open…</button>' +
@@ -9719,7 +10024,7 @@
       '<div class="sp-recents">' +
       ((continueCard + rows) || '<div class="sp-empty">Nothing yet — projects you create or open appear here.</div>') +
       '</div>' +
-      (appVersion() ? '<div class="sp-version">Headway ' + esc(appVersion()) + '</div>' : '') +
+      (appVersion() ? '<div class="sp-version"><button class="sp-verbtn" data-sp-notes title="What\u2019s new in this version">Headway ' + esc(appVersion()) + '</button></div>' : '') +
       '</div>';
     if (window.lucide) lucide.createIcons();
   }
@@ -9728,6 +10033,88 @@
   // has no version of its own)
   function appVersion() {
     return (window.HeadwayDesktop && window.HeadwayDesktop.appVersion) || '';
+  }
+
+  // ---- start page update button (desktop only). Mirrors the shared updater
+  // in desktop.js: idle → "Check for updates", busy → "Checking…" /
+  // "Downloading…", ready → a pulsing "Update to x.y.z" that installs.
+  function updater() { return (window.HeadwayDesktop && window.HeadwayDesktop.updater) || null; }
+  function updateButtonHtml() {
+    var u = updater();
+    var st = u ? u.state : 'idle';
+    var label, icon = 'refresh-cw', extra = '';
+    if (st === 'checking') { label = 'Checking…'; extra = ' disabled'; }
+    else if (st === 'downloading') { label = 'Downloading ' + esc(u.version) + '…'; extra = ' disabled'; }
+    else if (st === 'ready') { label = 'Update to ' + esc(u.version); extra = ' class="sp-update-ready"'; icon = 'arrow-down-circle'; }
+    else if (st === 'installing') { label = 'Updating…'; extra = ' disabled'; }
+    else { label = 'Check for updates'; }
+    return '<button data-sp-update title="' + (st === 'ready' ? 'Version ' + esc(u.version) + ' downloaded \u2014 install and restart' : 'Check GitHub for a newer Headway') + '"' + extra + '>' +
+      '<i data-lucide="' + icon + '"></i>' + label + '</button>';
+  }
+  function updateButtonClick() {
+    var u = updater();
+    if (!u) { toast('Updates are only available in the desktop app'); return; }
+    if (u.state === 'ready') u.install();
+    else u.check(true);
+  }
+
+  // ---- release notes: the bundled CHANGELOG.md, one "## <version>" section
+  // per release. Shown once per version after an update (and on first
+  // launch); the version footer reopens it any time.
+  var NOTES_SEEN_KEY = 'headway-notes-seen-v1';
+  var changelogText = null; // cached CHANGELOG.md
+  function releaseNotesFor(md, version) {
+    if (!md || !version) return '';
+    var v = String(version).replace(/^v/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var m = String(md).replace(/\r\n?/g, '\n')
+      .match(new RegExp('^## ' + v + '(?=\\s|$)[^\\n]*\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))', 'm'));
+    return m ? m[1].trim() : '';
+  }
+  function loadChangelog() {
+    if (changelogText !== null) return Promise.resolve(changelogText);
+    if (typeof fetch !== 'function') return Promise.resolve('');
+    return fetch('CHANGELOG.md').then(function (r) { return r.ok ? r.text() : ''; })
+      .catch(function () { return ''; })
+      .then(function (t) { changelogText = t || ''; return changelogText; });
+  }
+  function releaseNotesModal(version, notes) {
+    var body = notes
+      ? (window.HeadwayAI && HeadwayAI.md ? HeadwayAI.md(notes) : '<pre>' + esc(notes) + '</pre>')
+      : '<p class="m-hint">No release notes for this version.</p>';
+    openModal(
+      '<div class="modal notes-modal" style="width:520px">' +
+      '<div class="m-head"><h2>What\u2019s new in Headway ' + esc(version) + '</h2><button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
+      '<div class="m-body"><div class="notes-md">' + body + '</div>' +
+      '<div class="m-hint notes-all"><a href="https://github.com/smo-key/headway/releases" target="_blank" rel="noopener">All releases on GitHub</a></div></div>' +
+      '<div class="m-foot"><button data-m="ok" class="primary">Got it</button></div></div>',
+      function (host) {
+        $('[data-m=x]', host).onclick = closeModal;
+        $('[data-m=ok]', host).onclick = closeModal;
+      });
+  }
+  // open the notes for the running version (md: optional preloaded text)
+  function openReleaseNotes(md) {
+    var v = appVersion();
+    if (!v) return;
+    var show = function (text) { releaseNotesModal(v, releaseNotesFor(text, v)); };
+    if (typeof md === 'string') show(md);
+    else loadChangelog().then(show);
+  }
+  // once per version: called by desktop.js when the app version is known
+  function maybeShowReleaseNotes(md) {
+    var v = appVersion();
+    if (!v) return false;
+    var seen = '';
+    try { seen = localStorage.getItem(NOTES_SEEN_KEY) || ''; } catch (e) { /* storage optional */ }
+    if (seen === v) return false;
+    try { localStorage.setItem(NOTES_SEEN_KEY, v); } catch (e) { /* storage optional */ }
+    var go = function (text) {
+      var notes = releaseNotesFor(text, v);
+      if (notes) releaseNotesModal(v, notes); // nothing to say → stay quiet
+    };
+    if (typeof md === 'string') go(md);
+    else loadChangelog().then(go);
+    return true;
   }
 
   $('#startPage').addEventListener('click', function (e) {
@@ -9745,6 +10132,8 @@
       return;
     }
     if (e.target.closest('[data-sp-settings]')) { personalSettingsModal(); return; }
+    if (e.target.closest('[data-sp-update]')) { updateButtonClick(); return; }
+    if (e.target.closest('[data-sp-notes]')) { openReleaseNotes(); return; }
   });
   $('#startPage').addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -9942,19 +10331,35 @@
     e.returnValue = ''; // legacy engines need the assignment to show the prompt
   });
 
-  function loadWorkbookBuffer(buf, name, quiet) {
+  // reload = the open file changed on disk underneath us: the DATA updates,
+  // the screen does not — view, prefs, selection, scroll offsets, open
+  // dialogs and the field being edited all stay exactly where they were
+  function loadWorkbookBuffer(buf, name, reload) {
     return RMExcel.importWorkbook(buf).then(function (r) {
-      if (r.ui) applyUi(r.ui); // the file carries the browser prefs too
       // the file's name IS the roadmap's title (minus .xlsx) — a rename on
       // disk or a differing embedded title resolves in the filename's favor
       if (name) r.state.meta.title = titleFromFileName(name);
+      if (reload) {
+        // keep whatever selection still exists in the new document
+        var keepSel = selectedId && RM.itemById(r.state, selectedId) ? selectedId : null;
+        var keepStory = keepSel && selStory && storyById(RM.itemById(r.state, keepSel), selStory) ? selStory : null;
+        var keepMulti = multiSel ? multiSel.filter(function (id) { return !!RM.itemById(r.state, id); }) : null;
+        selectedId = keepSel;
+        selStory = keepStory;
+        reloadingDoc = true;
+        try { adoptState(r.state); } finally { reloadingDoc = false; }
+        if (keepMulti && keepMulti.length > 1) { multiSel = keepMulti; render(); }
+        updateSaveBtn();
+        return;
+      }
+      if (r.ui) applyUi(r.ui); // the file carries the browser prefs too
       adoptState(r.state); // fresh from disk — matches its file
       updateSaveBtn();
       selectedId = null;
       enterEditor(); // opening a file always lands in the editor
       // a clean tool-state load needs no announcement; parsing a foreign
       // template layout is worth a note
-      if (!quiet && r.source !== 'tool') {
+      if (r.source !== 'tool') {
         toast('Parsed “' + name + '” from the template layout');
       }
     });
@@ -9982,6 +10387,8 @@
     menuItems: menuItems,
     noteRecent: noteRecent,
     renderStartPage: renderStartPage,
+    maybeShowReleaseNotes: maybeShowReleaseNotes,
+    openReleaseNotes: openReleaseNotes,
     openModal: openModal,
     closeModal: closeModal,
     openDropdown: openDropdown,
@@ -10030,6 +10437,7 @@
       },
       setView: function (v) {
         if (['planning', 'scoping', 'setup', 'budget', 'reports', 'history', 'prio', 'sprints'].indexOf(v) === -1) return false;
+        if (!RM.appEnabled(state, v)) return false; // switched off in Setup → Apps
         flushPanelEdit();
         view = v;
         if (view === 'history') { vhSel = null; vhPick = []; vhTab = null; }
@@ -10073,7 +10481,6 @@
       if (selectedEdge) { selectedEdge = null; requestAnimationFrame(renderArrows); return; }
       if (multiSel) { multiSel = null; render(); return; } // collapse to the anchor first
       if (selectedId) { select(null); return; }
-      if (presentMode) { setPresent(false); return; }
       return;
     }
     // on the start page only Escape (above, for its modals) applies
@@ -10176,20 +10583,6 @@
   });
 
   window.addEventListener('resize', function () { requestAnimationFrame(renderArrows); });
-
-  // timeline-only preview: hides the topbar and the frozen left pane; the
-  // floating minimize button (or Esc) restores the full UI
-  function setPresent(on) {
-    presentMode = on;
-    var pb = $('#btnPresent');
-    if (pb) {
-      pb.innerHTML = '<i data-lucide="' + (on ? 'minimize-2' : 'maximize-2') + '"></i>';
-      pb.title = on ? 'Exit expand (Esc)' : 'Expand';
-      if (window.lucide) lucide.createIcons();
-    }
-    render();
-  }
-  $('#btnPresent').addEventListener('click', function () { setPresent(!presentMode); });
 
   // ------------------------------------------------------------ png export
   function exportModal() {
@@ -10483,6 +10876,9 @@
     saveFileName: saveFileName,
     getValidation: function () { return validation; },
     templateState: templateState,
+    releaseNotesFor: releaseNotesFor,
+    maybeShowReleaseNotes: maybeShowReleaseNotes,
+    openReleaseNotes: openReleaseNotes,
     setExportSink: function (fn) { exportSink = typeof fn === 'function' ? fn : null; }
   };
 })();

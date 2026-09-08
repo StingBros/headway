@@ -29,6 +29,33 @@
   AI.CHAT_KEY = 'headway-ai-chat-v1';  // last conversation (file bytes dropped)
   AI.UI_KEY = 'headway-ai-ui-v1';      // drawer open / width
   AI.EFFORTS = [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['max', 'Max']];
+  // gateways speak OpenAI's reasoning_effort, which knows three levels
+  AI.GATEWAY_EFFORTS = AI.EFFORTS.slice(0, 3);
+  // per-model facts learnt from the gateway (`/model_group/info`):
+  // { '<model id>': { reasoning: bool } }; null until fetched
+  AI.modelInfo = null;
+  AI.modelInfoBase = '';
+  // 'bedrock/global.us.claude-opus-5' -> 'claude-opus-5' for labels only:
+  // the last path segment, minus leading provider / region / vendor tokens
+  AI.shortModel = function (id) {
+    var s = String(id || '');
+    s = s.slice(s.lastIndexOf('/') + 1);
+    var pre = /^(global|us|eu|ap|apac|anthropic|amazon|meta|mistral|cohere|ai21|google|openai|azure|bedrock|vertex_ai|vertex)\./i;
+    while (pre.test(s)) s = s.replace(pre, '');
+    return s;
+  };
+  // effort levels a provider/model accepts: the CLI takes all four; a gateway
+  // model offers OpenAI's three when it reasons, none when it doesn't, and
+  // every level while the gateway has not said
+  AI.effortsFor = function (s) {
+    if (!s || s.provider === 'claude') return AI.EFFORTS.slice();
+    var info = AI.modelInfo && AI.modelInfo[s.model];
+    if (!info) return AI.EFFORTS.slice();
+    return info.reasoning ? AI.GATEWAY_EFFORTS.slice() : [];
+  };
+  AI.effortAllowed = function (s) {
+    return !!(s && s.effort) && AI.effortsFor(s).some(function (e) { return e[0] === s.effort; });
+  };
   AI.CLAUDE_MODELS = [['sonnet', 'Sonnet'], ['opus', 'Opus'], ['fable', 'Fable'], ['haiku', 'Haiku']];
   AI.DEFAULTS = {
     provider: 'litellm', baseUrl: '', apiKey: '', model: '', headers: '',
@@ -231,7 +258,7 @@
     var o = clone(it);
     o.start = isoOfDay(meta, it.startDay);
     o.end = it.startDay != null && it.durDays != null ? spanEndIso(meta, it.startDay, it.durDays) : null;
-    ['description', 'enables', 'outOfScope', 'notes', 'extDeps'].forEach(function (k) { o[k] = RM.htmlToText(it[k]); });
+    ['description', 'ac', 'enables', 'outOfScope', 'notes', 'extDeps'].forEach(function (k) { o[k] = RM.htmlToText(it[k]); });
     o.stories = (it.stories || []).map(function (s) {
       var so = clone(s);
       so.start = isoOfDay(meta, s.startDay);
@@ -443,7 +470,7 @@
         changed.push(k);
       } else if (k === '__phases') {
         /* internal */
-      } else if (['description', 'enables', 'outOfScope', 'notes', 'extDeps', 'ac'].indexOf(k) !== -1) {
+      } else if (['description', 'ac', 'enables', 'outOfScope', 'notes', 'extDeps'].indexOf(k) !== -1) {
         target[k] = textToHtml(v);
         changed.push(k);
       } else {
@@ -658,7 +685,7 @@
     '- Time is counted in working days from meta.timelineStart (weekends and non-work days do not exist in the index). Holidays stretch bars. A sprint = meta.weeksPerSprint weeks; sprint numbers count from meta.sprintAnchor / sprintAnchorNum. Tools accept and report ISO dates; day indexes appear in raw sections.',
     '- Phases hold features (state.phases; each item has phaseId). bucket=true phases are backlog shelves (Next / Future).',
     '- Features (state.items) have num (the user-facing #id), feature (title), workstream, epic, size, risk, priority, deps (numbers of features that must finish first), startDay/durDays (null = unscheduled), deadline, milestone, locked, done, headcount, teamType, assignees (team ids), rich-text fields (description, enables, outOfScope, notes, extDeps — plain text is fine when writing), custom column values, jiraKey, and stories.',
-    '- Stories belong to a feature: id, title, done, size, priority, risk, description, ac (acceptance criteria), optional own startDay/durDays, deadline, assignees, jiraKey.',
+    '- Stories belong to a feature: id, title, done, size, priority, risk, description, ac (acceptance criteria — a built-in column shown on stories by default), optional own startDay/durDays, deadline, assignees, jiraKey.',
     '- Sizing schemes: feature sizes (t-shirt XS–XL with working days per size in meta.sizeDays, or story points), story sizes, risk (none / L-M-H …), priority (none, MoSCoW M/S/C/W, levels C/H/M/L, RICE). Values are validated against the active scheme; read the summary before setting them.',
     '- Team (state.team): people or seats with role, rate-card type, workstreams, capacity (heads at 40 h; 0.5 = half-time), hourly rate and cost, weekHours overrides. Capacity checks only run when meta.capacityEnabled.',
     '- Workstreams carry colour (wsColors, order in wsOrder); epics carry a lucide icon (epicIcons) and optionally a Jira epic key (epicJira).',
@@ -910,7 +937,7 @@
   };
   openai.body = function (s, system, conv, withEffort) {
     var b = { model: s.model, messages: openai.messages(system, conv), stream: true, tools: openai.tools(), tool_choice: 'auto', stream_options: { include_usage: true } };
-    if (withEffort && s.effort) b.reasoning_effort = openai.effort(s.effort);
+    if (withEffort && AI.effortAllowed(s)) b.reasoning_effort = openai.effort(s.effort);
     return b;
   };
   // -> Promise<{ text, thinking, thinkingBlocks, toolCalls }>
@@ -961,6 +988,41 @@
     }).then(function (j) {
       var arr = Array.isArray(j) ? j : (j.data || j.models || []);
       return arr.map(function (m) { return typeof m === 'string' ? m : (m.id || m.name || ''); }).filter(Boolean).sort();
+    });
+  };
+
+  // GET /model_group/info (LiteLLM) -> { id: { reasoning } }; resolves to
+  // null when the gateway has no such endpoint, so callers keep the defaults
+  openai.modelInfo = function (s) {
+    var f = fetchFn();
+    if (!f) return Promise.resolve(null);
+    var h = openai.headers(s);
+    delete h['Content-Type'];
+    h.Accept = 'application/json';
+    return f(AI.baseOf(s.baseUrl).replace(/\/v1$/, '') + '/model_group/info', { method: 'GET', headers: h }).then(function (res) {
+      if (!res.ok) return null;
+      return res.json().then(function (j) {
+        var arr = Array.isArray(j) ? j : (j.data || []);
+        var map = {};
+        arr.forEach(function (g) {
+          var id = g.model_group || g.model_name || g.id;
+          if (!id) return;
+          var params = g.supported_openai_params || [];
+          map[id] = { reasoning: g.supports_reasoning === true || params.indexOf('reasoning_effort') !== -1 };
+        });
+        return map;
+      });
+    }).catch(function () { return null; });
+  };
+  // refresh the per-model facts once per gateway; re-renders the drawer header
+  AI.refreshModelInfo = function (force) {
+    var s = AI.loadSettings();
+    if (s.provider !== 'litellm' || !s.baseUrl) return Promise.resolve();
+    if (!force && AI.modelInfoBase === s.baseUrl) return Promise.resolve();
+    AI.modelInfoBase = s.baseUrl;
+    return openai.modelInfo(s).then(function (map) {
+      AI.modelInfo = map;
+      if (drawer) rebuildHeader();
     });
   };
 
@@ -1280,9 +1342,6 @@
     var provSeg = '<div class="seg" id="aiProvSeg">' +
       '<button data-aiprov="litellm"' + (s.provider === 'litellm' ? ' class="on"' : '') + '>LiteLLM gateway</button>' +
       '<button data-aiprov="claude"' + (s.provider === 'claude' ? ' class="on"' : '') + '>Claude subscription</button></div>';
-    var effortSeg = '<div class="seg" id="aiEffortSeg">' + AI.EFFORTS.map(function (e) {
-      return '<button data-aieffort="' + e[0] + '"' + (s.effort === e[0] ? ' class="on"' : '') + '>' + e[1] + '</button>';
-    }).join('') + '</div>';
     var litellm =
       '<div id="aiLitellm"' + (s.provider === 'litellm' ? '' : ' hidden') + '>' +
       '<div class="m-sec"><label>Gateway URL</label>' + inp('aiBase', s.baseUrl, 'https://litellm.example.com') +
@@ -1310,9 +1369,7 @@
     return '<h2>Provider</h2>' +
       '<div class="m-sec">' + provSeg + '</div>' +
       litellm + claudeUi +
-      '<h2 style="margin-top:22px">Effort</h2>' +
-      '<div class="m-sec">' + effortSeg + '<div class="m-hint">How hard the model thinks. Also switchable in the assistant header.</div></div>' +
-      '<div class="m-hint">Stored on this machine only. The assistant can read and edit the open project and your preferences; every edit is undoable and shows in Version history as “you · AI”.</div>' +
+      '<div class="m-hint" style="margin-top:22px">Stored on this machine only. The assistant can read and edit the open project and your preferences; every edit is undoable and shows in Version history as “you · AI”.</div>' +
       '<div class="p-row" style="margin-top:12px"><button id="aiOpen" class="primary fixed">Open assistant</button></div>';
   };
   AI.wireSettings = function (host) {
@@ -1330,12 +1387,6 @@
         host.querySelectorAll('[data-aiprov]').forEach(function (b) { b.classList.toggle('on', b === pb); });
         $('#aiLitellm').hidden = pb.dataset.aiprov !== 'litellm';
         $('#aiClaude').hidden = pb.dataset.aiprov !== 'claude';
-        return;
-      }
-      var eb = e.target.closest('[data-aieffort]');
-      if (eb) {
-        save({ effort: eb.dataset.aieffort });
-        host.querySelectorAll('[data-aieffort]').forEach(function (b) { b.classList.toggle('on', b === eb); });
       }
     });
     $('#aiBase').addEventListener('change', function () { save({ baseUrl: $('#aiBase').value.trim() }); });
@@ -1353,6 +1404,7 @@
       openai.models(s).then(function (ids) {
         $('#aiModelList').innerHTML = ids.map(function (id) { return '<option value="' + esc(id) + '">'; }).join('');
         AI.modelCache = ids;
+        AI.refreshModelInfo(true);
         btn.disabled = false; btn.textContent = 'Load';
         app().toast(ids.length + ' model' + (ids.length === 1 ? '' : 's') + ' available — pick one in the Model field');
         $('#aiModel').focus();
@@ -1386,13 +1438,6 @@
   }
   function saveUi() { try { root.localStorage.setItem(AI.UI_KEY, JSON.stringify(ui)); } catch (e) { /* storage optional */ } }
 
-  function ago(t) {
-    var m = Math.round((Date.now() - t) / 60000);
-    if (m < 1) return 'just now';
-    if (m < 60) return m + ' min ago';
-    var d = new Date(t);
-    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
-  }
   function toolTitle(r) {
     var a = r.args || {};
     if (!r.ok) return r.name + ' failed';
@@ -1421,7 +1466,7 @@
     if (m.role === 'user') {
       return '<div class="ai-msg user"><div class="ai-bubble">' + esc(m.text).replace(/\n/g, '<br>') +
         (m.files && m.files.length ? '<div class="ai-files">' + m.files.map(function (f) { return attachChip(f); }).join('') + '</div>' : '') +
-        '</div><div class="ai-meta">' + (m.t ? ago(m.t) : '') + '</div></div>';
+        '</div></div>';
     }
     if (m.role !== 'assistant') return '';
     var parts = [];
@@ -1438,7 +1483,7 @@
     });
     if (m.error) parts.push('<div class="ai-err"><i data-lucide="circle-alert"></i>' + esc(m.error) + '</div>');
     if (m.streaming && !m.thinking && !m.text) parts.push('<div class="ai-wait"><span></span><span></span><span></span></div>');
-    return '<div class="ai-msg asst" data-idx="' + idx + '">' + parts.join('') + (m.model && !m.streaming ? '<div class="ai-meta">' + esc(m.model) + '</div>' : '') + '</div>';
+    return '<div class="ai-msg asst" data-idx="' + idx + '">' + parts.join('') + '</div>';
   }
   function truncate(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n) + '\n… (' + (s.length - n) + ' more characters)' : s; }
 
@@ -1450,8 +1495,13 @@
     } else {
       var ids = (AI.modelCache || []).slice();
       if (s.model && ids.indexOf(s.model) === -1) ids.unshift(s.model);
-      modelOpts = ids.length ? ids.map(function (id) { return '<option value="' + esc(id) + '"' + (s.model === id ? ' selected' : '') + '>' + esc(id) + '</option>'; }).join('') : '<option value="">No model</option>';
+      modelOpts = ids.length ? ids.map(function (id) { return '<option value="' + esc(id) + '"' + (s.model === id ? ' selected' : '') + '>' + esc(AI.shortModel(id)) + '</option>'; }).join('') : '<option value="">No model</option>';
     }
+    var efforts = AI.effortsFor(s);
+    var curModel = s.provider === 'claude' ? s.claudeModel : s.model;
+    var effortSel = efforts.length
+      ? '<select id="aiEffortSel" title="Effort">' + efforts.map(function (e) { return '<option value="' + e[0] + '"' + (s.effort === e[0] ? ' selected' : '') + '>' + e[1] + '</option>'; }).join('') + '</select>'
+      : '';
     return '<div id="aiRz"></div>' +
       '<div class="ai-head">' +
       '<span class="ai-title"><i data-lucide="sparkles"></i>Assistant</span>' +
@@ -1465,8 +1515,8 @@
       '<textarea id="aiInput" rows="2" placeholder="Ask about the plan, or tell me what to change… (Shift+Enter for a new line)"></textarea>' +
       '<div class="ai-actions">' +
       '<button id="aiAttach" class="ai-ib" title="Attach files"><i data-lucide="paperclip"></i></button>' +
-      '<select id="aiModelSel" title="Model">' + modelOpts + '</select>' +
-      '<select id="aiEffortSel" title="Effort">' + AI.EFFORTS.map(function (e) { return '<option value="' + e[0] + '"' + (s.effort === e[0] ? ' selected' : '') + '>' + e[1] + '</option>'; }).join('') + '</select>' +
+      '<select id="aiModelSel" title="' + esc(curModel || 'Model') + '">' + modelOpts + '</select>' +
+      effortSel +
       '<input type="file" id="aiFile" multiple hidden accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,text/*,.md,.csv,.json,.txt">' +
       '<span class="ai-hint" id="aiHint"></span>' +
       '<button id="aiSend" class="primary" title="Send  ↵"><i data-lucide="arrow-up"></i></button>' +
@@ -1559,13 +1609,18 @@
     d.querySelector('#aiStop').addEventListener('click', function () { AI.stop(); });
     d.querySelector('#aiAttach').addEventListener('click', function () { d.querySelector('#aiFile').click(); });
     d.querySelector('#aiFile').addEventListener('change', function (e) { addFiles(e.target.files); e.target.value = ''; });
-    d.querySelector('#aiEffortSel').addEventListener('change', function (e) {
+    var effSel = d.querySelector('#aiEffortSel');
+    if (effSel) effSel.addEventListener('change', function (e) {
       var s = AI.loadSettings(); s.effort = e.target.value; AI.saveSettings(s);
     });
     d.querySelector('#aiModelSel').addEventListener('change', function (e) {
       var s = AI.loadSettings();
       if (s.provider === 'claude') s.claudeModel = e.target.value; else s.model = e.target.value;
+      // the effort list follows the model: keep a still-valid pick, else fall back
+      var eff = AI.effortsFor(s);
+      if (eff.length && !eff.some(function (x) { return x[0] === s.effort; })) s.effort = eff[Math.min(1, eff.length - 1)][0];
       AI.saveSettings(s);
+      rebuildHeader();
     });
     ta.addEventListener('input', function () { autosize(ta); });
     ta.addEventListener('keydown', function (e) {
@@ -1628,6 +1683,7 @@
     drawer.hidden = false;
     root.document.body.classList.add('ai-open');
     renderMessages();
+    AI.refreshModelInfo();
     var ta = drawer.querySelector('#aiInput');
     if (ta) ta.focus();
   };
