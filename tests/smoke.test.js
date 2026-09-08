@@ -3432,6 +3432,22 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok(!!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-type'), 'a non-default type shows its icon on the row');
     window.__headway.setItemType(first.id, 'feature');
     ok(!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-type'), 'the default type shows no icon');
+
+    // a type label containing markup renders as text, not HTML, in the
+    // panel dropdown (typeMenuItems must esc() the label)
+    window.HeadwayApp.ai.commit('rename type', (s) => {
+      const bugType = s.meta.itemTypes.find(t => t.key === 'bug');
+      bugType.label = '<b>Bug</b>';
+    });
+    const chip2 = doc.querySelector('#panel [data-act="itype"]');
+    click(chip2);
+    const bugAfterRename = [...doc.querySelectorAll('.menu-list [data-mi]')].find(el => el.textContent.trim().indexOf('<b>Bug</b>') !== -1);
+    ok(!!bugAfterRename && bugAfterRename.innerHTML.indexOf('&lt;b&gt;') !== -1,
+      'a type label with markup renders as escaped text in the dropdown');
+    window.HeadwayApp.ai.commit('rename type', (s) => {
+      const bugType = s.meta.itemTypes.find(t => t.key === 'bug');
+      bugType.label = 'Bug';
+    });
   }
 }
 

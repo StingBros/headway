@@ -1284,11 +1284,14 @@
       t.stories.forEach(function (st) { if (st.id === storyId && RM.itemType(s, key)) st.type = key; });
     });
   }
+  // delete-if-default / set-otherwise: shared by setEpicType and the epic
+  // edit modal's save handler
+  function applyEpicType(s, name, key) {
+    if (!RM.itemType(s, key) || key === RM.defaultTypeFor(s, 'epic')) delete s.epicTypes[name];
+    else s.epicTypes[name] = key;
+  }
   function setEpicType(name, key) {
-    commit('epic type', function (s) {
-      if (!RM.itemType(s, key) || key === RM.defaultTypeFor(s, 'epic')) delete s.epicTypes[name];
-      else s.epicTypes[name] = key;
-    });
+    commit('epic type', function (s) { applyEpicType(s, name, key); });
   }
   // dropdown / submenu entries for a level's types; the current type is
   // listed even when it is no longer allowed there
@@ -1299,7 +1302,7 @@
     var allowed = RM.typesFor(state, kind).map(function (t) { return t.key; });
     return list.map(function (t) {
       var off = allowed.indexOf(t.key) === -1;
-      return { icon: t.icon, label: t.label + (off ? ' (not allowed here)' : ''), checked: t.key === currentKey, fn: function () { onPick(t.key); } };
+      return { icon: t.icon, label: esc(t.label) + (off ? ' (not allowed here)' : ''), checked: t.key === currentKey, fn: function () { onPick(t.key); } };
     });
   }
   function typeChipHtml(act, kind, obj) {
@@ -4404,8 +4407,7 @@
             }
             if (picked) s.epicIcons[name2] = picked;
             else delete s.epicIcons[name2];
-            if (!RM.itemType(s, typeKey) || typeKey === RM.defaultTypeFor(s, 'epic')) delete s.epicTypes[name2];
-            else s.epicTypes[name2] = typeKey;
+            applyEpicType(s, name2, typeKey);
             if (jira) s.epicJira[name2] = jira;
             else delete s.epicJira[name2];
           });
@@ -5533,7 +5535,7 @@
             if (st) { st.startDay = null; st.durDays = null; }
           });
         } } : null,
-        { icon: RM.typeOf(state, stm, 'story').icon, label: 'Type: ' + RM.typeOf(state, stm, 'story').label + '…', fn: function () {
+        { icon: RM.typeOf(state, stm, 'story').icon, label: 'Type: ' + esc(RM.typeOf(state, stm, 'story').label) + '…', fn: function () {
           openContextMenu(cx, cy, typeMenuItems('story', stm.type, function (k) { setStoryType(stmItemId, stmId, k); }));
         } },
         { icon: 'trash-2', label: 'Delete story', fn: function () {
@@ -5566,7 +5568,7 @@
         { sep: true },
         { icon: 'folder-input', label: 'Move to phase…', fn: function () { openContextMenu(cx, cy, movePhaseMenu(itemId)); } },
         { icon: 'tag', label: 'Set epic…', fn: function () { openContextMenu(cx, cy, setEpicMenu(itemId, false)); } },
-        { icon: RM.typeOf(state, it, 'feature').icon, label: 'Type: ' + RM.typeOf(state, it, 'feature').label + '…', fn: function () {
+        { icon: RM.typeOf(state, it, 'feature').icon, label: 'Type: ' + esc(RM.typeOf(state, it, 'feature').label) + '…', fn: function () {
           openContextMenu(cx, cy, typeMenuItems('feature', it.type, function (k) { setItemType(itemId, k); }));
         } },
         state.meta.workstreamsEnabled
@@ -5820,6 +5822,7 @@
         commit('delete epic', function (s) {
           s.items.forEach(function (x) { if (x.epic === epicName) x.epic = ''; });
           delete s.epicColors[epicName];
+          delete s.epicTypes[epicName];
         });
       }, true);
   }
