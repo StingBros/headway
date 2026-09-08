@@ -1267,6 +1267,14 @@
         checked: RM.msStyleOf(it) === sname, fn: function () { setMsStyle(itemId, sname); } };
     });
   }
+  function typeIconMenu(anchor, key) {
+    var t = RM.itemType(state, key);
+    openDropdown(anchor, EPIC_ICONS.map(function (ic) {
+      return { icon: ic, label: ic, checked: !!t && t.icon === ic, fn: function () {
+        commit('type icon', function (s2) { RM.setItemTypeIcon(s2, key, ic); });
+      } };
+    }));
+  }
 
   // panel sections: key -> collapsed override (persisted in UI_KEY);
   // unlisted keys fall back to the defaults below
@@ -4286,7 +4294,8 @@
   // edit an epic's label + icon (applies to every item carrying it)
   var EPIC_ICONS = ['tag', 'star', 'flag', 'rocket', 'target', 'layers', 'database', 'shield',
     'zap', 'globe', 'users', 'wrench', 'chart-line', 'box', 'lightbulb', 'compass',
-    'cpu', 'plug', 'bot', 'flask-conical', 'map', 'workflow', 'network', 'building'];
+    'cpu', 'plug', 'bot', 'flask-conical', 'map', 'workflow', 'network', 'building',
+    'bug', 'check-square', 'list-tree', 'rows-3', 'corner-down-right'];
   function epicEditModal(epicName) {
     var setting = state.epicIcons[epicName] || null;
     var count = state.items.filter(function (x) { return x.epic === epicName; }).length;
@@ -8748,6 +8757,34 @@
         '</div>';
     }).join('');
 
+    var hier = m.hierarchy, anyLvl = RM.anyTypeAnyLevel(state);
+    var levelRows = hier.levels.map(function (lv) {
+      var chips = anyLvl ? '' : RM.itemTypes(state).map(function (t) {
+        var on = lv.types.indexOf(t.key) !== -1;
+        return '<button class="su-hchip' + (on ? ' on' : '') + '" data-suhtype="' + esc(lv.key + ':' + t.key) + '" title="' + (on ? 'Allowed' : 'Not allowed') + ' at this level">' +
+          '<i data-lucide="' + esc(t.icon) + '"></i>' + esc(t.label) + '</button>';
+      }).join('');
+      return '<div class="su-hlevel"><input data-suhlabel="' + lv.key + '" value="' + esc(lv.label) + '" aria-label="Level label">' +
+        '<div class="su-hchips">' + chips + '</div></div>';
+    }).join('');
+    var typeRows2 = RM.itemTypes(state).map(function (t) {
+      return '<tr><td><button class="su-hicon" data-suhticon="' + esc(t.key) + '" title="Icon"><i data-lucide="' + esc(t.icon) + '"></i></button></td>' +
+        '<td><input data-suhtlabel="' + esc(t.key) + '" value="' + esc(t.label) + '" aria-label="Type label"></td>' +
+        '<td><input data-suhtjira="' + esc(t.key) + '" value="' + esc(t.jira) + '" placeholder="Jira issue type" aria-label="Jira issue type"></td>' +
+        '<td class="hol-x"><button data-suhtrm="' + esc(t.key) + '" title="Remove type"><i data-lucide="x"></i></button></td></tr>';
+    }).join('');
+    var hierCard =
+      '<section class="su-card"><h2>Hierarchy</h2>' +
+      '<div class="m-hint">Three levels, top to bottom. Name each level and pick which types it accepts; the first allowed type is the default for new items.</div>' +
+      '<div class="su-hlevels">' + levelRows + '</div>' +
+      (anyLvl ? '<div class="m-hint">Every type is allowed at every level.</div>' : '') +
+      '<label class="p-check" style="margin-top:10px"><input type="checkbox" id="suHierAny"' + (anyLvl ? ' checked' : '') + '> Allow any type at any level</label>' +
+      '<h3 class="su-sub">Types</h3>' +
+      '<table class="hol-table su-htypes"><thead><tr><th></th><th>Label</th><th>Jira issue type</th><th></th></tr></thead><tbody>' + typeRows2 + '</tbody></table>' +
+      '<button id="suHierAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add type</button>' +
+      '<div class="m-hint">Behavior follows the level, not the type: a Bug at the ' + esc(RM.levelLabel(state, 'feature')) + ' level is a bar on the timeline like any other. The Jira name is what sync and the CSV export use.</div>' +
+      '</section>';
+
     // one card set per vertical tab
     var tabBodies = {
       timeline:
@@ -8801,7 +8838,8 @@
         '</section>' +
         '<section class="su-card"><h2>Epics</h2>' +
         '<div class="su-rows">' + (epicRows || '<div class="m-hint">none yet — set an epic on any item to create one</div>') + '</div>' +
-        '</section>',
+        '</section>' +
+        hierCard,
       team:
         '<section class="su-card"><h2>Roles &amp; rate card</h2>' +
         '<div class="su-rc-head"><span></span><span>Cost/h</span><span>Rate/h</span><span></span></div>' +
@@ -8978,6 +9016,10 @@
       toast('Workstreams ' + (wsOn ? 'enabled' : 'disabled'));
       return;
     }
+    if (t.dataset.suhlabel) { var hk2 = t.dataset.suhlabel, hv = t.value; commit('level label', function (s2) { RM.setLevelLabel(s2, hk2, hv); }); return; }
+    if (t.dataset.suhtlabel) { var tk2 = t.dataset.suhtlabel, tlv2 = t.value; commit('rename type', function (s2) { RM.renameItemType(s2, tk2, tlv2); }); return; }
+    if (t.dataset.suhtjira) { var tk3 = t.dataset.suhtjira, jv = t.value; commit('type jira name', function (s2) { RM.setItemTypeJira(s2, tk3, jv); }); return; }
+    if (t.id === 'suHierAny') { var anyOn = t.checked; commit('any type at any level', function (s2) { RM.setAnyTypeAnyLevel(s2, anyOn); }); return; }
     if (t.dataset.suapp) {
       var appKey = t.dataset.suapp, appOn = t.checked;
       var appName = (RM.APPS.filter(function (a) { return a[0] === appKey; })[0] || [])[1] || appKey;
@@ -9186,6 +9228,26 @@
     }
     if (t.dataset.suwsedit) { wsEditModal(t.dataset.suwsedit); return; }
     if (t.dataset.sudefws != null) { defaultWsModal(); return; }
+    if (t.dataset.suhtype) {
+      var parts = t.dataset.suhtype.split(':'), hk = parts[0], tk = parts[1];
+      var wasOn = t.classList.contains('on');
+      var okT = true;
+      commit(wasOn ? 'disallow type' : 'allow type', function (s2) { okT = RM.setTypeAllowed(s2, hk, tk, !wasOn); });
+      if (!okT) toast('A level needs at least one type');
+      return;
+    }
+    if (t.dataset.suhtrm) {
+      var rmTypeKey = t.dataset.suhtrm, okR = true;
+      commit('remove type', function (s2) { okR = RM.removeItemType(s2, rmTypeKey); });
+      if (!okR) toast('That type is the only one allowed at a level');
+      return;
+    }
+    if (t.dataset.suhticon) { typeIconMenu(t, t.dataset.suhticon); return; }
+    if (t.id === 'suHierAdd') {
+      commit('add type', function (s2) { RM.addItemType(s2, 'New type', 'tag', ''); });
+      requestAnimationFrame(function () { var inp = $('#setupView input[data-suhtlabel]:last-of-type'); if (inp) { inp.focus(); inp.select(); } });
+      return;
+    }
     if (t.dataset.suepedit) { epicEditModal(t.dataset.suepedit); return; }
     if (t.dataset.suepdel) { deleteEpicConfirm(t.dataset.suepdel); return; }
     if (t.dataset.suphedit) { phaseModal(t.dataset.suphedit); return; }

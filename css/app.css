@@ -2372,6 +2372,16 @@ body[data-view="planning"] #zoomCtl { bottom: calc(var(--res-total, 0px) + 14px)
 }
 .su-rc-head span:nth-child(2), .su-rc-head span:nth-child(3) { width: 76px; text-align: center; }
 
+.su-hlevels { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.su-hlevel { display: grid; grid-template-columns: 160px 1fr; gap: 10px; align-items: center; }
+.su-hchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.su-hchip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--well); color: var(--ink-2); font-size: 12.5px; cursor: pointer; }
+.su-hchip.on { background: var(--surface); color: var(--ink); border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset; }
+.su-hchip i { width: 13px; height: 13px; }
+.su-sub { font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
+.su-hicon { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; }
+.su-htypes td:first-child { width: 36px; }
+
 /* ------------------------------------------------- reports dashboard */
 #reportsView { display: none; }
 

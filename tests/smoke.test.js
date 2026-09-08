@@ -1182,6 +1182,30 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
+// ---------------------------------------------------------------- hierarchy card in Setup
+{
+  click(doc.querySelector('#btnSetup'));
+  suTab('workstreams');
+  const card = [...doc.querySelectorAll('#setupView .su-card h2')].find(h => h.textContent === 'Hierarchy');
+  ok(!!card, 'Hierarchy card renders in the Workstreams tab');
+  const bugChip = doc.querySelector('button[data-suhtype="feature:bug"]');
+  ok(bugChip && bugChip.classList.contains('on'), 'Bug is allowed at the Feature level by default');
+  click(bugChip);
+  ok(state().meta.hierarchy.levels[1].types.indexOf('bug') === -1, 'clicking a chip disallows the type');
+  click(doc.querySelector('button[data-suhtype="feature:bug"]'));
+  ok(state().meta.hierarchy.levels[1].types.indexOf('bug') !== -1, 'clicking again re-allows it');
+  const lbl = doc.querySelector('input[data-suhlabel="story"]');
+  lbl.value = 'Task'; lbl.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.hierarchy.levels[2].label === 'Task', 'level label edit commits');
+  click(doc.querySelector('#suHierAdd'));
+  ok(state().meta.itemTypes.some(t => t.label === 'New type'), 'Add type appends a record');
+  const any = doc.querySelector('#suHierAny');
+  any.checked = true; any.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.hierarchy.anyTypeAnyLevel === true && !doc.querySelector('button[data-suhtype]'), 'the switch hides the chips');
+  any.checked = false; any.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
 // ---------------------------------------------------------------- reports tab
 {
   ok(!doc.querySelector('#repPanel'), 'the old reports drawer is gone');
