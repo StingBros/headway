@@ -4273,7 +4273,7 @@
         if (m.sep) return '<div class="menu-sep"></div>';
         return '<button data-mi="' + i + '"' + (m.checked ? ' class="on"' : '') + '>' +
           (m.dot ? '<span class="dd-dot" style="background:' + m.dot + '"></span>' : '') +
-          (m.icon ? '<i data-lucide="' + m.icon + '"></i>' : '') +
+          (m.icon ? '<i data-lucide="' + esc(m.icon) + '"></i>' : '') +
           '<span>' + m.label + '</span>' +
           (m.actions ? '<span class="mi-acts">' + m.actions.map(function (a, j) {
             return '<span class="mi-act' + (a.on ? ' on' : '') + '" data-ma="' + i + ':' + j +
@@ -5608,7 +5608,7 @@
       if (m.sep) return '<div class="menu-sep"></div>';
       return '<button data-mi="' + i + '"' + (m.checked ? ' class="on"' : '') + '>' +
         (m.dot ? '<span class="dd-dot" style="background:' + m.dot + '"></span>' : '') +
-        (m.icon ? '<i data-lucide="' + m.icon + '"></i>' : '') +
+        (m.icon ? '<i data-lucide="' + esc(m.icon) + '"></i>' : '') +
         '<span>' + m.label + '</span>' +
         (m.checked ? '<i data-lucide="check" class="mi-check"></i>' : '') +
         '</button>';
@@ -7549,13 +7549,14 @@
     }
     // view
     var snapItems = [];
-    [['feature', esc(lvl('feature', true))], ['story', esc(lvl('story', true))]].forEach(function (k, ki) {
+    [['feature', lvl('feature', true)], ['story', lvl('story', true)]].forEach(function (k, ki) {
       if (ki) snapItems.push({ sep: true });
+      var raw = k[1], labelHtml = esc(raw);
       SNAP_MODES.forEach(function (mode) {
-        snapItems.push({ icon: 'magnet', label: k[1] + ' snap to ' + SNAP_LABELS[mode], checked: snapModeFor(k[0]) === mode, fn: function () {
+        snapItems.push({ icon: 'magnet', label: labelHtml + ' snap to ' + SNAP_LABELS[mode], checked: snapModeFor(k[0]) === mode, fn: function () {
           setSnapMode(k[0], mode);
           saveLocal(); renderTopbar();
-          toast(k[1] + ' snap: ' + SNAP_LABELS[mode]);
+          toast(raw + ' snap: ' + SNAP_LABELS[mode]);
         } });
       });
     });
@@ -9340,7 +9341,7 @@
     if (t.dataset.suhticon) { typeIconMenu(t, t.dataset.suhticon); return; }
     if (t.id === 'suHierAdd') {
       commit('add type', function (s2) { RM.addItemType(s2, 'New type', 'tag', ''); });
-      requestAnimationFrame(function () { var inp = $('#setupView input[data-suhtlabel]:last-of-type'); if (inp) { inp.focus(); inp.select(); } });
+      requestAnimationFrame(function () { var all = $$('#setupView input[data-suhtlabel]'); var inp = all[all.length - 1]; if (inp) { inp.focus(); inp.select(); } });
       return;
     }
     if (t.dataset.suepedit) { epicEditModal(t.dataset.suepedit); return; }

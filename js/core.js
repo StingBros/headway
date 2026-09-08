@@ -2125,13 +2125,13 @@
 
       if (!RM.anyTypeAnyLevel(state)) {
         var okTypes = RM.levelOf(state, 'feature').types;
-        if (okTypes.indexOf(it.type) === -1) {
+        if (okTypes.indexOf(RM.typeOf(state, it, 'feature').key) === -1) {
           add(it, 'warn', 'TYPE_LEVEL', RM.levelLabel(state, 'feature') + ' #' + it.num + ' is a ' + RM.typeOf(state, it, 'feature').label +
             ', which is not allowed at the ' + RM.levelLabel(state, 'feature') + ' level');
         }
         var okStory = RM.levelOf(state, 'story').types;
         (it.stories || []).forEach(function (st) {
-          if (okStory.indexOf(st.type) === -1) {
+          if (okStory.indexOf(RM.typeOf(state, st, 'story').key) === -1) {
             global.push({ level: 'warn', code: 'TYPE_LEVEL', msg: RM.levelLabel(state, 'story') + ' "' + (st.title || '(untitled)') + '" under #' + it.num +
               ' is a ' + RM.typeOf(state, st, 'story').label + ', which is not allowed at the ' + RM.levelLabel(state, 'story') + ' level' });
           }
@@ -2161,7 +2161,7 @@
     if (!RM.anyTypeAnyLevel(state)) {
       var okEpic = RM.levelOf(state, 'epic').types;
       Object.keys(state.epicTypes || {}).forEach(function (name) {
-        if (okEpic.indexOf(state.epicTypes[name]) === -1) {
+        if (okEpic.indexOf(RM.typeOf(state, name, 'epic').key) === -1) {
           global.push({ level: 'warn', code: 'TYPE_LEVEL', msg: RM.levelLabel(state, 'epic') + ' "' + name + '" is a ' + RM.typeOf(state, name, 'epic').label +
             ', which is not allowed at the ' + RM.levelLabel(state, 'epic') + ' level' });
         }

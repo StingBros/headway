@@ -1197,8 +1197,19 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
   const lbl = doc.querySelector('input[data-suhlabel="story"]');
   lbl.value = 'Task'; lbl.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().meta.hierarchy.levels[2].label === 'Task', 'level label edit commits');
-  click(doc.querySelector('#suHierAdd'));
+  // the focus-the-new-row call lands inside a requestAnimationFrame; run it
+  // synchronously here so the assertion below doesn't need to wait a real frame
+  {
+    const realRaf = window.requestAnimationFrame;
+    window.requestAnimationFrame = (cb) => cb();
+    click(doc.querySelector('#suHierAdd'));
+    window.requestAnimationFrame = realRaf;
+  }
   ok(state().meta.itemTypes.some(t => t.label === 'New type'), 'Add type appends a record');
+  const hierAddLabels = [...doc.querySelectorAll('#setupView input[data-suhtlabel]')];
+  const lastHierAddLabel = hierAddLabels[hierAddLabels.length - 1];
+  ok(doc.activeElement === lastHierAddLabel,
+    'Add type focuses the newly added type\'s label input, not the first (Epic) one');
   const any = doc.querySelector('#suHierAny');
   any.checked = true; any.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().meta.hierarchy.anyTypeAnyLevel === true && !doc.querySelector('button[data-suhtype]'), 'the switch hides the chips');
@@ -3447,6 +3458,26 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     window.HeadwayApp.ai.commit('rename type', (s) => {
       const bugType = s.meta.itemTypes.find(t => t.key === 'bug');
       bugType.label = 'Bug';
+    });
+
+    // a type icon containing attribute-breaking markup renders as a single
+    // escaped data-lucide attribute, not injected markup (menu renderers
+    // must esc() m.icon)
+    window.HeadwayApp.ai.commit('rename type icon', (s) => {
+      const bugType = s.meta.itemTypes.find(t => t.key === 'bug');
+      bugType.icon = 'tag" data-x="y';
+    });
+    const chip3 = doc.querySelector('#panel [data-act="itype"]');
+    click(chip3);
+    const bugIconRow = [...doc.querySelectorAll('.menu-list [data-mi]')].find(el => /^Bug$/.test(el.textContent.trim()));
+    ok(!!bugIconRow, 'type dropdown still lists Bug after icon change');
+    const bugIcon = bugIconRow.querySelector('i');
+    ok(!!bugIcon && bugIcon.getAttribute('data-lucide') === 'tag" data-x="y',
+      'the icon renders with the full unbroken-out string as data-lucide');
+    ok(!bugIcon.hasAttribute('data-x'), 'no stray data-x attribute was injected from the icon value');
+    window.HeadwayApp.ai.commit('rename type icon', (s) => {
+      const bugType = s.meta.itemTypes.find(t => t.key === 'bug');
+      bugType.icon = 'bug';
     });
   }
 }

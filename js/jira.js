@@ -1387,9 +1387,9 @@
         var c = plan.counts;
         if (!c.create && !c.update && !c.pull && !c.link && !c.sprintAssign && !c.done) { body.innerHTML = '<div class="m-hint">Nothing to sync.</div>' + list('Notes', plan.notes); return; }
         body.innerHTML = '<ul class="jr-plan">' +
-          line(plan.epics.length, RM.levelLabel(state, 'epic', plan.epics.length !== 1).toLowerCase() + ' to create in ' + esc(cfg.project)) +
-          line(plan.features.length, RM.levelLabel(state, 'feature', plan.features.length !== 1).toLowerCase() + ' to create') +
-          line(plan.stories.length, RM.levelLabel(state, 'story', plan.stories.length !== 1).toLowerCase() + ' to create') +
+          line(plan.epics.length, esc(RM.levelLabel(state, 'epic', plan.epics.length !== 1).toLowerCase()) + ' to create in ' + esc(cfg.project)) +
+          line(plan.features.length, esc(RM.levelLabel(state, 'feature', plan.features.length !== 1).toLowerCase()) + ' to create') +
+          line(plan.stories.length, esc(RM.levelLabel(state, 'story', plan.stories.length !== 1).toLowerCase()) + ' to create') +
           line(c.update, 'linked issue' + (c.update === 1 ? '' : 's') + ' to update') +
           line(c.link, 'dependency link' + (c.link === 1 ? '' : 's') + ' to add') +
           line(c.sprintsCreate, 'sprint' + (c.sprintsCreate === 1 ? '' : 's') + ' to create on ' + esc(plan.sprints ? plan.sprints.boardName : '')) +

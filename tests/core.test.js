@@ -1332,6 +1332,16 @@ section('item type mutations & validation');
   RM.setAnyTypeAnyLevel(sV2, true);
   var vv2 = RM.validate(sV2);
   ok(!(vv2.byItem[sV2.items[0].id] || []).some(function (f) { return f.code === 'TYPE_LEVEL'; }) && !vv2.global.some(function (f) { return f.code === 'TYPE_LEVEL'; }), 'switch on silences TYPE_LEVEL');
+
+  // TYPE_LEVEL must resolve missing/raw type fields (e.g. items pushed without
+  // a `type` after commit(), before the next normalizeState) via RM.typeOf,
+  // not compare the raw field directly.
+  var sV3 = mkState([{ num: 1, feature: 'A', epic: 'E', stories: [{ id: 's1', title: 'x' }] }], { epicTypes: { E: 'epic' } });
+  delete sV3.items[0].type;
+  delete sV3.items[0].stories[0].type;
+  var vv3 = RM.validate(sV3);
+  ok(!(vv3.byItem[sV3.items[0].id] || []).some(function (f) { return f.code === 'TYPE_LEVEL'; }), 'item pushed with no type resolves via RM.typeOf and warns nothing');
+  ok(!vv3.global.some(function (f) { return f.code === 'TYPE_LEVEL'; }), 'story pushed with no type resolves via RM.typeOf and warns nothing');
 }
 
   console.log('\n' + passed + ' passed, ' + failed + ' failed' + (skipped ? ', ' + skipped + ' skipped' : ''));
