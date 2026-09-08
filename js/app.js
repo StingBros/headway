@@ -3586,7 +3586,7 @@
         '<span class="band-name">' + esc(p.name) + '</span>' +
         '<span class="band-count">' + items.length + '</span>' +
         (p.bucket ? '<span class="band-bucket-tag">backlog</span>' : '') +
-        '<button class="band-add" data-act="phase-additem" title="Add a feature to this phase">+ feature</button>' +
+        '<button class="band-add" data-act="phase-additem" title="' + esc('Add a ' + lvl('feature').toLowerCase() + ' to this phase') + '">+ ' + esc(lvl('feature').toLowerCase()) + '</button>' +
         '<button class="band-edit" data-act="phase-edit" title="Edit phase">edit</button>' +
         '</div>' +
         '<div class="row-lane">' + bandLane + '</div>' +
