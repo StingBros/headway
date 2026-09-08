@@ -1592,6 +1592,8 @@ eq(RM.viewItems(sView, {}).map(function (x) { return x.num; }), [1, 2, 3], 'with
 
 // ------------------------------------------------------------- history lines
 section('history lines');
+eq(RM.mergeOps([['a', 'bc', 1, 2]], [['ab', 'c', 3, 4]]).length, 2, 'mergeOps keys by field AND label: ("a","bc") and ("ab","c") do not collide');
+eq(RM.mergeOps([['size', 'S', 'S', 'M']], [['size', 'S', 'M', 'L']]), [['size', 'S', 'S', 'L']], 'mergeOps keeps the first before and the last after for the same op');
 var hl1 = RB.historyLine({ t: 1000, u: 'Ann', label: 'move', n: 2, d: [['timeline', 'x', '1', '2']] }, 'ann-1', 'p-main');
 eq(hl1, { t: 1000, u: 'Ann', userId: 'ann-1', planId: 'p-main', label: 'move', n: 2, d: [['timeline', 'x', '1', '2']] }, 'historyLine carries entry fields plus userId/planId');
 var enc = RB.encodeHistory([hl1, RB.historyLine({ t: 2000, u: 'Ann', label: 'café' }, 'ann-1', 'p-main')]);

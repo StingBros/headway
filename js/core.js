@@ -506,7 +506,8 @@
     var before = at === -1 ? null : peers[at];
     var prev = at === -1 ? peers[peers.length - 1] : peers[at - 1];
     entry.order = RM.orderBetween(prev ? prev.order : null, before ? before.order : null);
-    list.splice(list.indexOf(entry), 1);
+    var cur = list.indexOf(entry);
+    if (cur !== -1) list.splice(cur, 1); // an entry not yet in the list is simply inserted
     var pos = list.length;
     if (before) pos = list.indexOf(before);
     else for (var i = list.length - 1; i >= 0; i--) if (inGroup(list[i])) { pos = i + 1; break; }
@@ -937,9 +938,10 @@
   RM.mergeOps = function (base, add) {
     var out = base.slice();
     var at = {};
-    out.forEach(function (op, i) { at[op[0] + '' + op[1]] = i; });
+    // key by field AND label with a separator, so ('a','bc') never collides with ('ab','c')
+    out.forEach(function (op, i) { at[op[0] + '\u0001' + op[1]] = i; });
     add.forEach(function (op) {
-      var k = op[0] + '' + op[1];
+      var k = op[0] + '\u0001' + op[1];
       if (at[k] != null) out[at[k]] = [op[0], op[1], out[at[k]][2], op[3]];
       else { at[k] = out.length; out.push(op); }
     });
