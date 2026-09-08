@@ -1,7 +1,8 @@
 /* App ↔ desktop wiring for the shared-bundle (folder) document, end to end in
  * jsdom against the in-memory fake Tauri: open a bundle in the real editor,
  * commit through the UI, watch the flush, feed peer shards through the
- * watcher, undo, plans, export, convert, menus, recents, resume, web build.
+ * watcher, undo, plans, export, convert, menus, recents, resume, web build,
+ * presence (heartbeat file, peer chips, nudge toast, cleanup).
  * Run: NODE_PATH=./node_modules node tests/wiring.test.js */
 'use strict';
 const fs = require('fs');
@@ -495,6 +496,7 @@ async function main() {
   ok(true, 'applyExternalEntities is a no-op outside a bundle');
 
   await fixes();
+  await presence();
 
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
@@ -895,6 +897,184 @@ async function fixes() {
     eq(shardWrites(S.tauri, mark).length, 0, 'Sync writes nothing into the deleted plan either');
     mo.disconnect();
   }
+}
+
+// ---- presence P1–P7: heartbeat file, peers → chips (patched, not rendered),
+// ignored entries, removal, nudge toast, cleanup on close, web build
+const presenceWrites = (tauri, from) => tauri.log.slice(from || 0).filter((l) => l.op === 'writeTextFile' && l.path.indexOf('/presence/') >= 0);
+async function presence() {
+  const chipsOf = (S, id) => [...S.b.doc.querySelectorAll('.row.item[data-id="' + id + '"] .r-presence .avatar.presence')];
+  const PEER = 'peer-zz999';
+
+  section('P1: heartbeat — presence/<userId>.json, never a commit');
+  const S = await openFresh('P1');
+  const mark0 = S.tauri.log.length; // createBundle's own shard writes are before this
+  const own = S.dir + '/presence/' + FIXER.id + '.json';
+  eq(S.b.info().presenceOn, true, 'heartbeat armed on open');
+  ok(await until(() => S.tauri.files.has(own)), 'presence/<userId>.json written on open');
+  let pres = JSON.parse(S.tauri.files.get(own));
+  eq([pres.name, pres.planId, pres.editing], [FIXER.name, S.pid, []], 'carries {name, planId, editing}');
+  ok(typeof pres.ts === 'number' && Math.abs(Date.now() - pres.ts) < 5000, 'ts is a fresh Date.now(): ' + pres.ts);
+  const ren0 = S.b.info().renderCount, hist0 = S.b.HA.userId && S.b.window.__headway.getHistory().length;
+  const pw0 = presenceWrites(S.tauri).length;
+  ok(await until(() => presenceWrites(S.tauri).length >= pw0 + 3), 'heartbeat keeps writing (' + (presenceWrites(S.tauri).length - pw0) + ' more writes)');
+  eq(S.b.info().docSaved, true, 'heartbeats never dirty the document');
+  eq(S.b.info().pendingHistory, 0, 'no pending history');
+  eq(S.b.window.__headway.getHistory().length, hist0, 'no history line');
+  eq(S.b.info().renderCount, ren0, 'no render from heartbeats');
+  ok(!S.tauri.files.has(S.dir + '/history/' + FIXER.id + '.jsonl'), 'no history file appeared');
+  eq(shardWrites(S.tauri, mark0).length, 0, 'no shard written');
+  S.select();
+  ok(await until(() => { const p = JSON.parse(S.tauri.files.get(own)); return p.editing.length === 1 && p.editing[0] === S.vId; }), 'selection lands in editing on the next write');
+  eq(S.b.info().docSaved, true, 'still clean after the selection write');
+
+  section('P2: a peer file → peerByItem + one ringed chip, patched in place (no full render)');
+  const peerPath = S.dir + '/presence/' + PEER + '.json';
+  S.tauri.files.set(peerPath, JSON.stringify({ name: 'Zoe Quinn', planId: S.pid, editing: [S.vId], ts: Date.now() }));
+  const ren1 = S.b.info().renderCount;
+  await S.tauri.emitPaths(peerPath, 'create');
+  ok(await until(() => (S.b.info().peerByItem[S.vId] || []).length === 1), 'peerByItem[X] has the peer');
+  eq(S.b.info().peerByItem[S.vId][0], { id: PEER, name: 'Zoe Quinn' }, 'peer entry = {id, name}');
+  let chips = chipsOf(S, S.vId);
+  eq(chips.length, 1, 'one presence chip on the row');
+  eq(chips[0].textContent, S.b.RM.initialsOf('Zoe Quinn'), 'chip shows the initials (' + chips[0].textContent + ')');
+  ok(chips[0].textContent.length >= 1 && chips[0].textContent.length <= 3, 'initials are 1–3 chars');
+  eq(chips[0].getAttribute('title'), 'Zoe Quinn is here', 'chip title names the peer');
+  ok(chips[0].classList.contains('sm'), 'reuses the .avatar.sm look');
+  eq(S.b.info().renderCount, ren1, 'no full render for a presence change');
+  eq(S.b.doc.querySelectorAll('#rows .row.item .r-presence .avatar.presence').length, 1, 'no chip on any other row');
+  S.select(); // a full render also produces the chips
+  ok(S.b.info().renderCount > ren1, 'select() rendered');
+  eq(chipsOf(S, S.vId).length, 1, 'full render carries the chip too');
+  // more than three peers on one row → two chips + a +N bubble
+  const others = ['peer-a1111', 'peer-b2222', 'peer-c3333'];
+  others.forEach((id, i) => S.b.HA.presenceChanged(id, { name: 'Peer ' + 'ABC'[i], planId: S.pid, editing: [S.vId], ts: Date.now() }));
+  chips = chipsOf(S, S.vId);
+  eq(chips.length, 3, 'capped at three bubbles');
+  eq(chips.filter((c) => c.classList.contains('more')).length, 1, 'the last one is the +N bubble');
+  eq(chips[2].textContent, '+2', 'reads +2 (4 peers, 2 shown)');
+  others.forEach((id) => S.b.HA.presenceChanged(id, null));
+  eq(chipsOf(S, S.vId).length, 1, 'back to one chip');
+
+  section('P3: ignored — own id, another plan, a stale heartbeat');
+  // a second RENDERED row (an item in a collapsed phase has no row to chip)
+  const otherId = [...S.b.doc.querySelectorAll('#rows .row.item[data-id]')].map((r) => r.dataset.id).find((id) => id !== S.vId);
+  S.b.HA.presenceChanged(FIXER.id, { name: 'Me', planId: S.pid, editing: [otherId], ts: Date.now() });
+  eq(S.b.info().peerByItem[otherId], undefined, 'own userId ignored');
+  S.b.HA.presenceChanged('peer-plan2', { name: 'Elsewhere', planId: 'plan-other', editing: [otherId], ts: Date.now() });
+  eq(S.b.info().peerByItem[otherId], undefined, 'another planId ignored');
+  S.b.HA.presenceChanged('peer-old', { name: 'Ghost', planId: S.pid, editing: [otherId], ts: Date.now() - 100000 });
+  eq(S.b.info().peerByItem[otherId], undefined, 'stale ts (> 90 s) ignored');
+  eq(chipsOf(S, otherId).length, 0, 'no chip for any of them');
+  // stale on disk: the tick's readPresence refresh drops it too
+  const stalePath = S.dir + '/presence/peer-old.json';
+  S.tauri.files.set(stalePath, JSON.stringify({ name: 'Ghost', planId: S.pid, editing: [otherId], ts: Date.now() - 100000 }));
+  await S.tauri.emitPaths(stalePath, 'create');
+  await settle();
+  eq(S.b.info().peerByItem[otherId], undefined, 'stale file on disk → still no peer on the row');
+  eq(chipsOf(S, otherId).length, 0, 'no chip from the stale file');
+  S.tauri.files.delete(stalePath);
+
+  section('P4: removal clears the chip');
+  S.tauri.files.delete(peerPath);
+  await S.tauri.emitPaths(peerPath, 'remove');
+  ok(await until(() => chipsOf(S, S.vId).length === 0), 'remove event → chip gone');
+  eq(S.b.info().peerByItem[S.vId], undefined, 'peerByItem cleared');
+  eq(S.b.info().peers[PEER], undefined, 'peer dropped from peers');
+  // and the null form of presenceChanged
+  S.b.HA.presenceChanged(PEER, { name: 'Zoe Quinn', planId: S.pid, editing: [S.vId], ts: Date.now() });
+  eq(chipsOf(S, S.vId).length, 1, 'chip back');
+  S.b.HA.presenceChanged(PEER, null);
+  eq(chipsOf(S, S.vId).length, 0, 'presenceChanged(id, null) clears it');
+
+  section('P5: nudge — a flush touching a peer\'s row toasts once per item per minute');
+  S.tauri.files.set(peerPath, JSON.stringify({ name: 'Zoe Quinn', planId: S.pid, editing: [S.vId], ts: Date.now() }));
+  await S.tauri.emitPaths(peerPath, 'create');
+  ok(await until(() => chipsOf(S, S.vId).length === 1), 'peer back on the row');
+  const seen = [];
+  const mo = new S.b.window.MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach((n) => { if (n.textContent) seen.push(n.textContent); })));
+  mo.observe(S.b.doc.querySelector('#toasts'), { childList: true });
+  const num = S.item().num;
+  S.select();
+  S.set('notes', 'nudge me');
+  await settle();
+  const nudges = () => seen.filter((t) => /also editing/.test(t));
+  eq(nudges().length, 1, 'exactly one nudge toast: ' + seen.join(' | '));
+  eq(nudges()[0], 'Zoe Quinn is also editing #' + num, 'names the peer and the item number');
+  eq(S.disk(S.vId).fields.notes, 'nudge me', 'the write still went ahead (advisory only)');
+  S.set('notes', 'nudge again');
+  await settle();
+  eq(nudges().length, 1, 'a second commit inside the window → no second toast');
+  eq(S.disk(S.vId).fields.notes, 'nudge again', 'second write landed too');
+  eq(S.b.info().docSaved, true, 'synced');
+  // another item with no peer on it → no toast
+  S.select(otherId);
+  S.set('notes', 'quiet');
+  await settle();
+  eq(nudges().length, 1, 'an item nobody else is on → no nudge');
+  mo.disconnect();
+
+  section('P5b: deleting a row a peer is on is not a nudge; peer names are escaped');
+  // a row that is actually rendered (not every item has a row in this view)
+  const delId = [...S.b.doc.querySelectorAll('#rows .row.item')].map((r) => r.dataset.id).find((id) => id && id !== S.vId && id !== otherId);
+  ok(!!delId, 'found a third rendered row to delete');
+  S.b.HA.presenceChanged(PEER, { name: 'Zoe Quinn', planId: S.pid, editing: [delId], ts: Date.now() });
+  ok(await until(() => (S.b.info().peerByItem[delId] || []).length === 1), 'peer sits on the row we are about to delete');
+  const seenDel = [];
+  const moDel = new S.b.window.MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach((n) => { if (n.textContent) seenDel.push(n.textContent); })));
+  moDel.observe(S.b.doc.querySelector('#toasts'), { childList: true });
+  S.select(delId);
+  S.b.key('Delete');
+  const okBtn = S.b.doc.querySelector('#modalHost [data-m="ok"]');
+  ok(!!okBtn, 'delete asks for confirmation');
+  if (okBtn) okBtn.click();
+  await settle();
+  ok(!S.item(delId), 'the row is gone locally');
+  ok(await until(() => { try { return S.disk(delId).deleted === true; } catch (e) { return false; } }), 'a tombstone reached the disk');
+  eq(seenDel.filter((t) => /also editing/.test(t)).length, 0, 'no "also editing" nudge for a delete: ' + seenDel.join(' | '));
+  moDel.disconnect();
+  // a hostile peer name renders as text, never markup
+  S.b.HA.presenceChanged(PEER, { name: 'Zoe <b>Q</b> & "Co"', planId: S.pid, editing: [S.vId], ts: Date.now() });
+  const hot = chipsOf(S, S.vId);
+  eq(hot.length, 1, 'chip for the odd-named peer');
+  ok(hot[0].innerHTML.indexOf('<b>') === -1 && hot[0].querySelector('b') === null, 'name markup is escaped in the chip');
+  eq(hot[0].getAttribute('title'), 'Zoe <b>Q</b> & "Co" is here', 'title carries the raw name as text');
+  S.b.HA.presenceChanged(PEER, { name: 'Zoe Quinn', planId: S.pid, editing: [S.vId], ts: Date.now() });
+
+  section('P6: closeBundleSession / beforeClose remove our file and stop the heartbeat');
+  ok(S.tauri.files.has(own), 'our presence file is there before close');
+  await S.b.HA.closeBundleSession();
+  ok(!S.tauri.files.has(own), 'closeBundleSession removed presence/<userId>.json');
+  eq(S.b.info().presenceOn, false, 'heartbeat off');
+  eq(S.b.info().peerByItem, {}, 'peerByItem cleared');
+  let mark = presenceWrites(S.tauri).length;
+  await settle(6);
+  eq(presenceWrites(S.tauri).length, mark, 'no presence write after close');
+  ok(!S.tauri.files.has(own), 'file stays gone');
+  const S2 = await openFresh('P6b');
+  const own2 = S2.dir + '/presence/' + FIXER.id + '.json';
+  ok(await until(() => S2.tauri.files.has(own2)), 'second session heartbeats');
+  await S2.b.HA.beforeClose();
+  ok(!S2.tauri.files.has(own2), 'beforeClose removed the file');
+  eq(S2.b.info().presenceOn, false, 'heartbeat off after beforeClose');
+  mark = presenceWrites(S2.tauri).length;
+  await settle(6);
+  eq(presenceWrites(S2.tauri).length, mark, 'no presence write after beforeClose');
+  // reopening re-arms it (the same id, a fresh file)
+  await S2.b.HA.openBundleDoc(S2.dir);
+  ok(await until(() => S2.tauri.files.has(own2)), 'reopen writes the heartbeat again');
+  eq(S2.b.info().presenceOn, true, 're-armed');
+  await S2.b.HA.closeBundleSession();
+
+  section('P7: web build — no heartbeat, no errors');
+  const w = boot(null, { localStorage: { 'headway-user-v2': JSON.stringify(FIXER) } });
+  ok(w.errors.length === 0, 'browser build boots clean' + (w.errors.length ? ' — ' + w.errors.join('; ') : ''));
+  eq(w.info().presenceOn, false, 'no heartbeat without HeadwayDesktop');
+  w.HA.presenceChanged(PEER, { name: 'Zoe Quinn', planId: null, editing: ['x'], ts: Date.now() });
+  eq(w.info().peerByItem, {}, 'presenceChanged is inert outside a bundle (planId never matches)');
+  eq(w.HA.editingIds(), [], 'editingIds empty');
+  await settle(3);
+  ok(w.errors.length === 0, 'still no errors after a few ticks');
 }
 
 main().catch((e) => {

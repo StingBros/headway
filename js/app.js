@@ -108,7 +108,20 @@
   var planDocCache = {};     // planId → assembled state for the Compare overlay
   var planLoading = {};      // planId → true while its readPlan is in flight
   var deferredExternal = []; // peer envelopes held back while a drag touches their entity
-  var peers = {};            // userId → presence object (chips are a later phase)
+  var peers = {};            // userId → presence object as read (own id / stale / other plans filtered at derive time)
+  var peerByItem = {};       // itemId → [{id, name}] live peers on that row (derived from peers)
+  var peerSig = '';          // canonical string of peerByItem: chips are patched only when it changes
+  var presenceOn = false;    // heartbeat armed (bundle mode, desktop only)
+  var presenceTimer = null;  // next heartbeat (self-rearming timeout: the test harness caps timeouts, not intervals)
+  var presenceThrottle = null; // pending selection-change write
+  var presenceLastAt = 0;    // Date.now() of the last presence write
+  var presenceSig = '';      // editingIds() as of the last write
+  var presenceWrite = Promise.resolve(); // in-flight write; stop waits on it so a remove cannot lose the race
+  var nudgedAt = {};         // itemId → Date.now() of the last "also editing" toast
+  var PRESENCE_MS = 30000;          // heartbeat period
+  var PRESENCE_THROTTLE_MS = 2000;  // min gap between selection-driven writes
+  var PRESENCE_TTL_MS = 90000;      // a peer heartbeat older than this is stale
+  var PRESENCE_NUDGE_MS = 60000;    // "X is also editing #n" at most once per item per minute
 
   var $ = function (sel, el) { return (el || document).querySelector(sel); };
   var $$ = function (sel, el) { return Array.prototype.slice.call((el || document).querySelectorAll(sel)); };
@@ -732,6 +745,7 @@
     }
     var sent = {};
     changes.forEach(function (c) { sent[c.kind + '/' + c.id] = c.env; });
+    nudgePeers(changes); // advisory toast; the write proceeds regardless
     flushing = true;
     updateSaveBtn();
     var again = false;
@@ -963,6 +977,11 @@
   }
   window.addEventListener('pointerup', drainDeferred);
   window.addEventListener('pointercancel', drainDeferred);
+  // a drag start does not render: check after every pointerdown handler ran
+  window.addEventListener('pointerdown', function () {
+    if (!presenceOn) return;
+    setTimeout(function () { if (drag && drag.itemId) presenceTouch(); }, 0);
+  });
 
   // ---- session. adoptBundle takes an openBundle result and makes it the
   // document; closeBundleSession flushes and forgets the folder.
@@ -1010,6 +1029,7 @@
     docSaved = true;
     validation = RM.validate(state);
     saveLocal();
+    startPresence(); // first heartbeat now (selection already cleared), then every PRESENCE_MS
     noteRecent(dir, 'bundle'); // now that the live title is this document's
     if (opts.stayOnStart) render(); else enterEditor();
     var cur = planEntry(activePlanId);
@@ -1072,6 +1092,8 @@
     if (closing) return closing;
     clearTimeout(bundleFlushTimer);
     closing = flushBundle().catch(function () { /* toasted already */ }).then(function () {
+      return stopPresence(bundleDir, userId()); // heartbeat off + our file gone before the session forgets the folder
+    }).then(function () {
       docKind = 'xlsx'; bundleDir = null; activePlanId = null; planList = [];
       lastCanon = {}; lastEnv = {}; pendingHistory = []; ownLines = [];
       localAt = {}; localVal = {}; planGone = false;
@@ -1099,6 +1121,144 @@
   }
   function presenceChanged(uid, obj) {
     if (obj) peers[uid] = obj; else delete peers[uid];
+    rebuildPeers();
+  }
+
+  // ---- presence (advisory). presence/<userId>.json is a heartbeat — a plain
+  // file write, never a commit, never a history line, never dirties the doc.
+  // Locks are not enforced: over eventual sync the race window is the sync
+  // latency, so rows show who else is here and a flush nudges, nothing more.
+  function presenceReady() {
+    return presenceOn && docKind === 'bundle' && !!bundleDir && !!window.HeadwayDesktop &&
+      typeof HeadwayDesktop.writePresence === 'function';
+  }
+  function sendPresence() {
+    if (!presenceReady()) return Promise.resolve();
+    var dir = bundleDir, ids = editingIds();
+    presenceSig = ids.join(',');
+    presenceLastAt = Date.now();
+    presenceWrite = HeadwayDesktop.writePresence(dir, userId(), {
+      name: userName() || 'Someone', planId: activePlanId, editing: ids, ts: Date.now()
+    }).catch(function () { /* advisory: a failed heartbeat is retried on the next tick */ });
+    return presenceWrite;
+  }
+  // selection or drag changed: write soon, at most every PRESENCE_THROTTLE_MS
+  function presenceTouch() {
+    if (!presenceReady() || editingIds().join(',') === presenceSig) return;
+    var wait = PRESENCE_THROTTLE_MS - (Date.now() - presenceLastAt);
+    if (wait <= 0) { sendPresence(); return; }
+    if (presenceThrottle) return;
+    presenceThrottle = setTimeout(function () {
+      presenceThrottle = null;
+      if (presenceReady() && editingIds().join(',') !== presenceSig) sendPresence();
+    }, wait);
+  }
+  // one tick: our heartbeat, then a full re-read of presence/ — a peer whose
+  // machine died never sends a removal, so the folder, not the event stream,
+  // is the truth; re-armed only after both land (no overlapping ticks)
+  function presenceTick() {
+    presenceTimer = null;
+    if (!presenceReady()) return;
+    var dir = bundleDir;
+    sendPresence().then(function () {
+      if (!presenceReady() || bundleDir !== dir || typeof HeadwayDesktop.readPresence !== 'function') return;
+      return HeadwayDesktop.readPresence(dir).then(function (all) {
+        if (!presenceReady() || bundleDir !== dir || !all) return;
+        var mine = userId(), next = {};
+        Object.keys(all).forEach(function (k) { if (k !== mine) next[k] = all[k]; });
+        peers = next;
+        rebuildPeers();
+      }, function () { /* advisory */ });
+    }).then(function () {
+      if (presenceReady() && bundleDir === dir && !presenceTimer) presenceTimer = setTimeout(presenceTick, PRESENCE_MS);
+    });
+  }
+  function startPresence() {
+    stopPresenceTimers();
+    peers = {}; peerByItem = {}; peerSig = ''; nudgedAt = {};
+    presenceSig = ''; presenceLastAt = 0;
+    if (!window.HeadwayDesktop || typeof HeadwayDesktop.writePresence !== 'function') return;
+    presenceOn = true;
+    presenceTick();
+  }
+  function stopPresenceTimers() {
+    presenceOn = false;
+    clearTimeout(presenceTimer); presenceTimer = null;
+    clearTimeout(presenceThrottle); presenceThrottle = null;
+  }
+  // stop the heartbeat and drop our file; the desktop's closeBundle removes
+  // it too, but this runs BEFORE the session resets, after any write in flight
+  function stopPresence(dir, uid) {
+    stopPresenceTimers();
+    peers = {}; peerByItem = {}; peerSig = ''; nudgedAt = {};
+    presenceSig = '';
+    if (!dir || !window.HeadwayDesktop || typeof HeadwayDesktop.removePresence !== 'function') return Promise.resolve();
+    return presenceWrite.then(function () {
+      return HeadwayDesktop.removePresence(dir, uid);
+    }).catch(function () { /* best effort */ });
+  }
+  // peers → peerByItem: this plan, not us, heartbeat within the TTL
+  function rebuildPeers() {
+    var mine = readUser().id || null, now = Date.now(), by = {};
+    if (docKind !== 'bundle' || !activePlanId) peers = {}; // web build / no session: nothing to show
+    Object.keys(peers).sort().forEach(function (uid) {
+      var p = peers[uid];
+      if (!p || typeof p !== 'object' || uid === mine) return;
+      if (p.planId !== activePlanId) return;
+      var ts = +p.ts || 0;
+      if (!ts || now - ts > PRESENCE_TTL_MS) return;
+      var name = String(p.name || '').trim() || 'Someone';
+      (Array.isArray(p.editing) ? p.editing : []).forEach(function (id) {
+        if (!id) return;
+        (by[id] || (by[id] = [])).push({ id: uid, name: name });
+      });
+    });
+    peerByItem = by;
+    var sig = JSON.stringify(by);
+    if (sig !== peerSig) { peerSig = sig; renderPresence(); }
+  }
+  // initials chips for the peers on one row (the .avatar.sm look, ringed);
+  // at most three bubbles — the last becomes +N when more are here
+  function presenceChips(itemId) {
+    var list = peerByItem[itemId] || [];
+    if (!list.length) return '';
+    var max = 3, shown = list.length > max ? max - 1 : list.length, out = '';
+    list.slice(0, shown).forEach(function (p) {
+      out += '<span class="avatar sm presence" title="' + esc(p.name + ' is here') + '" style="background:' +
+        RM.avatarColor(p.name) + '">' + esc(RM.initialsOf(p.name)) + '</span>';
+    });
+    if (list.length > shown) {
+      var rest = list.slice(shown).map(function (p) { return p.name; });
+      out += '<span class="avatar sm more presence" title="' + esc(rest.join(', ') + ' are here') + '">+' + rest.length + '</span>';
+    }
+    return out;
+  }
+  function presenceSlot(itemId) { return '<span class="r-presence">' + presenceChips(itemId) + '</span>'; }
+  // patch the chips in place — a peer moving between rows is not a document
+  // change and must not cost a full render (or disturb an edit in progress)
+  function renderPresence() {
+    $$('.row.item[data-id] .r-presence', rowsEl).forEach(function (slot) {
+      var row = slot.closest('.row');
+      var html = presenceChips(row ? row.dataset.id : '');
+      if (slot.innerHTML !== html) slot.innerHTML = html;
+    });
+  }
+  // a flush touches an item a peer is on: say so, once per item per minute.
+  // Advisory — the write goes ahead regardless (the merge is deterministic)
+  function nudgePeers(changes) {
+    var now = Date.now();
+    changes.forEach(function (c) {
+      if (c.kind !== 'items') return;
+      if (c.env && c.env.deleted) return; // a row I deleted is not one I am "also editing"
+      var who = peerByItem[c.id];
+      if (!who || !who.length) return;
+      if (now - (nudgedAt[c.id] || 0) < PRESENCE_NUDGE_MS) return;
+      nudgedAt[c.id] = now;
+      var it = RM.itemById(state, c.id);
+      var num = it ? it.num : (c.env && c.env.fields && c.env.fields.num);
+      var names = who.map(function (p) { return p.name; });
+      toast(names.join(', ') + (names.length > 1 ? ' are' : ' is') + ' also editing' + (num != null ? ' #' + num : ' this item'));
+    });
   }
 
   // ---- history view: every user's file merged, this plan's lines
@@ -2054,6 +2214,7 @@
 
   function render() {
     renderCount++;
+    presenceTouch(); // every selection change renders; the write itself is throttled
     var sx = board.scrollLeft, sy = board.scrollTop;
     critCache = RM.criticalPath(state);
     document.documentElement.style.setProperty('--week-px', weekPx + 'px');
@@ -3338,6 +3499,7 @@
         return plColsVisible().map(function (k) { return chips[k]; }).join('');
       })()) +
       warnBadge(it) +
+      presenceSlot(it.id) +
       '</div>' +
       '<div class="row-lane">' + laneInner + dlHtml + '</div>' +
       '</div>');
@@ -10044,6 +10206,7 @@
     getInfo: function () {
       return { docKind: docKind, bundleDir: bundleDir, activePlanId: activePlanId, docSaved: docSaved,
         undoLen: undoStack.length, redoLen: redoStack.length, plans: RM.clone(planList), peers: RM.clone(peers),
+        peerByItem: RM.clone(peerByItem), presenceOn: presenceOn,
         pendingHistory: pendingHistory.length, renderCount: renderCount, userId: readUser().id || null,
         flushing: flushing, planGone: planGone, deferred: deferredExternal.length,
         localAt: RM.clone(localAt), lastEnv: RM.clone(lastEnv) };
