@@ -1246,6 +1246,57 @@ section('apps switch');
     'appEnabled: off app, forced Planning, and non-apps always reachable');
 }
 
+section('item types & hierarchy');
+{
+  var sT = mkState([
+    { num: 1, feature: 'A', epic: 'E1', stories: [{ id: 'sa', title: 'x' }, { id: 'sb', title: 'y', type: 'bug' }] },
+    { num: 2, feature: 'B', type: 'bug' },
+    { num: 3, feature: 'C', type: 'nope' }
+  ]);
+  eq(sT.meta.itemTypes.map(function (t) { return t.key; }), ['epic', 'feature', 'bug', 'task', 'story', 'subtask'], 'default types seeded');
+  eq(sT.meta.hierarchy.levels.map(function (l) { return l.key; }), ['epic', 'feature', 'story'], 'three fixed levels');
+  eq(sT.meta.hierarchy.levels[1].types, ['feature', 'bug', 'task'], 'feature level default types');
+  eq(sT.meta.hierarchy.anyTypeAnyLevel, false, 'switch off by default');
+  eq(sT.items[0].type, 'feature', 'missing item type -> level default');
+  eq(sT.items[1].type, 'bug', 'known item type kept');
+  eq(sT.items[2].type, 'feature', 'unknown item type -> level default');
+  eq(sT.items[0].stories[0].type, 'story', 'missing story type -> level default');
+  eq(sT.items[0].stories[1].type, 'bug', 'story type kept');
+  eq(sT.epicTypes, {}, 'epicTypes seeded empty');
+  eq(RM.typeOf(sT, 'E1', 'epic').key, 'epic', 'epic without a stored type resolves to epic');
+  eq(RM.levelLabel(sT, 'feature'), 'Feature', 'level label');
+  eq(RM.levelLabel(sT, 'story', true), 'Stories', 'plural label');
+  eq(RM.typesFor(sT, 'story').map(function (t) { return t.key; }), ['story', 'subtask', 'bug'], 'allowed types at story level');
+  eq(RM.defaultTypeFor(sT, 'epic'), 'epic', 'default type for epic level');
+  eq(RM.jiraTypeName(sT, 'story'), 'Sub-task', 'story type maps to Sub-task by default');
+  eq(RM.typeOf(sT, sT.items[1], 'feature').icon, 'bug', 'typeOf returns the record');
+
+  // a disallowed stored type survives normalize
+  var sT2 = mkState([{ num: 1, feature: 'A', type: 'subtask' }]);
+  eq(sT2.items[0].type, 'subtask', 'disallowed type kept on normalize');
+  // the switch opens every type at every level
+  sT2.meta.hierarchy.anyTypeAnyLevel = true;
+  eq(RM.typesFor(sT2, 'epic').length, 6, 'any type any level lists all types');
+
+  // legacy Jira names migrate into the type records once
+  var sT3 = mkState([{ num: 1, feature: 'A' }], { meta: Object.assign(JSON.parse(JSON.stringify(META)), { jira: { epicType: 'Initiative', featureType: 'Task', storyType: 'Subtask' } }) });
+  eq(RM.jiraTypeName(sT3, 'epic'), 'Initiative', 'legacy epicType migrates');
+  eq(RM.jiraTypeName(sT3, 'feature'), 'Task', 'legacy featureType migrates');
+  eq(RM.jiraTypeName(sT3, 'story'), 'Subtask', 'legacy storyType migrates');
+  sT3.meta.jira.featureType = 'Bug';
+  eq(RM.jiraTypeName(RM.normalizeState(sT3), 'feature'), 'Task', 'legacy names are read only when itemTypes is absent');
+
+  // custom labels and lists round-trip; empty level list falls back
+  var sT4 = mkState([{ num: 1, feature: 'A' }], { meta: Object.assign(JSON.parse(JSON.stringify(META)), {
+    itemTypes: [{ key: 'epic', label: 'Theme', icon: 'layers', jira: 'Epic' }, { key: 'feature', label: 'Feature', icon: 'rows-3', jira: 'Story' }, { key: 'story', label: 'Story', icon: 'list-tree', jira: 'Sub-task' }],
+    hierarchy: { levels: [{ key: 'feature', label: 'Capability', types: ['feature', 'ghost'] }, { key: 'story', label: 'Task', types: [] }], anyTypeAnyLevel: true } }) });
+  eq(sT4.meta.hierarchy.levels.map(function (l) { return l.label; }), ['Epic', 'Capability', 'Task'], 'missing level gets default label, order fixed');
+  eq(sT4.meta.hierarchy.levels[1].types, ['feature'], 'unknown type keys are dropped from a level');
+  eq(sT4.meta.hierarchy.levels[2].types, ['story'], 'empty level list falls back to defaults filtered to existing types');
+  eq(sT4.meta.hierarchy.anyTypeAnyLevel, true, 'switch round-trips');
+  eq(RM.levelLabel(sT4, 'story', true), 'Tasks', 'plural of a custom label');
+}
+
   console.log('\n' + passed + ' passed, ' + failed + ' failed' + (skipped ? ', ' + skipped + ' skipped' : ''));
   process.exit(failed ? 1 : 0);
 }
