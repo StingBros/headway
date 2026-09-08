@@ -240,3 +240,27 @@ fixes `renameTo`, which has called `fs.rename` without the permission.
   land; same item, different fields both land; same field resolves LWW with both lines in
   history; a forced `-COMPUTERNAME` sibling is absorbed; killing one app mid-flush leaves no
   torn shard on the other.
+
+## Implementation notes (2026-09-08)
+
+Where the build refined the text above:
+
+- `meta.json` is an envelope too (id `meta`), so workstream order, colors and icons merge
+  whole-key through the same `mergeEntity` instead of a second code path.
+- `deps` is an OR-set with add/remove stamps (`deps+<id>` / `deps-<id>`) rather than a plain
+  set union — a union would resurrect a dependency someone deleted.
+- Local edits carry per-field stamps taken at **commit** time, not at flush or apply time, so
+  an edit made offline and synced later loses to a newer peer edit of the same field.
+- The undo/redo rebase patches only the fields the peer changed into each snapshot; earlier
+  local edits to the same entity stay undoable.
+- One flush chain: a flush requested while another is in flight runs after it; closing,
+  switching plans and opening an `.xlsx` wait for it. A flush that completes after a newer
+  peer envelope was applied keeps that baseline and re-sends the local field merged.
+- Conflict siblings are detected by envelope `id` ≠ file stem, never by filename (ids contain
+  hyphens). The rename→in-place fallback re-reads and re-merges before writing.
+- Presence: heartbeat 30 s, selection throttle 2 s, stale after 90 s, nudge once per row per
+  60 s. Names from other machines are escaped.
+- History coalescing is per plan; Convert / New refuse a `<title>.headway` that already exists.
+- Plan-folder garbage collection is not implemented (tombstoned entries stay, files stay).
+- Tests: `tests/desktop.test.js` (fake plugin fs, 182) and `tests/wiring.test.js` (the real
+  app in jsdom against that fs, 347) join core (563) and smoke (600) in `make test`.
