@@ -10735,11 +10735,8 @@
     return '<div class="m-sec"><label>Rows</label><div class="p-row">' +
       '<label class="p-check"><input type="checkbox" id="jxFeatures"' + ck(pref.features != null ? pref.features : d.features) + '> Features</label>' +
       '<label class="p-check"><input type="checkbox" id="jxStories"' + ck(pref.stories != null ? pref.stories : d.stories) + '> Stories</label>' +
-      '</div><div class="m-hint">Without story rows, a feature’s stories become a checklist in its description.</div></div>' +
-      '<div class="m-sec"><label>Issue types</label><div class="p-grid2">' +
-      '<div><label class="p-lab">Features</label><input id="jxFeatureType" style="width:100%" value="' + esc(pref.featureType || d.featureType) + '"></div>' +
-      '<div><label class="p-lab">Stories</label><input id="jxStoryType" style="width:100%" value="' + esc(pref.storyType || d.storyType) + '"></div>' +
-      '</div><div class="m-hint">Sub-task rows need a parent: give each feature its Jira key first, or use a normal type.</div></div>' +
+      '</div><div class="m-hint">Without story rows, a feature\'s stories become a checklist in its description.</div>' +
+      '<div class="m-hint">Issue types follow each item\'s type (Setup → Hierarchy).</div></div>' +
       '<div class="m-sec"><label>In Jira</label><div class="m-hint">' +
       'Work navigator → ⋯ → Import issues from CSV (needs the Create work items and Make bulk changes permissions). ' +
       'Choose the date format <b>yyyy-MM-dd</b>. Parent and Blocked By carry the Jira keys entered in Headway; ' +
@@ -10750,8 +10747,6 @@
     var opts = {
       features: $('#jxFeatures', host).checked,
       stories: $('#jxStories', host).checked,
-      featureType: $('#jxFeatureType', host).value.trim(),
-      storyType: $('#jxStoryType', host).value.trim()
     };
     if (!opts.features && !opts.stories) { toast('Pick features, stories or both'); return false; }
     return opts;

@@ -2983,12 +2983,9 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     'choosing Jira CSV swaps the timeline options for the Jira options');
   ok(!!doc.querySelector('#modalHost #jxFeatures') && !!doc.querySelector('#modalHost #jxStories'),
     'dialog offers feature and story rows');
-  ok(!!doc.querySelector('#modalHost #jxFeatureType') && !!doc.querySelector('#modalHost #jxStoryType'),
-    'dialog offers issue type names');
   ok(/yyyy-MM-dd/.test(doc.querySelector('#modalHost #exJira').textContent), 'dialog names the wizard date format');
   ok(typeof window.RM_JIRA === 'object' && typeof window.RM_JIRA.csv === 'function', 'Jira export module is loaded');
   doc.querySelector('#modalHost #jxStories').checked = true;
-  doc.querySelector('#modalHost #jxFeatureType').value = 'Task';
   let exported = null;
   window.__headway.setExportSink((r) => { exported = r; });
   click(doc.querySelector('#modalHost #exGo'));
@@ -2996,11 +2993,11 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(exported && /-jira\.csv$/.test(exported.name) && exported.blob && exported.blob.size > 100,
     'Export hands a CSV blob to the save path');
   const ui = JSON.parse(window.localStorage.getItem('headway-ui-v1'));
-  ok(ui.exportPrefs.fmt === 'jira' && ui.jiraPrefs && ui.jiraPrefs.stories === true && ui.jiraPrefs.featureType === 'Task',
+  ok(ui.exportPrefs.fmt === 'jira' && ui.jiraPrefs && ui.jiraPrefs.stories === true,
     'jira export settings persist in the ui snapshot');
   window.eval("document.querySelector('#btnExport').click()");
   ok(doc.querySelector('#modalHost #exFmtJira').checked && !doc.querySelector('#modalHost #exJira').hidden &&
-    doc.querySelector('#modalHost #jxStories').checked && doc.querySelector('#modalHost #jxFeatureType').value === 'Task',
+    doc.querySelector('#modalHost #jxStories').checked,
     'reopening restores the Jira format and its settings');
   window.eval("document.querySelector('#modalHost [data-m=x]').click()");
   window.__headway.setExportSink(null);

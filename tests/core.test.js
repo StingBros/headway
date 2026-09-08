@@ -1575,8 +1575,8 @@ var sJc = mkState([
   { num: 1, feature: 'Login page', epic: 'Login', workstream: 'Product', size: 'M',
     startDay: 0, durDays: 5, deadline: '2026-09-04', jiraKey: 'HW-12',
     description: '<p>Hi <b>there</b></p>', enables: 'Checkout', notes: '',
-    stories: [{ title: 's1', done: true }, { title: 's2', jiraKey: 'HW-13' }] },
-  { num: 2, feature: 'Search, "fast"', deps: [1], phaseId: 'p2' },
+    stories: [{ title: 's1', done: true }, { title: 's2', jiraKey: 'HW-13', type: 'bug' }] },
+  { num: 2, feature: 'Search, "fast"', deps: [1], phaseId: 'p2', type: 'bug' },
   { num: 3, feature: 'Orphan', deps: [2] }
 ], { epicJira: { Login: 'HW-1' } });
 eq(RMJira.fileName(sJc), 'T-jira.csv', 'jira csv filename');
@@ -1584,7 +1584,8 @@ var jr = RMJira.rows(sJc, { features: true, stories: false });
 eq(jr.length, 3, 'features only: one row per feature');
 var r1 = jr[0];
 eq(r1['Summary'], 'Login page', 'summary is the feature name');
-eq(r1['Issue Type'], 'Story', 'feature issue type defaults to Story');
+eq(r1['Issue Type'], 'Story', 'feature type Feature maps to Jira Story');
+eq(jr[1]['Issue Type'], 'Bug', 'a Bug feature maps to Jira Bug');
 eq(r1['Parent'], 'HW-1', 'parent is the epic jira key');
 eq(r1['Labels'], 'ws-product phase-alpha size-m', 'labels are slugged workstream, phase and size');
 eq(r1['Due Date'], '2026-09-04', 'due date is the deadline');
@@ -1603,12 +1604,13 @@ eq(r2['Blocked By'], 'HW-12', 'dependencies with keys list the key');
 eq(r2['Start Date'], '', 'unscheduled: blank dates');
 eq(jr[2]['Blocked By'], '', 'dependencies without keys are left out');
 
-var jrs = RMJira.rows(sJc, { features: true, stories: true, featureType: 'Task', storyType: 'Sub-task' });
+var jrs = RMJira.rows(sJc, { features: true, stories: true });
 eq(jrs.length, 5, 'features and stories: a row per story too');
-eq(jrs[0]['Issue Type'], 'Task', 'custom feature issue type');
+eq(jrs[0]['Issue Type'], 'Story', 'feature row type from the type record');
 ok(jrs[0]['Description'].indexOf('[x]') === -1, 'checklist omitted when stories are rows');
 eq(jrs[1]['Summary'], 's1', 'story row summary');
-eq(jrs[1]['Issue Type'], 'Sub-task', 'story issue type');
+eq(jrs[1]['Issue Type'], 'Sub-task', 'story issue type from the type record');
+eq(jrs[2]['Issue Type'], 'Bug', 'a Bug story maps to Jira Bug');
 eq(jrs[1]['Parent'], 'HW-12', 'story parents to the feature key');
 eq(jrs[1]['Labels'], 'feature-login-page ws-product phase-alpha', 'story labels name the feature');
 eq(jrs[2]['Jira Key'], 'HW-13', 'story jira key');
