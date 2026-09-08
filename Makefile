@@ -19,6 +19,7 @@ build:
 test:
 	NODE_PATH=./node_modules node tests/core.test.js
 	NODE_PATH=./node_modules node tests/smoke.test.js
+	NODE_PATH=./node_modules node tests/desktop.test.js
 
 # stage the static frontend into dist/ (what the Tauri build bundles)
 frontend:
