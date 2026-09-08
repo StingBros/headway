@@ -174,6 +174,23 @@ console.log('— tools');
   throws(function () { AI.runTool('nope', {}, A); }, /unknown tool/, 'unknown tool rejected');
 }
 
+console.log('— item types');
+{
+  var stT = freshState();
+  var AT = fakeApp(stT);
+  AI.runTool('add_items', { items: [{ feature: 'Crash on save', type: 'Bug', stories: [{ title: 'repro', type: 'subtask' }] }] }, AT);
+  var added = stT.items.filter(function (x) { return x.feature === 'Crash on save'; })[0];
+  ok(added && added.type === 'bug', 'add_items accepts a type label');
+  ok(added.stories[0].type === 'subtask', 'story type on add');
+  AI.runTool('update_items', { updates: [{ num: added.num, fields: { type: 'task' } }] }, AT);
+  ok(stT.items.filter(function (x) { return x.num === added.num; })[0].type === 'task', 'update_items sets type by key');
+  var threwType = false;
+  try { AI.runTool('update_items', { updates: [{ num: added.num, fields: { type: 'nope' } }] }, AT); } catch (e) { threwType = /unknown type/.test(e.message); }
+  ok(threwType, 'unknown type is rejected');
+  var line = JSON.stringify(AI.runTool('get_project', {}, AT).items);
+  ok(/"type":"task"/.test(line), 'itemLine reports a non-default type');
+}
+
 console.log('— jira sync tool');
 {
   var JR = require('../js/jira.js');
