@@ -916,7 +916,7 @@ ok(doc.querySelectorAll('#rows .row.eband').length > 3, 'epic group bands render
   // feature into that epic, right after the group's last row
   const subAdds = doc.querySelectorAll('#rows .row.addrow.sub[data-epic]');
   ok(subAdds.length === doc.querySelectorAll('#rows .row.eband').length, 'every epic group ends with an Add feature row');
-  ok([...doc.querySelectorAll('#rows .addrow-lab')].every(l => /Add feature/.test(l.textContent)), 'add rows say "Add feature"');
+  ok([...doc.querySelectorAll('#rows .addrow-lab')].every(l => /Add Feature/.test(l.textContent)), 'add rows say "Add Feature"');
   const gAdd = [...subAdds].find(r => r.dataset.epic);
   const gEpic = gAdd.dataset.epic, gPhase = gAdd.dataset.phase;
   const nBefore = state().items.length;
@@ -1203,6 +1203,29 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
   any.checked = true; any.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().meta.hierarchy.anyTypeAnyLevel === true && !doc.querySelector('button[data-suhtype]'), 'the switch hides the chips');
   any.checked = false; any.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- level labels drive prominent UI strings
+{
+  click(doc.querySelector('#btnSetup'));
+  suTab('workstreams');
+  const sl = doc.querySelector('input[data-suhlabel="story"]');
+  sl.value = 'Task'; sl.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const fl = doc.querySelector('input[data-suhlabel="feature"]');
+  fl.value = 'Capability'; fl.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('.tab[data-view="planning"]') || doc.querySelector('[data-view="planning"]'));
+  ok([...doc.querySelectorAll('.addrow-lab')].some(el => /Add Capability/.test(el.textContent)), 'Add-row wording follows the level label');
+  // reset the labels back to their defaults through Setup, since the inputs
+  // do not survive the view switch
+  click(doc.querySelector('#btnSetup'));
+  suTab('workstreams');
+  const fl2 = doc.querySelector('input[data-suhlabel="feature"]');
+  fl2.value = 'Feature'; fl2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const sl2 = doc.querySelector('input[data-suhlabel="story"]');
+  sl2.value = 'Story'; sl2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.hierarchy.levels[1].label === 'Feature' && state().meta.hierarchy.levels[2].label === 'Story',
+    'level labels reset back to their defaults');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
