@@ -3199,6 +3199,43 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   });
 }
 
+// ---------------------------------------------------------------- story dependencies in the panel
+{
+  const hosts = state().items.filter(i => !i.milestone).slice(0, 2);
+  window.HeadwayApp.ai.commit('story dep fixture', (s) => {
+    const f0 = window.RM.itemById(s, hosts[0].id), f1 = window.RM.itemById(s, hosts[1].id);
+    f0.stories.push({ id: 'sd_a', title: 'Dep story alpha', done: false, num: window.RM.nextNum(s) });
+    f1.stories.push({ id: 'sd_b', title: 'Dep story beta', done: false, num: window.RM.nextNum(s) + 1 });
+  });
+  const numA = window.RM.storyRef(state(), 'sd_a').st.num;
+  window.__headway.selectItem(hosts[1].id);
+  click(doc.querySelector('#panel [data-pst-edit="sd_b"]'));
+  const sec = doc.querySelector('#panel .p-sec[data-sec="st-deps"]');
+  ok(!!sec, 'the story panel has a Dependencies section');
+  const secs = [...doc.querySelectorAll('#panel .p-sec')].map(e => e.dataset.sec);
+  ok(secs.indexOf('st-deps') > secs.indexOf('st-schedule') && secs.indexOf('st-deps') < secs.indexOf('st-integrations'), 'it sits between Timeline and Integrations');
+  if (!sec.classList.contains('open')) click(doc.querySelector('#panel [data-sectoggle="st-deps"]'));
+  const search = doc.querySelector('#panel input[data-stf="stdepsearch"]');
+  ok(!!search, 'the section offers a search box');
+  search.value = '#' + numA; search.dispatchEvent(new window.Event('input', { bubbles: true }));
+  ok(!!doc.querySelector('#panel .dep-sug button[data-addstdep="' + numA + '"]'), 'typing #number suggests that story');
+  search.value = 'alpha'; search.dispatchEvent(new window.Event('input', { bubbles: true }));
+  const hit = doc.querySelector('#panel .dep-sug button[data-addstdep="' + numA + '"]');
+  ok(!!hit && hit.textContent.indexOf('#' + numA) !== -1, 'typing a title suggests it with its number');
+  click(hit);
+  const depsOf = (id) => window.RM.storyRef(state(), id).st.deps;
+  ok(String(depsOf('sd_b')) === String(numA), 'picking the suggestion adds the dependency');
+  ok(!!doc.querySelector('#panel .dep-chip[data-stdepgo="sd_a"]'), 'the dependency shows as a chip');
+  click(doc.querySelector('#panel .dep-chip[data-stdepgo="sd_a"]'));
+  ok(!!doc.querySelector('#panel .p-crumb') && /alpha/.test(doc.querySelector('#panel textarea[data-stf="title"]').value), 'clicking the chip opens that story');
+  ok(!!doc.querySelector('#panel .dep-chip button[data-strdep="sd_b"]'), 'the other side lists the dependent');
+  click(doc.querySelector('#panel .dep-chip button[data-strdep="sd_b"]'));
+  ok(depsOf('sd_b').length === 0, 'removing from the dependent side clears the link');
+  window.HeadwayApp.ai.commit('story dep fixture cleanup', (s) => {
+    [hosts[0].id, hosts[1].id].forEach((id) => { const f = window.RM.itemById(s, id); f.stories = f.stories.filter(x => x.id !== 'sd_a' && x.id !== 'sd_b'); });
+  });
+}
+
 // ---------------------------------------------------------------- story panel estimate buttons
 // Size / Priority / Risk in the story panel are buttons with data-stf AND
 // data-v; the generic data-stf handler must not swallow them.

@@ -4441,6 +4441,29 @@
       : '';
     var estimate = stSizeBtns + stPriBtns + stRiskBtns;
 
+    // dependencies: story → story only (features link separately)
+    var rsP = RM.resolveStoryDeps(state, st);
+    var stDepChips = rsP.deps.map(function (ref) {
+      return '<span class="dep-chip" data-stdepgo="' + ref.st.id + '" title="' + esc(ref.st.title || '') + '"><i>#' + ref.st.num + '</i> ' +
+        esc(shorten(ref.st.title || '(untitled)', 26)) + '<button class="x" data-stdeprm="' + ref.st.num + '"><i data-lucide="x"></i></button></span>';
+    }).concat(rsP.unknown.map(function (n) {
+      return '<span class="dep-chip unknown" title="No ' + esc(lvl('story').toLowerCase()) + ' #' + n + '"><i>#' + n + '</i> missing' +
+        '<button class="x" data-stdeprm="' + n + '"><i data-lucide="x"></i></button></span>';
+    })).join('');
+    var stDependentChips = RM.storyDependents(state, st).map(function (ref) {
+      return '<span class="dep-chip" data-stdepgo="' + ref.st.id + '" title="' + esc(ref.st.title || '') + '"><i>#' + ref.st.num + '</i> ' +
+        esc(shorten(ref.st.title || '(untitled)', 26)) +
+        '<button class="x" data-strdep="' + ref.st.id + '" title="Remove this link"><i data-lucide="x"></i></button></span>';
+    }).join('');
+    var stDeps =
+      '<label class="p-lab">Depends on</label>' +
+      '<div class="chips">' + stDepChips + (stDepChips ? '' : '<span class="p-none">none</span>') + '</div>' +
+      '<div class="dep-search"><input data-stf="stdepsearch" placeholder="' +
+      esc('Add a ' + lvl('story').toLowerCase() + ' by # or name\u2026') + '" autocomplete="off" style="width:100%;margin-top:7px">' +
+      '<div class="dep-sug" hidden></div></div>' +
+      '<label class="p-lab" style="margin-top:10px">Depended on by</label>' +
+      '<div class="chips">' + stDependentChips + (stDependentChips ? '' : '<span class="p-none">none</span>') + '</div>';
+
     panel.innerHTML =
       '<div id="panelRz"></div>' +
       '<div class="p-top">' +
@@ -4479,6 +4502,7 @@
           : '<div class="m-hint">Add people in the Resources panel to assign them.</div>')) +
       sec2('tags', 'Tags', tagsBody(st)) +
       sec2('schedule', 'Timeline', timeline) +
+      sec2('deps', 'Dependencies', stDeps) +
       sec2('integrations', 'Integrations',
         '<label class="p-lab">Jira key</label>' +
         '<input data-stf="jiraKey" placeholder="e.g. HW-13" value="' + esc(st.jiraKey || '') +
@@ -4934,6 +4958,36 @@
       else if (stk === 'risk') setStoryRisk(it.id, selStory, stv);
       return;
     }
+    // story dependency chips (before the generic [data-stf] return)
+    if (selStory) {
+      var stDepGo = e.target.closest('[data-stdepgo]');
+      var stDepRm = e.target.closest('[data-stdeprm]');
+      var stRDep = e.target.closest('[data-strdep]');
+      if (stDepRm) {
+        var rmNum = parseInt(stDepRm.dataset.stdeprm, 10);
+        var rmStId = selStory;
+        commit('remove story dep', function (s) {
+          var st2 = storyById(RM.itemById(s, it.id) || {}, rmStId);
+          if (st2) st2.deps = (st2.deps || []).filter(function (x) { return x !== rmNum; });
+        });
+        return;
+      }
+      if (stRDep) {
+        var otherId = stRDep.dataset.strdep;
+        var meStId = selStory;
+        commit('remove story dependent', function (s) {
+          var meSt = storyById(RM.itemById(s, it.id) || {}, meStId);
+          var oRef = RM.storyRef(s, otherId);
+          if (meSt && oRef) oRef.st.deps = (oRef.st.deps || []).filter(function (x) { return x !== meSt.num; });
+        });
+        return;
+      }
+      if (stDepGo) {
+        var goRef = RM.storyRef(state, stDepGo.dataset.stdepgo);
+        if (goRef) selectStory(goRef.it.id, goRef.st.id);
+        return;
+      }
+    }
     // story-panel controls
     var stf = e.target.closest('[data-stf]');
     if (stf && selStory) {
@@ -5221,6 +5275,7 @@
     var stf = e.target.dataset.stf;
     if (stf && selStory) {
       var stId = selStory;
+      if (stf === 'stdepsearch') return; // combobox, not a field
       var sval = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
       if (stf === 'startDate') {
         if (!sval) { render(); return; }
@@ -5370,6 +5425,17 @@
         e.target.value = '';
       }
     }
+    if (e.target.dataset.stf === 'stdepsearch') {
+      var stSug = $('#panel .dep-sug');
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        var stFirst = stSug && $('[data-addstdep]', stSug);
+        if (stFirst) stFirst.click();
+      } else if (e.key === 'Escape') {
+        if (stSug) { stSug.hidden = true; }
+        e.target.value = '';
+      }
+    }
   });
 
   // Enter on any single-line field in the panel or the left panes (the
@@ -5383,7 +5449,7 @@
     var isArea = t.tagName === 'TEXTAREA';
     if (isArea ? (!t.classList.contains('p-name') || e.shiftKey) : t.tagName !== 'INPUT') return;
     if (!isArea && ['checkbox', 'radio', 'range', 'file', 'color'].indexOf(t.type) !== -1) return;
-    if (t.dataset.act === 'st-add' || t.dataset.f === 'depsearch' || t.dataset.tagadd) return;
+    if (t.dataset.act === 'st-add' || t.dataset.f === 'depsearch' || t.dataset.stf === 'stdepsearch' || t.dataset.tagadd) return;
     e.preventDefault();
     var wasSel = t.value !== t.defaultValue;
     t.blur();
@@ -5401,7 +5467,54 @@
     commit('add dep', function (s) { RM.itemById(s, itemId).deps.push(num); });
     toast('#' + it.num + ' now depends on #' + num);
   }
+  // story → story dependency search: '#n' / 'n' resolves a number, anything
+  // else matches the story title or its feature's title
+  function addStoryDep(itemId, stId, num) {
+    var meRef = RM.storyRef(state, stId);
+    var target = RM.storyByNum(state, num);
+    if (!meRef || !target || target.st.id === stId) return;
+    if ((meRef.st.deps || []).indexOf(num) !== -1) {
+      toast('#' + meRef.st.num + ' already depends on #' + num);
+      return;
+    }
+    commit('add story dep', function (s) {
+      var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
+      if (st2) { st2.deps = st2.deps || []; st2.deps.push(num); }
+    });
+    toast('\u201C' + (meRef.st.title || '(untitled)') + '\u201D now depends on #' + num);
+  }
   $('#panel').addEventListener('input', function (e) {
+    if (e.target.dataset.stf === 'stdepsearch' && selStory) {
+      var itS = selectedId && RM.itemById(state, selectedId);
+      var meSt = itS && storyById(itS, selStory);
+      var sugS = e.target.parentElement.querySelector('.dep-sug');
+      if (!meSt || !sugS) return;
+      var qS = e.target.value.trim();
+      if (!qS) { sugS.hidden = true; sugS.innerHTML = ''; return; }
+      var mine = meSt.deps || [];
+      var stHits = [];
+      if (/^#?\d+$/.test(qS)) {
+        var oneRef = RM.storyByNum(state, parseInt(qS.replace('#', ''), 10));
+        if (oneRef && oneRef.st.id !== meSt.id && mine.indexOf(oneRef.st.num) === -1) stHits.push(oneRef);
+      } else {
+        var ql = qS.toLowerCase();
+        state.items.forEach(function (o) {
+          (o.stories || []).forEach(function (os) {
+            if (stHits.length >= 8) return;
+            if (os.id === meSt.id || mine.indexOf(os.num) !== -1) return;
+            if ((os.title || '').toLowerCase().indexOf(ql) !== -1 ||
+              (o.feature || '').toLowerCase().indexOf(ql) !== -1) stHits.push({ it: o, st: os });
+          });
+        });
+      }
+      sugS.innerHTML = stHits.map(function (r) {
+        return '<button data-addstdep="' + r.st.num + '"><i>#' + r.st.num + '</i> ' +
+          esc(shorten(r.st.title || '(untitled)', 44)) +
+          (r.it.feature ? ' <em>' + esc(shorten(r.it.feature, 28)) + '</em>' : '') + '</button>';
+      }).join('') || '<div class="dep-sug-none">No match</div>';
+      sugS.hidden = false;
+      return;
+    }
     if (e.target.dataset.f !== 'depsearch') return;
     var it = selectedId && RM.itemById(state, selectedId);
     if (!it) return;
@@ -5423,6 +5536,12 @@
     sug.hidden = false;
   });
   $('#panel').addEventListener('click', function (e) {
+    var addSt = e.target.closest('[data-addstdep]');
+    if (addSt && selStory) {
+      var itSt = selectedId && RM.itemById(state, selectedId);
+      if (itSt) addStoryDep(itSt.id, selStory, parseInt(addSt.dataset.addstdep, 10));
+      return;
+    }
     var add = e.target.closest('[data-addep]');
     var addTxt = e.target.closest('[data-addeptext]');
     if (!add && !addTxt) return;
