@@ -7,7 +7,7 @@ both come from the matching section here. Newest first.
 Format: short sections, bullets, one bold title per notable change —
 `**Feature title**: a short, impactful description and use case.`
 
-## Unreleased
+## 1.0.13 — 2026-09-09
 
 ### New
 
@@ -15,12 +15,13 @@ Format: short sections, bullets, one bold title per notable change —
 - **Story dependencies**: a story can depend on any other story. Add one in the story panel's Dependencies section (by # or name) or drag a story bar's edge circle onto another story; arrows and order warnings work like features; links push to Jira and the Stories sheet carries them.
 - **Flags**: right-click any feature or story → **Flag…** (optional reason) to mark it for attention; an orange flag takes the alert slot on the row (hover for the reason) and shows on Prioritizing cards, Sprinting rows and the panel header. **Edit flag…** / **Unflag** from the same menu. The AI assistant can set `flag` too.
 - **Titles rename on double-click**: on Planning and Prioritizing the feature and story titles are text, like Sprinting. Double-click one, or pick **Rename…** from its context menu, to edit; a single click just selects, and dragging from the title moves the row. Scoping keeps its spreadsheet cells.
+
+### Improved
+
 - AI assistant: Markdown tables in replies render as tables.
 - ⌘B / ⌘I (Ctrl+B / Ctrl+I) bold and italicise inside every rich text field.
-- Prioritizing: the board is full width; **Columns → Unset column** hides or shows the catch-all column; clicking a card opens the detail panel on it and clicking the same card again puts the panel away.
+- Prioritizing: the board is full width; **Columns → Unset column** hides or shows the catch-all column; clicking a card opens the detail panel on it and clicking the same card again puts the panel away; an empty column or swimlane cell says "No items"; the catch-all swimlanes (the default workstream, "No epic") sit last.
 - Sprinting: the main content area is capped at a readable width.
-- Prioritizing swimlanes: the catch-all lanes (the default workstream, "No epic") sit last.
-- Prioritizing: an empty column or swimlane cell says "No items".
 - Right-clicking the app background no longer opens the theme menu (the theme lives in Settings and the app menu).
 
 ## 1.0.12 — 2026-09-09
