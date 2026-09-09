@@ -34,6 +34,10 @@
   --c-mixed: #A14FBF;
   --warn: #A66A00;
   --warn-bg: #FBF0DA;
+  --flag: #E8710A;       /* attention flag */
+  --flag-soft: #FFF1E3;  /* flagged row at rest */
+  --flag-hover: #FFE7D0;
+  --flag-sel: #FFD6AE;   /* flagged row selected */
   --warn-deep: #6E4700;
   --err: #B3362B;
   --err-bg: #F9E4E1;
@@ -93,6 +97,10 @@ html[data-theme="dark"] {
   --blue-line: #2E4A6E;
   --warn: #D9A03E;
   --warn-bg: #3A2D14;
+  --flag: #F08A2E;
+  --flag-soft: #33230F;
+  --flag-hover: #402B12;
+  --flag-sel: #55381A;
   --warn-deep: #F0C878;
   --err: #E5695C;
   --err-bg: #40201C;
@@ -701,6 +709,11 @@ body.cap-off .hc-lab { display: none !important; }
 .row.story:hover .st-del { opacity: 1; }
 .st-del:hover { color: var(--err); }
 .row.story-add .row-left { background: var(--paper-2); border-bottom-color: var(--line); }
+/* flagged rows: a light orange left pane, darker when selected — the same
+   roles the gray hover / blue selection play for ordinary rows */
+.row.flagged .row-left, .row.story.flagged .row-left { background: var(--flag-soft); }
+.row.flagged:hover .row-left { background: var(--flag-hover); }
+.row.flagged.selected .row-left, .row.story.flagged.selected .row-left { background: var(--flag-sel); box-shadow: inset 3px 0 0 var(--flag); }
 /* the + sits LEFT of the text so the input's text starts exactly where
    story titles do (68 + 12 icon + 5 gap = 85) */
 .row.story-add .st-pad { width: 68px; flex: 0 0 68px; }

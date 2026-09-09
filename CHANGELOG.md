@@ -7,6 +7,10 @@ both come from the matching section here. Newest first.
 Format: short sections, bullets, one bold title per notable change —
 `**Feature title**: a short, impactful description and use case.`
 
+## Unreleased
+
+- Flagged rows are tinted light orange in the left pane, darker when selected.
+
 ## 1.0.13 — 2026-09-09
 
 ### New

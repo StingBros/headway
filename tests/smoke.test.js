@@ -3415,6 +3415,12 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(flagged.flag && flagged.flag.reason === 'Waiting on security sign-off', 'confirming stores the flag and its reason');
   const badge = row().querySelector('.r-warn.flag');
   ok(!!badge && /Waiting on security/.test(badge.title) && !!badge.querySelector('[data-lucide="flag"]'), 'the row shows an orange flag in the alert slot with the reason as its tooltip');
+  ok(row().classList.contains('flagged'), 'a flagged row carries the flagged class (orange left pane)');
+  window.__headway.selectItem(host.id);
+  ok(row().classList.contains('flagged') && row().classList.contains('selected'), 'selected + flagged combine (darker orange)');
+  const cssF = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  ok(/\.row\.flagged \.row-left[^{]*\{[^}]*--flag-soft/.test(cssF) && /\.row\.flagged\.selected \.row-left[^{]*\{[^}]*--flag-sel/.test(cssF), 'flagged rows use the light orange at rest and the darker one when selected');
+  ok(/--flag-sel:/.test(cssF.split('html[data-theme="dark"]')[1] || ''), 'the dark theme defines its own flag tints');
   ctxOn(row());
   ok(!!menuBtn(/Edit flag/) && !!menuBtn(/Unflag/), 'a flagged row offers Edit flag… and Unflag');
   click(menuBtn(/Unflag/));
@@ -3429,6 +3435,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click([...doc.querySelectorAll('#modalHost button')].find(b => /^Flag$/.test(b.textContent.trim())));
   ok(window.RM.storyRef(state(), 'fl_st').st.flag && window.RM.storyRef(state(), 'fl_st').st.flag.reason === '', 'a story flags with an empty reason');
   ok(!!stRow().querySelector('.r-warn.flag') && stRow().querySelector('.r-warn.flag').title === 'Flagged', 'the story row shows the flag');
+  ok(stRow().classList.contains('flagged'), 'a flagged story row is tinted too');
   click(doc.querySelector('#detailBtn'));
   click(doc.querySelector('#popover .menu-list [data-mi="0"]'));
   // Prioritizing card and Sprinting row carry the flag too

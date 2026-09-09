@@ -3840,7 +3840,7 @@
       '<div class="row item' + (view === 'scoping' ? ' scope' : '') + (it.milestone ? ' ms' : '') +
       // when one of its stories is the selection, the feature is only the
       // selection's parent — marked, but never in the selected background
-      (isSel(it.id) ? (selStory && selectedId === it.id ? ' sel-parent' : ' selected') : '') + (it.done ? ' done' : '') +
+      (isSel(it.id) ? (selStory && selectedId === it.id ? ' sel-parent' : ' selected') : '') + (it.done ? ' done' : '') + (it.flag ? ' flagged' : '') +
       '" data-id="' + it.id + '">' +
       '<div class="row-left">' +
       '<span class="r-grip" data-act="grip"><i data-lucide="grip-vertical"></i></span>' +
@@ -3892,7 +3892,7 @@
       it.stories.forEach(function (st) {
         var stSched = st.startDay != null && st.durDays != null;
         html.push(
-          '<div class="row story' + (selStory === st.id ? ' selected' : '') +
+          '<div class="row story' + (selStory === st.id ? ' selected' : '') + (st.flag ? ' flagged' : '') +
           '" data-story="' + st.id + '" data-id="' + it.id + '">' +
           '<div class="row-left"><span class="st-pad"><span class="st-grip" title="Drag to reorder or move to another feature"><i data-lucide="grip-vertical"></i></span></span>' +
           // the story number sits in the same column as the feature numbers above
