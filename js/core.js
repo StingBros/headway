@@ -259,12 +259,15 @@
   RM.LEVEL_KEYS = ['epic', 'feature', 'story'];
   RM.DEFAULT_ITEM_TYPES = [
     { key: 'epic', label: 'Epic', icon: 'layers', jira: 'Epic' },
-    { key: 'feature', label: 'Feature', icon: 'rows-3', jira: 'Story' },
+    { key: 'feature', label: 'Feature', icon: 'square', jira: 'Story' },
     { key: 'bug', label: 'Bug', icon: 'bug', jira: 'Bug' },
     { key: 'task', label: 'Task', icon: 'check-square', jira: 'Task' },
-    { key: 'story', label: 'Story', icon: 'list-tree', jira: 'Sub-task' },
+    { key: 'story', label: 'Story', icon: 'bookmark', jira: 'Sub-task' },
     { key: 'subtask', label: 'Subtask', icon: 'corner-down-right', jira: 'Sub-task' }
   ];
+  // icons the first release shipped as defaults; stored documents still on
+  // them pick up the new default glyphs
+  RM.LEGACY_TYPE_ICONS = { feature: 'rows-3', story: 'list-tree' };
   RM.DEFAULT_HIERARCHY_LEVELS = [
     { key: 'epic', label: 'Epic', types: ['epic'] },
     { key: 'feature', label: 'Feature', types: ['feature', 'bug', 'task'] },
@@ -334,9 +337,12 @@
       var key = String(t.key || '').trim();
       if (!key || seenKey[key]) return null;
       seenKey[key] = true;
-      return { key: key, label: String(t.label || key), icon: String(t.icon || 'tag'), jira: String(t.jira || '') };
+      var icon = String(t.icon || 'tag');
+      if (RM.LEGACY_TYPE_ICONS[key] === icon) icon = RM.DEFAULT_ITEM_TYPES.filter(function (d) { return d.key === key; })[0].icon;
+      return { key: key, label: String(t.label || key), icon: icon, jira: String(t.jira || ''), color: resolveColor(t.color) || '' };
     }).filter(Boolean);
-    if (!types.length) types = RM.DEFAULT_ITEM_TYPES.map(function (t) { return { key: t.key, label: t.label, icon: t.icon, jira: t.jira }; });
+    if (!types.length) types = RM.DEFAULT_ITEM_TYPES.map(function (t) { return { key: t.key, label: t.label, icon: t.icon, jira: t.jira, color: '' }; });
+    types.forEach(function (t, i) { if (!t.color) t.color = RM.HASH_PALETTE[i % RM.HASH_PALETTE.length]; });
     if (!hadTypes && legacy) {
       // one-time migration of the old three Jira type names
       var mig = { epic: legacy.epicType, feature: legacy.featureType, story: legacy.storyType };
@@ -367,9 +373,10 @@
   }
   RM.addItemType = function (state, label, icon, jira) {
     RM.normalizeTypes(state);
-    var base = typeSlug(label), key = base, n = 2;
-    while (RM.itemType(state, key)) key = base + '-' + (n++);
-    state.meta.itemTypes.push({ key: key, label: String(label || 'New type'), icon: String(icon || 'tag'), jira: String(jira || '') });
+    var base = typeSlug(label), key = base, sfx = 2;
+    while (RM.itemType(state, key)) key = base + '-' + (sfx++);
+    var n = state.meta.itemTypes.length;
+    state.meta.itemTypes.push({ key: key, label: String(label || 'New type'), icon: String(icon || 'tag'), jira: String(jira || ''), color: RM.HASH_PALETTE[n % RM.HASH_PALETTE.length] });
     return key;
   };
   RM.renameItemType = function (state, key, label) {
@@ -379,6 +386,15 @@
   RM.setItemTypeIcon = function (state, key, icon) {
     var t = RM.itemType(state, key);
     if (t) t.icon = String(icon || 'tag');
+  };
+  RM.setItemTypeColor = function (state, key, color) {
+    var t = RM.itemType(state, key);
+    var hex = resolveColor(color);
+    if (t && hex) t.color = hex;
+  };
+  RM.colorForType = function (state, key) {
+    var t = RM.itemType(state, key);
+    return (t && resolveColor(t.color)) || RM.PALETTE.neutral;
   };
   RM.setItemTypeJira = function (state, key, jira) {
     var t = RM.itemType(state, key);
@@ -487,7 +503,7 @@
   };
   // What bar colors follow. The mode is a UI preference the app sets on
   // load; every renderer and export reads colorForItem, so they all agree.
-  RM.COLOR_MODES = ['workstream', 'epic', 'assignee', 'priority'];
+  RM.COLOR_MODES = ['workstream', 'epic', 'assignee', 'priority', 'type'];
   var colorMode = 'workstream';
   RM.setColorMode = function (mode) { colorMode = RM.COLOR_MODES.indexOf(mode) !== -1 ? mode : 'workstream'; };
   RM.colorMode = function () { return colorMode; };
@@ -579,6 +595,7 @@
       return RM.colorForMember(m);
     }
     if (colorMode === 'priority') return RM.colorForPriority(state, it);
+    if (colorMode === 'type') return RM.colorForType(state, RM.typeOf(state, it, 'feature').key);
     return RM.colorForWs(state, it.workstream);
   };
   // legend entries for a set of items under the active color mode:
@@ -596,6 +613,9 @@
         var sch = RM.prioritySchemeOf(state);
         var lbl = sch === 'none' ? 'No priority' : sch === 'rice' ? 'RICE' : (it.priority || 'No priority');
         add(lbl, RM.colorForPriority(state, it));
+      } else if (colorMode === 'type') {
+        var ty = RM.typeOf(state, it, 'feature');
+        add(ty.label, RM.colorForType(state, ty.key));
       } else add(it.workstream || RM.defaultWsName(state), RM.colorForWs(state, it.workstream));
     });
     if (colorMode === 'workstream') {

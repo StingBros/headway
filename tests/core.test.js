@@ -1300,6 +1300,40 @@ section('item types & hierarchy');
   eq(sT4.meta.hierarchy.anyTypeAnyLevel, true, 'switch round-trips');
   eq(RM.levelLabel(sT4, 'story', true), 'Tasks', 'plural of a custom label');
 }
+{
+  var sC = RM.normalizeState({ meta: { title: 'C', timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
+  var tF = RM.itemType(sC, 'feature'), tS = RM.itemType(sC, 'story');
+  eq(tF.icon, 'square', 'feature default icon is the filled square glyph');
+  eq(tS.icon, 'bookmark', 'story default icon is the bookmark');
+  eq(RM.itemType(sC, 'task').icon, 'check-square', 'task icon unchanged');
+  ok(RM.itemTypes(sC).every(function (t) { return /^[0-9A-F]{6}$/.test(t.color); }), 'every type carries a resolved 6-hex color');
+  eq(RM.itemTypes(sC).map(function (t) { return t.color; }), RM.HASH_PALETTE.slice(0, RM.itemTypes(sC).length), 'default colors follow the hash palette in list order');
+  eq(RM.colorForType(sC, 'bug'), RM.HASH_PALETTE[2], 'colorForType reads the record');
+  eq(RM.colorForType(sC, 'nope'), RM.PALETTE.neutral, 'unknown type is neutral');
+  RM.setItemTypeColor(sC, 'bug', '#ff0000');
+  eq(RM.itemType(sC, 'bug').color, 'FF0000', 'setItemTypeColor stores an upper-case hex without #');
+  RM.setItemTypeColor(sC, 'bug', 'not a color');
+  eq(RM.itemType(sC, 'bug').color, 'FF0000', 'a bad color is ignored');
+  var kNew = RM.addItemType(sC, 'Spike', 'zap', 'Spike');
+  ok(/^[0-9A-F]{6}$/.test(RM.itemType(sC, kNew).color), 'a new type gets a palette color at once');
+  // stored documents on the old default icons migrate; custom icons stay
+  var sM = RM.normalizeState({ meta: { title: 'M', timelineStart: '2026-07-27', numWeeks: 8,
+    itemTypes: [{ key: 'feature', label: 'Feature', icon: 'rows-3', jira: 'Story' }, { key: 'story', label: 'Story', icon: 'list-tree', jira: 'Sub-task' }, { key: 'bug', label: 'Bug', icon: 'flame', jira: 'Bug', color: '123456' }] },
+    phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
+  eq(RM.itemType(sM, 'feature').icon, 'square', 'old feature default icon migrates to square');
+  eq(RM.itemType(sM, 'story').icon, 'bookmark', 'old story default icon migrates to bookmark');
+  eq(RM.itemType(sM, 'bug').icon, 'flame', 'a custom icon survives');
+  eq(RM.itemType(sM, 'bug').color, '123456', 'a stored color survives');
+  // color mode 'type'
+  ok(RM.COLOR_MODES.indexOf('type') !== -1, "'type' is a color mode");
+  var sT3col = RM.normalizeState({ meta: { title: 'T', timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p', name: 'P' }], team: [],
+    items: [{ id: 'x', num: 1, phaseId: 'p', feature: 'X', type: 'bug' }, { id: 'y', num: 2, phaseId: 'p', feature: 'Y' }] });
+  RM.setColorMode('type');
+  eq(RM.colorForItem(sT3col, sT3col.items[0]), RM.colorForType(sT3col, 'bug'), 'type mode colors an item by its type');
+  eq(RM.colorForItem(sT3col, sT3col.items[1]), RM.colorForType(sT3col, 'feature'), 'an item without a type takes the level default type color');
+  eq(RM.colorLegend(sT3col, sT3col.items).map(function (e) { return e.name; }), ['Bug', 'Feature'], 'type legend names the types in first-seen order');
+  RM.setColorMode('workstream');
+}
 
 section('item type mutations & validation');
 {
