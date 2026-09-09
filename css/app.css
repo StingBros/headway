@@ -985,6 +985,12 @@ textarea.p-text { width: 100%; min-height: 52px; resize: vertical; font-size: 12
 .dep-chip.unknown { background: var(--err-bg); border-color: var(--err-line); }
 .dep-chip .x { border: 0; background: transparent; padding: 0 4px; color: var(--ink-3); font-size: 11px; cursor: pointer; }
 .dep-chip .x:hover { color: var(--err); }
+/* tags: pill chips plus a dashed "add" input, panel-only */
+.tag-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; border: 1px solid var(--line-2); border-radius: 999px; padding: 1px 4px 1px 8px; background: var(--paper-2); }
+.tag-chip button { border: 0; background: none; padding: 0; display: inline-flex; color: var(--ink-3); cursor: pointer; }
+.tag-chip button:hover { color: var(--err); }
+.tag-chip button svg { width: 11px; height: 11px; }
+.p-tag-in { border: 1px dashed var(--line-2); border-radius: 999px; padding: 2px 8px; font: inherit; font-size: 11px; min-width: 90px; background: transparent; }
 .p-check { display: flex; align-items: center; gap: 9px; font-size: 13.5px; color: var(--ink); cursor: pointer; }
 /* Setup → Apps: one row per header tab, icon + name + what it does */
 .su-app { padding: 7px 0; border-top: 1px solid var(--line); }

@@ -1226,7 +1226,48 @@ if (!ExcelJS) {
             return RMExcel.readStateJson(buf5);
           }).then(function (json5) {
             ok(json5 === null, 'foreign workbooks read as null (no echo match possible)');
-            finish();
+            // ---- tags round trip, on its own document (the emoji fixture
+            // above is byte-sensitive, so tags get their own workbook)
+            var stT = RM.normalizeState({
+              meta: JSON.parse(JSON.stringify(META)),
+              phases: [{ id: 'p1', name: 'Alpha', bucket: false }],
+              items: [{ id: 'i1', num: 1, phaseId: 'p1', feature: 'Tagged', tags: ['tech debt', 'q3'],
+                stories: [{ id: 's1', title: 'story one', tags: ['spike'] }] }],
+              team: []
+            });
+            return RMExcel.exportWorkbook(stT).then(function (bufT) {
+              return RMExcel.importWorkbook(bufT).then(function (rt1) {
+                eq(rt1.state.items[0].tags, ['tech debt', 'q3'], 'feature tags survive the lossless path');
+                eq(rt1.state.items[0].stories[0].tags, ['spike'], 'story tags survive the lossless path');
+                var wbT = new ExcelJS.Workbook();
+                return wbT.xlsx.load(bufT).then(function () {
+                  wbT.removeWorksheet(wbT.getWorksheet('_RoadmapTool').id);
+                  return wbT.xlsx.writeBuffer();
+                }).then(function (bufT2) {
+                  return RMExcel.importWorkbook(bufT2);
+                }).then(function (rt2) {
+                  ok(rt2.source === 'template', 'tags doc without the tool sheet parses as a template');
+                  eq(rt2.state.items[0].tags, ['tech debt', 'q3'], 'template path re-reads the Roadmap Tags column');
+                  eq(rt2.state.items[0].stories[0].tags, ['spike'], 'template path re-reads the Stories Tags column');
+                  // an older workbook has no Tags columns at all
+                  var wbT3 = new ExcelJS.Workbook();
+                  return wbT3.xlsx.load(bufT).then(function () {
+                    wbT3.removeWorksheet(wbT3.getWorksheet('_RoadmapTool').id);
+                    var rws3 = wbT3.getWorksheet('Roadmap');
+                    rws3.spliceColumns(rws3.columnCount, 1);
+                    var sws3 = wbT3.getWorksheet('Stories');
+                    sws3.spliceColumns(7, 1);
+                    return wbT3.xlsx.writeBuffer();
+                  }).then(function (bufT3) {
+                    return RMExcel.importWorkbook(bufT3);
+                  }).then(function (rt3) {
+                    eq(rt3.state.items[0].tags, [], 'a pre-tags workbook still imports, with no tags');
+                    eq(rt3.state.items[0].stories[0].tags, [], 'and its stories carry no tags');
+                    finish();
+                  });
+                });
+              });
+            });
           });
         });
       });
@@ -1563,6 +1604,28 @@ var sJk2 = mkState([{ num: 1, feature: 'a' }]);
 eq(sJk2.items[0].jiraKey, null, 'item jira key defaults to null');
 eq(sJk2.epicJira, {}, 'epicJira defaults to an empty map');
 
+// ------------------------------------------------------------------- tags
+section('tags');
+eq(RM.normalizeTags(' a , b,, A ,c'), ['a', 'b', 'c'], 'a comma string splits, trims, drops empties and dedupes case-insensitively');
+eq(RM.normalizeTags(['x', ' y ', 'X', '']), ['x', 'y'], 'array input normalizes the same way');
+eq(RM.normalizeTags('Alpha, alpha'), ['Alpha'], 'the first spelling wins');
+eq(RM.normalizeTags([new Array(60).join('z')])[0].length, 40, 'each tag caps at 40 chars');
+eq(RM.normalizeTags(null), [], 'nothing in, nothing out');
+eq(RM.normalizeTags(7), [], 'a non-string, non-array value yields no tags');
+{
+  var sTg = mkState([
+    { num: 1, feature: 'a', tags: ['red', 7, null, 'Blue'], stories: [{ title: 's', tags: 'green, red' }] },
+    { num: 2, feature: 'b', tags: 'ZED' }
+  ]);
+  eq(sTg.items[0].tags, ['red', 'Blue'], 'normalizeState keeps item tags and drops non-strings');
+  eq(sTg.items[0].stories[0].tags, ['green', 'red'], 'story tags normalize from a comma string');
+  eq(sTg.items[1].tags, ['ZED'], 'a plain string tag field becomes a one-tag array');
+  eq(mkState([{ num: 1, feature: 'a' }]).items[0].tags, [], 'tags default to an empty array');
+  eq(RM.allTags(sTg), ['Blue', 'green', 'red', 'ZED'], 'allTags unions features and stories, sorted case-insensitively');
+  RM.setTags(sTg, sTg.items[0], ' one , one , two ');
+  eq(sTg.items[0].tags, ['one', 'two'], 'setTags normalizes what it stores');
+}
+
 // ------------------------------------------------------------- jira csv export
 section('jira csv export');
 // ------------------------------------------------------------ sprint moves
@@ -1672,3 +1735,13 @@ eq(lines[0], 'Summary,Issue Type,Description,Parent,Labels,Priority,Due Date,Sta
 ok(lines.some(function (l) { return l.indexOf('"Search, ""fast"""') === 0; }), 'commas and quotes are escaped');
 ok(/"Hi there\n/.test(csv), 'newlines stay inside a quoted cell');
 eq(RMJira.csv(mkState([]), { features: true }).slice(1).split('\r\n').length, 2, 'empty doc: header plus trailing newline');
+
+// tags ride along as slugged Jira labels
+{
+  var sTl = mkState([{ num: 1, feature: 'Login page', workstream: 'Product', tags: ['Tech Debt', 'q3'],
+    stories: [{ title: 's1', tags: ['Story Tag'] }] }]);
+  var tr1 = RMJira.rows(sTl, { features: true, stories: true });
+  ok(tr1[0]['Labels'].split(' ').indexOf('tech-debt') !== -1 && tr1[0]['Labels'].split(' ').indexOf('q3') !== -1,
+    'feature labels include the slugged tags');
+  ok(tr1[1]['Labels'].split(' ').indexOf('story-tag') !== -1, 'story labels include the slugged story tags');
+}

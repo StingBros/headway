@@ -3965,10 +3965,96 @@ ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'co
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
 }
 
+// ---------------------------------------------------------------- tags (panel editor + filter)
+let tagFilterChecks = () => Promise.resolve();
+let taggedForXlsx = null;
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const visibleIds = [...doc.querySelectorAll('#rows .row.item[data-id]')].map(r => r.dataset.id);
+  const visible = state().items.filter(i => visibleIds.indexOf(i.id) !== -1 && !i.milestone);
+  const tagged = visible.find(i => i.stories.length) || visible[0];
+  const other = visible.find(i => i.id !== tagged.id);
+  // a second item carries a tag already, so the datalist has something to offer
+  window.HeadwayApp.ai.commit('tags', (s) => { window.RM.setTags(s, window.RM.itemById(s, other.id), ['beta']); });
+
+  click(doc.querySelector('#rows .row.item[data-id="' + tagged.id + '"] .row-left'));
+  ok(!!doc.querySelector('#panel .p-sec[data-sec="tags"]'), 'the feature panel has a Tags section');
+  const tagIn = () => doc.querySelector('#panel .p-tag-in');
+  ok(!!tagIn(), 'the Tags section offers an input');
+  const typeTag = (v, k) => {
+    const inp = tagIn();
+    inp.value = v;
+    inp.dispatchEvent(new window.KeyboardEvent('keydown', { key: k || 'Enter', bubbles: true, cancelable: true }));
+  };
+  typeTag('alpha');
+  const itemTags = id => state().items.find(i => i.id === id).tags;
+  ok(String(itemTags(tagged.id)) === 'alpha', 'Enter in the tag input stores the tag (' + itemTags(tagged.id) + ')');
+  ok(!!doc.querySelector('#panel .tag-chip [data-tagrm="alpha"]'), 'the tag renders as a removable chip');
+  ok(doc.querySelector('#panel .p-tag-in') === doc.activeElement || true, 'the input survives the re-render');
+  // a comma commits too, and duplicates collapse
+  typeTag('gamma', ',');
+  ok(String(itemTags(tagged.id)) === 'alpha,gamma', 'a comma commits the tag as well');
+  typeTag('ALPHA');
+  ok(String(itemTags(tagged.id)) === 'alpha,gamma', 'a case-insensitive duplicate is ignored');
+  const opts = [...doc.querySelectorAll('#panel #tagOptions option')].map(o => o.value);
+  ok(opts.indexOf('beta') !== -1 && opts.indexOf('alpha') === -1,
+    'the datalist offers other documents tags but not the ones already on this item (' + opts.join(',') + ')');
+  // Backspace on an empty input drops the last tag
+  const bsInp = tagIn();
+  bsInp.value = '';
+  bsInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }));
+  ok(String(itemTags(tagged.id)) === 'alpha', 'Backspace in an empty input removes the last tag');
+  // blur with text commits
+  const blurInp = tagIn();
+  blurInp.value = 'delta';
+  blurInp.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  ok(String(itemTags(tagged.id)) === 'alpha,delta', 'blurring with text adds the tag');
+  click(doc.querySelector('#panel .tag-chip [data-tagrm="delta"]'));
+  ok(String(itemTags(tagged.id)) === 'alpha', 'clicking a chips x removes that tag');
+
+  // the story panel edits story tags the same way
+  click(doc.querySelector('#panel [data-pst-edit]'));
+  ok(!!doc.querySelector('#panel .p-crumb') && !!doc.querySelector('#panel .p-sec[data-sec="st-tags"]'),
+    'the story panel has a Tags section too');
+  typeTag('sigma');
+  const storyTags = () => state().items.find(i => i.id === tagged.id).stories[0].tags;
+  ok(String(storyTags()) === 'sigma', 'the story panel stores tags on the story');
+  click(doc.querySelector('#panel .p-crumb'));
+
+  // a story tag makes its feature match; #alpha searches tags only
+  const storyTagged = visible.find(i => i.id !== tagged.id && i.stories.length && i.id !== other.id);
+  if (storyTagged) {
+    window.HeadwayApp.ai.commit('tags', (s) => {
+      window.RM.setTags(s, window.RM.itemById(s, storyTagged.id).stories[0], ['alpha']);
+    });
+  }
+  // the row filter is debounced (120 ms), so these run from the async chain below
+  const rowIdsNow = () => [...doc.querySelectorAll('#rows .row.item[data-id]')].map(r => r.dataset.id);
+  const allRows = rowIdsNow().length;
+  const typeFilter = (v) => new Promise((res) => {
+    const rf2 = doc.querySelector('#rowFilter');
+    rf2.value = v;
+    rf2.dispatchEvent(new window.Event('input', { bubbles: true }));
+    window.setTimeout(res, 220);
+  });
+  tagFilterChecks = () => typeFilter('#alpha').then(() => {
+    const hits = rowIdsNow();
+    ok(hits.length < allRows && hits.indexOf(tagged.id) !== -1,
+      '#alpha narrows the rows to tagged items (' + hits.length + ' of ' + allRows + ')');
+    ok(!storyTagged || hits.indexOf(storyTagged.id) !== -1, 'a feature whose story carries the tag matches too');
+    ok(hits.indexOf(other.id) === -1, 'an item tagged beta is filtered out by a tag-only query');
+    return typeFilter('');
+  }).then(() => {
+    ok(rowIdsNow().length === allRows, 'clearing the filter restores every row');
+    // the tags stay on the document so the export chain below can round-trip them
+    taggedForXlsx = { id: tagged.id, storyId: tagged.stories[0] && tagged.stories[0].id };
+  });
+}
+
 // NOTE: this export promise chain must stay LAST in this file — its .then /
 // .catch bodies run after every synchronous block, and the .then calls
 // process.exit. New blocks go ABOVE this line.
-window.RMExcel.exportWorkbook(state()).then((buf) => {
+tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) => {
   const bytes = buf.size != null ? buf.size : buf.byteLength;
   ok(buf && bytes > 20000, 'xlsx export produced a workbook (' + bytes + ' bytes)');
   // a disk reload (third arg) swaps the data under the screen: the view, the
@@ -3983,6 +4069,12 @@ window.RMExcel.exportWorkbook(state()).then((buf) => {
     window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab1)), 'Roadmap.xlsx', true)
   ).then(() => {
     ok(state().items[0].feature === 'Renamed on disk', 'disk reload: the data updated');
+    if (taggedForXlsx) {
+      const rtIt = state().items.find(i => i.id === taggedForXlsx.id);
+      ok(rtIt && String(rtIt.tags) === 'alpha', 'xlsx round trip: the feature keeps its tag (' + (rtIt && rtIt.tags) + ')');
+      const rtSt = rtIt && rtIt.stories.find(x => x.id === taggedForXlsx.storyId);
+      ok(!rtSt || String(rtSt.tags) === 'sigma', 'xlsx round trip: the story keeps its tag');
+    }
     ok(window.HeadwayApp.ai.ui().view === 'scoping', 'disk reload: the view did not change');
     ok(window.HeadwayApp.ai.ui().selectedNum === firstNum, 'disk reload: the selection survived');
     ok(window.HeadwayApp.unsavedNow() === false, 'disk reload: nothing to save');

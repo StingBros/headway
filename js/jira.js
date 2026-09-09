@@ -44,6 +44,10 @@
   function slug(s) {
     return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   }
+  // free-form tags push as plain slugged labels
+  function tagLabels(o) {
+    return ((o && o.tags) || []).map(slug);
+  }
   function section(title, html) {
     var t = RM.htmlToText(html);
     return t ? title + ':\n' + t : '';
@@ -176,7 +180,7 @@
         it.workstream ? 'ws-' + slug(it.workstream) : '',
         phase ? 'phase-' + slug(phase.name) : '',
         it.size ? 'size-' + slug(it.size) : ''
-      ].filter(Boolean)
+      ].concat(tagLabels(it)).filter(Boolean)
     };
     var pr = priorityField(RM.prioritySchemeOf(state), it.priority);
     if (pr) f.priority = pr;
@@ -195,7 +199,8 @@
         RM.htmlToText(st.description),
         section('Acceptance criteria', st.ac)
       ])),
-      labels: ['feature-' + slug(it.feature), it.workstream ? 'ws-' + slug(it.workstream) : ''].filter(Boolean)
+      labels: ['feature-' + slug(it.feature), it.workstream ? 'ws-' + slug(it.workstream) : '']
+        .concat(tagLabels(st)).filter(Boolean)
     };
     var pr = priorityField(RM.prioritySchemeOf(state, 'story'), st.priority);
     if (pr) f.priority = pr;

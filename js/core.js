@@ -1049,6 +1049,54 @@
     return k ? k : null;
   };
 
+  // ---- tags: free-form labels on features and stories. Accepts an array or a
+  // comma-separated string; trims, drops empties, caps each at 40 chars and
+  // de-duplicates case-insensitively (the first spelling wins).
+  RM.TAG_MAX = 40;
+  RM.normalizeTags = function (v) {
+    var raw;
+    if (Array.isArray(v)) raw = v;
+    else if (typeof v === 'string') raw = v.split(',');
+    else return [];
+    var out = [], seen = {};
+    raw.forEach(function (t) {
+      if (typeof t !== 'string') return;
+      var s = t.trim().slice(0, RM.TAG_MAX);
+      if (!s) return;
+      var k = s.toLowerCase();
+      if (seen[k]) return;
+      seen[k] = true;
+      out.push(s);
+    });
+    return out;
+  };
+  // every tag used anywhere in the document, sorted case-insensitively
+  RM.allTags = function (state) {
+    var seen = {}, out = [];
+    function take(list) {
+      (list || []).forEach(function (t) {
+        var k = String(t).toLowerCase();
+        if (seen[k]) return;
+        seen[k] = true;
+        out.push(t);
+      });
+    }
+    ((state && state.items) || []).forEach(function (it) {
+      take(it.tags);
+      (it.stories || []).forEach(function (st) { take(st.tags); });
+    });
+    out.sort(function (a, b) {
+      var x = a.toLowerCase(), y = b.toLowerCase();
+      return x < y ? -1 : x > y ? 1 : 0;
+    });
+    return out;
+  };
+  RM.setTags = function (state, target, tags) {
+    if (!target) return [];
+    target.tags = RM.normalizeTags(tags);
+    return target.tags;
+  };
+
   RM.htmlToText = function (html) {
     if (!html) return '';
     var t = String(html)
@@ -1471,6 +1519,8 @@
         // team-member ids working on this feature (validated against the
         // roster once the team is normalized below)
         assignees: Array.isArray(it.assignees) ? it.assignees.map(String) : [],
+        // free-form labels (see RM.normalizeTags)
+        tags: RM.normalizeTags(it.tags),
         done: !!it.done,
         stories: (it.stories || []).map(function (s) {
           // stories may carry their own little timeline (startDay/durDays);
@@ -1487,6 +1537,7 @@
             risk: s.risk && riskOrder.indexOf(String(s.risk).toUpperCase()) !== -1
               ? String(s.risk).toUpperCase() : null,
             assignees: Array.isArray(s.assignees) ? s.assignees.map(String) : [],
+            tags: RM.normalizeTags(s.tags),
             // stories carry their own hard deadline, same shape as items
             deadline: /^\d{4}-\d{2}-\d{2}$/.test(String(s.deadline || '')) ? String(s.deadline) : null,
             // rich-text (sanitized HTML) story body + acceptance criteria
