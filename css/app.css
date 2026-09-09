@@ -2682,6 +2682,7 @@ body[data-view="prio"] #rowFilter { display: none; }
 }
 #prioView .sp-col { display: flex; flex-direction: column; padding: 10px; }
 #prioView .sp-colbody { flex: 0 0 auto; } /* Add stays under the cards; the column surface stretches on */
+.pr-empty { color: var(--ink-3); font-size: 12px; font-style: italic; padding: 10px 6px; text-align: center; }
 .pr-card {
   cursor: grab;
   border-radius: 10px;

@@ -2235,7 +2235,7 @@
   function prStoryColHtml(col, pairs, laneAttr) {
     var mine = prSortStories(pairs.filter(function (x) { return prStoryVal(x.st) === col.key; }));
     return '<div class="sp-col" data-prcol="' + esc(col.key) + '"' + (laneAttr || '') + '>' +
-      '<div class="sp-colbody">' + mine.map(function (x) { return prStoryCardHtml(x.it, x.st); }).join('') + '</div></div>';
+      '<div class="sp-colbody">' + (mine.length ? mine.map(function (x) { return prStoryCardHtml(x.it, x.st); }).join('') : '<div class="pr-empty">No items</div>') + '</div></div>';
   }
   // ---- Feature level columns: the phases (default) or one feature field's
   // ladder — priority / size / risk — plus Unset; dragging a card sets it
@@ -2273,7 +2273,7 @@
   function prColHtml(col, items, laneAttr) {
     var mine = prSortItems(items.filter(function (it) { return prFeatVal(it) === col.key && prMatches(it); }));
     return '<div class="sp-col" data-prcol="' + esc(col.key) + '"' + (laneAttr || '') + '>' +
-      '<div class="sp-colbody">' + mine.map(prCardHtml).join('') + '</div>' +
+      '<div class="sp-colbody">' + (mine.length ? mine.map(prCardHtml).join('') : '<div class="pr-empty">No items</div>') + '</div>' +
       (prioFeatCol === 'phase' && !mine.length // a new feature needs a phase to land in; a filled column adds via the context menu
         ? '<button class="pr-add" data-pradd="' + col.key + '"' + (laneAttr || '') + '><i data-lucide="plus"></i> Add</button>' : '') +
       '</div>';
@@ -6260,11 +6260,10 @@
     ]));
   });
 
-  // quick app menu: theme switch lives here
   // No surface shows the browser's default context menu. Editable text keeps
   // the native menu (copy/paste is essential there); specific surfaces attach
-  // their own menus and preventDefault first; everything else falls back to
-  // the app-chrome theme menu.
+  // their own menus and preventDefault first; everywhere else a right-click
+  // does nothing (the theme lives in Settings and the app menu).
   document.addEventListener('contextmenu', function (e) {
     if (e.defaultPrevented) return; // rows / resources / budget handled it already
     if (e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
@@ -6287,7 +6286,6 @@
       return;
     }
     e.preventDefault();
-    openContextMenu(e.clientX, e.clientY, themeMenuItems());
   });
 
   // right-click on a multi-selection: every action applies to the whole group

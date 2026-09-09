@@ -3381,6 +3381,22 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
+// ---------------------------------------------------------------- background right-click: no theme menu; empty Prioritizing cells say so
+{
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  const ev = new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 30 });
+  doc.querySelector('#prioView .sp-page').dispatchEvent(ev);
+  ok(ev.defaultPrevented && doc.querySelector('#popover').hidden, 'right-clicking the app background opens nothing (and not the browser menu either)');
+  const pick = (re) => click([...doc.querySelectorAll('#popover .menu-list button')].find(b => re.test(b.textContent)));
+  click(doc.querySelector('#prioView [data-prdd="level"]')); pick(/Feature/);
+  window.HeadwayApp.ai.commit('empty phase probe', (s) => { s.phases.push({ id: 'ph_pr_empty', name: 'Nobody here', description: '', bucket: false, collapsed: false }); });
+  const emptyCol = doc.querySelector('#prioView .sp-col[data-prcol="ph_pr_empty"]');
+  ok(!!emptyCol && emptyCol.querySelector('.sp-colbody .pr-empty') && /No items/.test(emptyCol.textContent), 'an empty column shows a "No items" placeholder');
+  ok([...doc.querySelectorAll('#prioView .sp-col')].every(c => !!c.querySelector('.pr-card') !== !!c.querySelector('.pr-empty')), 'the placeholder appears exactly where there are no cards');
+  window.HeadwayApp.ai.commit('empty phase probe cleanup', (s) => { s.phases = s.phases.filter(p => p.id !== 'ph_pr_empty'); });
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
 // ---------------------------------------------------------------- story panel estimate buttons
 // Size / Priority / Risk in the story panel are buttons with data-stf AND
 // data-v; the generic data-stf handler must not swallow them.
