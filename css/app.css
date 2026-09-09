@@ -475,6 +475,21 @@ input.r-name {
   cursor: text;
 }
 input.r-name:hover { border-color: var(--line-2); background: var(--surface); }
+/* outside Scoping the title is plain text until a double-click (or Rename…)
+   swaps the editor in: same metrics, same hover affordance */
+span.r-name {
+  flex: 1; min-width: 0;
+  font: inherit; font-weight: 400; color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent; border-radius: 5px;
+  padding: 1px 5px; margin-left: -5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: text;
+}
+span.r-name:hover { border-color: var(--line-2); background: var(--surface); }
+/* an untitled row shows a quiet placeholder */
+span.r-name.r-ph, .st-title.r-ph { color: var(--ink-3); }
+.row.done .r-name-txt { text-decoration: line-through; }
 .r-epic {
   font-size: 9.5px; color: var(--ink-3);
   border: 1px solid var(--line);
@@ -662,6 +677,12 @@ body.cap-off .hc-lab { display: none !important; }
 }
 .st-title { flex: 1; min-width: 0; font-size: 12px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; }
 .st-title.done { text-decoration: line-through; }
+/* a story title renames on double-click too — the same quiet hover box */
+.st-title-txt {
+  border: 1px solid transparent; border-radius: 5px;
+  padding: 1px 5px; margin-left: -5px;
+}
+.st-title-txt:hover { border-color: var(--line-2); background: var(--surface); }
 .st-del { opacity: 0; border: 0; background: transparent; color: var(--ink-3); font-size: 11px; padding: 0 7px; }
 .row.story:hover .st-del { opacity: 1; }
 .st-del:hover { color: var(--err); }
@@ -2887,6 +2908,20 @@ body[data-view="scoping"] .row.story .sc-edit { height: 50px; min-height: 50px; 
 .pr-story .pr-st-ico { width: 11px; height: 11px; color: var(--ink-3); flex: none; margin-left: 2px; }
 .pr-story .pr-st-title { flex: 1; min-width: 0; font-size: 11.5px; padding: 2px 4px; }
 .pr-story .r-risk, .pr-story .r-size, .pr-story .r-wk { flex: none; }
+/* card titles are text until a double-click (or Rename…) opens the editor:
+   they sit exactly where the input did and hover the same way */
+.pr-card span.pr-title, .pr-card span.pr-st-title {
+  display: block; min-width: 0; width: calc(100% + 10px);
+  border: 1px solid transparent; border-radius: 6px;
+  padding: 3px 5px; margin: 0 -5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text;
+}
+.pr-head span.pr-title { flex: 1; width: auto; margin: 0 -5px 0 0; }
+.pr-story span.pr-st-title { flex: 1; width: auto; padding: 2px 4px; margin: 0; }
+.pr-card span.pr-title:hover, .pr-card span.pr-st-title:hover {
+  border-color: var(--line-2); background: var(--paper-2);
+}
+.pr-ph { color: var(--ink-3); font-weight: 500; }
 .pr-st-add {
   align-self: flex-start; border: 0; background: transparent; box-shadow: none;
   color: var(--ink-3); font-size: 11px; padding: 2px 4px; margin-top: 1px;
