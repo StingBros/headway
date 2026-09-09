@@ -3397,6 +3397,52 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
+// ---------------------------------------------------------------- flags: context menu → dialog → orange flag in the alert slot
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const ctxOn = (el) => el.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+  const menuBtn = (re) => [...doc.querySelectorAll('#popover .menu-list button')].find(b => re.test(b.textContent));
+  const host = [...doc.querySelectorAll('#rows .row.item')].map(r => state().items.find(i => i.id === r.dataset.id)).find(i => i && !i.milestone && !i.flag);
+  const row = () => doc.querySelector('#rows .row.item[data-id="' + host.id + '"]');
+  ctxOn(row());
+  ok(!!menuBtn(/^Flag…$/) && !menuBtn(/Unflag/), 'an unflagged row offers Flag…');
+  click(menuBtn(/^Flag…$/));
+  const ta = doc.querySelector('#modalHost textarea#flagReason');
+  ok(!doc.querySelector('#modalHost').hidden && !!ta, 'Flag… opens a dialog with a reason box');
+  ta.value = 'Waiting on security sign-off';
+  click([...doc.querySelectorAll('#modalHost button')].find(b => /^Flag$/.test(b.textContent.trim())));
+  const flagged = state().items.find(i => i.id === host.id);
+  ok(flagged.flag && flagged.flag.reason === 'Waiting on security sign-off', 'confirming stores the flag and its reason');
+  const badge = row().querySelector('.r-warn.flag');
+  ok(!!badge && /Waiting on security/.test(badge.title) && !!badge.querySelector('[data-lucide="flag"]'), 'the row shows an orange flag in the alert slot with the reason as its tooltip');
+  ctxOn(row());
+  ok(!!menuBtn(/Edit flag/) && !!menuBtn(/Unflag/), 'a flagged row offers Edit flag… and Unflag');
+  click(menuBtn(/Unflag/));
+  ok(!state().items.find(i => i.id === host.id).flag && !row().querySelector('.r-warn.flag'), 'Unflag clears it');
+  // a story, from its row menu; an empty reason is fine
+  window.HeadwayApp.ai.commit('flag probe story', (s) => { const f = window.RM.itemById(s, host.id); f.stories.push({ id: 'fl_st', title: 'flag me', done: false, num: window.RM.nextNum(s) }); });
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]'));
+  const stRow = () => doc.querySelector('#rows .row.story[data-story="fl_st"]');
+  ctxOn(stRow());
+  click(menuBtn(/^Flag…$/));
+  click([...doc.querySelectorAll('#modalHost button')].find(b => /^Flag$/.test(b.textContent.trim())));
+  ok(window.RM.storyRef(state(), 'fl_st').st.flag && window.RM.storyRef(state(), 'fl_st').st.flag.reason === '', 'a story flags with an empty reason');
+  ok(!!stRow().querySelector('.r-warn.flag') && stRow().querySelector('.r-warn.flag').title === 'Flagged', 'the story row shows the flag');
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]'));
+  // Prioritizing card and Sprinting row carry the flag too
+  window.HeadwayApp.ai.commit('flag probe feature', (s) => { window.RM.itemById(s, host.id).flag = { reason: 'card flag' }; });
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  ok(!!doc.querySelector('#prioView .pr-card[data-prcard="' + host.id + '"] .pr-flag'), 'the Prioritizing card shows the flag');
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  ok(!!doc.querySelector('#sprintView .spv-row[data-spid="' + host.id + '"] .spv-flag') || !window.RM.itemById(state(), host.id).startDay, 'the Sprinting row shows the flag');
+  window.__headway.selectItem(host.id);
+  ok(!!doc.querySelector('#panel .p-flag') && /card flag/.test(doc.querySelector('#panel .p-flag').textContent), 'the panel header shows the flag and its reason');
+  window.HeadwayApp.ai.commit('flag probe cleanup', (s) => { const f = window.RM.itemById(s, host.id); f.flag = null; f.stories = f.stories.filter(x => x.id !== 'fl_st'); });
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
 // ---------------------------------------------------------------- story panel estimate buttons
 // Size / Priority / Risk in the story panel are buttons with data-stf AND
 // data-v; the generic data-stf handler must not swallow them.

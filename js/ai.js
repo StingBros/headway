@@ -258,6 +258,7 @@
     if (it.deps && it.deps.length) o.deps = it.deps.slice();
     if (it.done) o.done = true;
     if (it.locked) o.locked = true;
+    if (it.flag) o.flag = it.flag.reason || true;
     if (it.jiraKey) o.jiraKey = it.jiraKey;
     if (it.tags && it.tags.length) o.tags = it.tags.slice();
     if (it.stories && it.stories.length) {
@@ -479,6 +480,9 @@
       } else if (k === 'deps') {
         target.deps = (Array.isArray(v) ? v : [v]).map(Number).filter(function (n) { return !isNaN(n); });
         changed.push('deps');
+      } else if (k === 'flag') {
+        target.flag = RM.normalizeFlag(v); // true / "reason" / null
+        changed.push('flag');
       } else if (k === 'num' || k === 'id') {
         throw new Error(k + ' is assigned by Headway and cannot be set — the user renumbers in the panel');
       } else if (k === 'type') {

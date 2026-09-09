@@ -287,6 +287,11 @@ console.log('— targeted apply');
   stN.items.forEach(function (i) { allNums.push(i.num); (i.stories || []).forEach(function (x) { allNums.push(x.num); }); });
   ok(allNums.every(function (n, i) { return n != null && allNums.indexOf(n) === i; }), 'no two features/stories share a number after a concurrent add (' + allNums.join(',') + ')');
   throws(function () { AI.runTool('update_items', { updates: [{ num: 1, fields: { num: 50 } }] }, AN); }, /assigned by Headway/, 'the AI cannot set numbers directly');
+  AI.runTool('update_items', { updates: [{ num: 1, fields: { flag: 'blocked on vendor' } }] }, AN);
+  eq(RM.itemById(stN, 'a').flag, { reason: 'blocked on vendor' }, 'the AI can flag with a reason');
+  eq(AI.runTool('get_project', {}, AN).items.filter(function (l) { return l.num === 1; })[0].flag, 'blocked on vendor', 'the summary shows the flag');
+  AI.runTool('update_items', { updates: [{ num: 1, fields: { flag: null } }] }, AN);
+  eq(RM.itemById(stN, 'a').flag, null, '…and unflag');
   // the other way round: the user adds a story while the tool adds a feature
   // with the same number — the existing story keeps it, the new feature moves
   var stF = freshState();

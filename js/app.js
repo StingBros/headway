@@ -2132,7 +2132,7 @@
       : '';
     return '<div class="sp-card pr-card' + (isSel(it.id) && !selStory ? ' selected' : '') + '" data-prcard="' + it.id + '" style="--ws-c:#' + wsColor + '">' +
       '<div class="pr-head">' + typeGlyphHtml(it, 'feature') +
-      prTitleHtml(it.feature, 'feature', 'pr-title') + '</div>' +
+      prTitleHtml(it.feature, 'feature', 'pr-title') + prFlagHtml(it) + '</div>' +
       fields + stories +
       '<div class="pr-chips">' +
       (prChipOn('size') // the column field's chip is redundant; hidden chips come from the Fields menu
@@ -2218,6 +2218,9 @@
       .sort(function (a, b) { return (rank(a.x.st) - rank(b.x.st)) || (a.i - b.i); })
       .map(function (y) { return y.x; });
   }
+  function prFlagHtml(x) {
+    return x.flag ? '<span class="pr-flag" title="' + esc(flagTitle(x)) + '"><i data-lucide="flag"></i></span>' : '';
+  }
   function prStoryCardHtml(it, st) {
     var wsColor = it.workstream ? RM.colorForWs(state, it.workstream) : RM.defaultWsColor(state);
     var chips = ['size', 'pri', 'risk', 'dur'].filter(function (k) {
@@ -2229,7 +2232,7 @@
       '<span class="pr-stfeatname">' + esc(it.feature || '(untitled)') + '</span></div>' +
       '<div class="pr-head">' + typeGlyphHtml(st, 'story', it) +
       '<span class="r-num st-num">#' + st.num + '</span>' +
-      prTitleHtml(st.title, 'story', 'pr-title pr-st-title') + '</div>' +
+      prTitleHtml(st.title, 'story', 'pr-title pr-st-title') + prFlagHtml(st) + '</div>' +
       '<div class="pr-chips">' + chips + '</div></div>';
   }
   function prStoryColHtml(col, pairs, laneAttr) {
@@ -2654,6 +2657,7 @@
         { icon: 'pencil', label: 'Rename…', fn: function () { prStartRename(cid, stRowId, true); } },
         { sep: true },
         storyInsertEntries(cid, stRowId)[0], storyInsertEntries(cid, stRowId)[1],
+        flagMenuEntries(cid, stRowId)[0], flagMenuEntries(cid, stRowId)[1] || null,
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(cid, stRowId); } },
         { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
           commit('delete story', function (s) {
@@ -2671,6 +2675,7 @@
         { icon: 'rows-3', label: 'Go to feature', fn: function () { select(cid, true); } },
         { sep: true },
         storyInsertEntries(cid, stIdX)[0], storyInsertEntries(cid, stIdX)[1],
+        flagMenuEntries(cid, stIdX)[0], flagMenuEntries(cid, stIdX)[1] || null,
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(cid, stIdX); } },
         { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
           commit('delete story', function (s) {
@@ -2693,6 +2698,8 @@
             }));
           } }
         : null,
+      { sep: true },
+      flagMenuEntries(cid, null)[0], flagMenuEntries(cid, null)[1] || null,
       { sep: true },
       { icon: 'trash-2', label: 'Delete…', danger: true, fn: function () { deleteItemConfirm(cid); } }
     ].filter(Boolean));
@@ -2888,6 +2895,9 @@
     return '<span class="spv-tag spv-snum" title="' + esc(sprintLabel(num)) + '">' + (RM.sprintsEnabled(state.meta) ? 'S' : 'W') + num + '</span>';
   }
   // rows whose span runs past their sprint get an info glyph saying how far
+  function sprFlagHtml(x) {
+    return x.flag ? '<span class="spv-info spv-flag" title="' + esc(flagTitle(x)) + '"><i data-lucide="flag"></i></span>' : '';
+  }
   function sprCarryHtml(x) {
     if (!isScheduled(x)) return '';
     var s0 = sprFirstNum(x), s1 = sprLastNum(x);
@@ -2920,7 +2930,7 @@
       '<span class="r-num">#' + it.num + '</span>' +
       typeGlyphHtml(it, 'feature') +
       sprTitleHtml(it.feature, 'feature') +
-      sprCarryHtml(it) + sprNumTag(num) + '<span class="spv-fill"></span>' +
+      sprCarryHtml(it) + sprFlagHtml(it) + sprNumTag(num) + '<span class="spv-fill"></span>' +
       '<span class="spv-chip" tabindex="0" role="button" data-spact="epic" title="Epic">' +
       '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>' +
       sprWsChip(it) +
@@ -2935,7 +2945,7 @@
       '<span class="r-num st-num">#' + st.num + '</span>' +
       typeGlyphHtml(st, 'story', it) +
       sprTitleHtml(st.title, 'story') +
-      (own ? sprCarryHtml(st) : '') + sprNumTag(num) + '<span class="spv-fill"></span>' +
+      (own ? sprCarryHtml(st) : '') + sprFlagHtml(st) + sprNumTag(num) + '<span class="spv-fill"></span>' +
       '<span class="spv-est">' + ['size', 'pri', 'risk'].map(function (k) { return storyChipHtml(k, st, 'data-spact'); }).join('') + sprAsgChip(st, 'st-asg') + '</span>' +
       '</div>';
   }
@@ -3189,6 +3199,7 @@
           commit('story with feature', function (s) { RM.moveStoryToSprint(s, cid, sid, null, sid); });
         } } : null,
         state.team.length ? { icon: 'users', label: 'Assign…', fn: function () { openContextMenu(cx, cy, storyAssignMenuItems(cid, sid)); } } : null,
+        flagMenuEntries(cid, sid)[0], flagMenuEntries(cid, sid)[1] || null,
         { sep: true },
         storyInsertEntries(cid, sid)[0], storyInsertEntries(cid, sid)[1],
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(cid, sid); } }
@@ -3204,6 +3215,7 @@
         ? { icon: 'layers', label: 'Set workstream…', fn: function () { openContextMenu(cx, cy, wsMenuItems(cid, function () { return null; })); } }
         : null,
       state.team.length ? { icon: 'users', label: 'Assign…', fn: function () { openContextMenu(cx, cy, assignMenuItems(cid)); } } : null,
+      flagMenuEntries(cid, null)[0], flagMenuEntries(cid, null)[1] || null,
       isScheduled(itX) ? { icon: 'calendar-off', label: 'Unschedule', fn: function () {
         commit('unschedule', function (s) { RM.moveItemToSprint(s, cid, null, null); });
       } } : null,
@@ -3569,7 +3581,13 @@
     line.classList.toggle('under-left', (+line.dataset.x || 0) - board.scrollLeft < 0);
   }
 
+  // the orange flag: shown in the alert slot, its reason on hover
+  function flagTitle(obj) { return 'Flagged' + (obj.flag && obj.flag.reason ? ': ' + obj.flag.reason : ''); }
+  function flagBadgeHtml(obj) {
+    return '<span class="r-warn flag" data-act="warn" title="' + esc(flagTitle(obj)) + '"><i data-lucide="flag"></i></span>';
+  }
   function warnBadge(it) {
+    if (it.flag) return flagBadgeHtml(it); // the flag wins the slot; validation stays in the hover
     var list = validation.byItem[it.id] || [];
     if (!list.length) return '<span class="r-warn"></span>';
     var top = 'info';
@@ -3592,9 +3610,11 @@
     var rowEl = badge.closest('.row');
     var it = rowEl && RM.itemById(state, rowEl.dataset.id);
     if (!it) return;
-    var list = validation.byItem[it.id] || [];
-    if (!list.length) return;
-    hoverTip.innerHTML = list.map(function (v) {
+    var stH = rowEl.dataset.story ? storyById(it, rowEl.dataset.story) : null;
+    var obj = stH || it;
+    var list = stH ? [] : (validation.byItem[it.id] || []);
+    if (!list.length && !obj.flag) return;
+    hoverTip.innerHTML = (obj.flag ? '<div class="p-warnitem flag">' + esc(flagTitle(obj)) + '</div>' : '') + list.map(function (v) {
       var cls = v.level === 'error' ? 'err' : v.level;
       return '<div class="p-warnitem ' + cls + '">' + esc(v.msg) + '</div>';
     }).join('');
@@ -3878,7 +3898,7 @@
             }
             // keep the column aligned even when the story scale is off
             return storyChipHtml(k, st, 'data-act') || '<span class="' + (k === 'size' ? 'r-size' : k === 'dur' ? 'r-wk' : 'r-risk') + ' r-blank"></span>';
-          }).join('') + '<span class="r-warn"></span>') +
+          }).join('') + (st.flag ? flagBadgeHtml(st) : '<span class="r-warn"></span>')) +
           '</div>' +
           (view === 'scoping'
             // scoping: stories share the grid — text columns, Size, Assignees,
@@ -4228,6 +4248,9 @@
 
   // the panel is rebuilt from scratch on every render: keep its scroll offset,
   // and during a disk reload hand focus back to the field that had it
+  function panelFlagHtml(x) {
+    return x.flag ? '<span class="p-flag" title="' + esc(flagTitle(x)) + '"><i data-lucide="flag"></i>' + (x.flag.reason ? esc(shorten(x.flag.reason, 28)) : 'Flagged') + '</span>' : '';
+  }
   function renderPanel() {
     var panel = $('#panel');
     var keepTop = panel && !panel.hidden ? panel.scrollTop : 0;
@@ -4444,7 +4467,7 @@
       '<div id="panelRz"></div>' +
       '<div class="p-top"><span class="p-lead"><span class="p-num">#<input class="p-num-edit" data-f="num" value="' + it.num +
       '" style="width:' + (String(it.num).length + 1.6) + 'ch" title="Item #"></span>' +
-      typeChipHtml('itype', 'feature', it) +
+      typeChipHtml('itype', 'feature', it) + panelFlagHtml(it) +
       (it.milestone ? '<button class="p-mschip" data-act="msstyle" title="Milestone">' +
         MS_STYLE_GLYPHS[RM.msStyleOf(it)] + ' Milestone · ' + msStyleLabel(RM.msStyleOf(it)) + '</button>' : '') +
       '</span><button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
@@ -4607,7 +4630,7 @@
       '<i data-lucide="corner-left-up"></i>#' + it.num + ' ' + esc(shorten(it.feature || '(untitled)', 26)) + '</button>' +
       '<span class="p-lead"><span class="p-num">#<input class="p-num-edit" data-stf="num" value="' + st.num +
       '" style="width:' + (String(st.num).length + 1.6) + 'ch" title="' + esc(lvl('story')) + ' #"></span></span>' +
-      typeChipHtml('stype', 'story', st) +
+      typeChipHtml('stype', 'story', st) + panelFlagHtml(st) +
       '<button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-stf="title" rows="1" placeholder="' + esc(lvl('story') + ' title') + '">' + esc(st.title) + '</textarea>' +
       '<label class="p-check fixed" style="margin:6px 0 8px"><input type="checkbox" data-stf="done"' + (st.done ? ' checked' : '') + '> Done</label>' +
@@ -6141,6 +6164,7 @@
         { icon: RM.typeOf(state, stm, 'story').icon, label: 'Type: ' + esc(RM.typeOf(state, stm, 'story').label) + '…', fn: function () {
           openContextMenu(cx, cy, typeMenuItems('story', stm.type, function (k) { setStoryType(stmItemId, stmId, k); }));
         } },
+        flagMenuEntries(stmItemId, stmId)[0], flagMenuEntries(stmItemId, stmId)[1] || null,
         { sep: true },
         storyInsertEntries(stmItemId, stmId)[0], storyInsertEntries(stmItemId, stmId)[1],
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(stmItemId, stmId); } },
@@ -6186,6 +6210,7 @@
             t.startDay = null; t.durDays = null; t.riskDays = 0;
           });
         } } : null,
+        flagMenuEntries(itemId, null)[0], flagMenuEntries(itemId, null)[1] || null,
         { icon: it.locked ? 'lock-open' : 'lock', label: it.locked ? 'Unlock' : 'Lock', fn: function () {
           commit('lock', function (s) { var t = RM.itemById(s, itemId); t.locked = !t.locked; });
         } },
@@ -6205,6 +6230,7 @@
   });
 
   function openContextMenu(x, y, items) {
+    items = (items || []).filter(Boolean); // builders leave null for entries that do not apply
     var html = '<div class="menu-list">' + items.map(function (m, i) {
       if (m.sep) return '<div class="menu-sep"></div>';
       return '<button data-mi="' + i + '"' + (m.checked ? ' class="on"' : '') + '>' +
@@ -6238,6 +6264,7 @@
       var stMoreId = selStory;
       openContextMenu(e.clientX, e.clientY, [
         storyInsertEntries(it.id, stMoreId)[0], storyInsertEntries(it.id, stMoreId)[1],
+        flagMenuEntries(it.id, stMoreId)[0], flagMenuEntries(it.id, stMoreId)[1] || null,
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(it.id, stMoreId); } },
         { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
           commit('delete story', function (s) {
@@ -6250,6 +6277,7 @@
       return;
     }
     openContextMenu(e.clientX, e.clientY, [
+      flagMenuEntries(it.id, null)[0], flagMenuEntries(it.id, null)[1] || null,
       { icon: 'copy', label: 'Duplicate', fn: function () { duplicateItem(it.id); } },
       { icon: it.milestone ? 'rectangle-horizontal' : 'gem',
         label: it.milestone ? esc('Convert to ' + lvl('feature').toLowerCase()) : 'Convert to milestone',
@@ -6551,6 +6579,45 @@
       { icon: 'plus', label: esc('Insert ' + lvl('story').toLowerCase() + ' above'), fn: function () { addStoryNear(itemId, stId, 0); } },
       { icon: 'plus', label: esc('Insert ' + lvl('story').toLowerCase() + ' below'), fn: function () { addStoryNear(itemId, stId, 1); } }
     ];
+  }
+  // ---- attention flags: any feature or story, optional reason, via the context menus
+  function flagTarget(s, itemId, stId) {
+    var t = RM.itemById(s, itemId);
+    if (!t) return null;
+    return stId ? storyById(t, stId) : t;
+  }
+  function setFlag(itemId, stId, flag) {
+    commit(flag ? 'flag' : 'unflag', function (s) {
+      var x = flagTarget(s, itemId, stId);
+      if (x) x.flag = flag ? { reason: String(flag.reason || '').trim() } : null;
+    });
+  }
+  function flagDialog(itemId, stId) {
+    var x = flagTarget(state, itemId, stId);
+    if (!x) return;
+    var cur = x.flag ? x.flag.reason : '';
+    openModal(
+      '<div class="modal" style="width:440px">' +
+      '<div class="m-head"><h2>' + (x.flag ? 'Edit flag' : 'Flag') + ' ' + (stId ? '#' + x.num + ' ' + esc(shorten(x.title || '(untitled)', 40)) : '#' + x.num + ' ' + esc(shorten(x.feature || '(untitled)', 40))) + '</h2></div>' +
+      '<div class="m-body"><label class="p-lab">Reason (optional)</label>' +
+      '<textarea id="flagReason" rows="3" style="width:100%" placeholder="Why does this need attention?">' + esc(cur) + '</textarea></div>' +
+      '<div class="m-foot"><button data-m="cancel">Cancel</button>' +
+      '<button data-m="ok" class="primary">' + (x.flag ? 'Save' : 'Flag') + '</button></div></div>',
+      function (host) {
+        var ta = $('#flagReason', host);
+        ta.focus();
+        $('[data-m=cancel]', host).onclick = closeModal;
+        $('[data-m=ok]', host).onclick = function () { var r = ta.value; closeModal(); setFlag(itemId, stId, { reason: r }); };
+        ta.addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('[data-m=ok]', host).click(); });
+      });
+  }
+  function flagMenuEntries(itemId, stId) {
+    var x = flagTarget(state, itemId, stId);
+    if (!x) return [];
+    return x.flag
+      ? [{ icon: 'flag', label: 'Edit flag…', fn: function () { flagDialog(itemId, stId); } },
+         { icon: 'flag-off', label: 'Unflag', fn: function () { setFlag(itemId, stId, null); } }]
+      : [{ icon: 'flag', label: 'Flag…', fn: function () { flagDialog(itemId, stId); } }];
   }
   function duplicateStory(itemId, stId) {
     commit('duplicate story', function (s) {

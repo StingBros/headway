@@ -1438,6 +1438,16 @@ section('item type mutations & validation');
   ok(!vv3.global.some(function (f) { return f.code === 'TYPE_LEVEL'; }), 'story pushed with no type resolves via RM.typeOf and warns nothing');
 }
 
+section('flags');
+{
+  var sF = mkState([{ id: 'f', num: 1, phaseId: 'p1', feature: 'F', flag: 'needs legal review',
+    stories: [{ id: 'a', title: 'A', flag: true }, { id: 'b', title: 'B', flag: { reason: '  late  ' } }, { id: 'c', title: 'C', flag: false }] }]);
+  eq(sF.items[0].flag, { reason: 'needs legal review' }, 'a string flag becomes { reason }');
+  eq(sF.items[0].stories[0].flag, { reason: '' }, 'true flags with an empty reason');
+  eq(sF.items[0].stories[1].flag, { reason: 'late' }, 'an object flag keeps a trimmed reason');
+  eq(sF.items[0].stories[2].flag, null, 'false / missing means not flagged');
+  eq(RM.normalizeFlag(undefined), null, 'normalizeFlag: nothing → null');
+}
 section('story numbers');
 {
   var sN = mkState([

@@ -590,6 +590,13 @@ body.cap-off .hc-lab { display: none !important; }
 .r-warn.err { color: var(--err); }
 .r-warn.warn { color: var(--warn); }
 .r-warn.info { color: var(--ink-3); }
+.r-warn.flag { color: var(--flag, #e8710a); cursor: default; }
+.p-warnitem.flag { color: var(--flag, #e8710a); font-weight: 600; }
+.spv-flag, .pr-flag { color: var(--flag, #e8710a); display: inline-flex; align-items: center; }
+.spv-flag svg.lucide, .pr-flag svg.lucide { width: 13px; height: 13px; }
+.pr-flag { margin-left: 4px; flex: none; }
+.p-flag { display: inline-flex; align-items: center; gap: 4px; color: var(--flag, #e8710a); font-size: 11.5px; font-weight: 600; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--flag, #e8710a) 40%, transparent); border-radius: 999px; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.p-flag svg.lucide { width: 12px; height: 12px; flex: none; }
 
 /* instant hover popover for row alerts */
 #hoverTip {

@@ -13,6 +13,7 @@ Format: short sections, bullets, one bold title per notable change —
 
 - **Story numbers**: every story has a # from the same pool as features; it shows on every row and card and edits in the story panel.
 - **Story dependencies**: a story can depend on any other story. Add one in the story panel's Dependencies section (by # or name) or drag a story bar's edge circle onto another story; arrows and order warnings work like features; links push to Jira and the Stories sheet carries them.
+- **Flags**: right-click any feature or story → **Flag…** (optional reason) to mark it for attention; an orange flag takes the alert slot on the row (hover for the reason) and shows on Prioritizing cards, Sprinting rows and the panel header. **Edit flag…** / **Unflag** from the same menu. The AI assistant can set `flag` too.
 - **Titles rename on double-click**: on Planning and Prioritizing the feature and story titles are text, like Sprinting. Double-click one, or pick **Rename…** from its context menu, to edit; a single click just selects. Scoping keeps its spreadsheet cells.
 - AI assistant: Markdown tables in replies render as tables.
 - Prioritizing: the board is full width; **Columns → Unset column** hides or shows the catch-all column; clicking a card opens the detail panel on it and clicking the same card again puts the panel away.

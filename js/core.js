@@ -1168,6 +1168,15 @@
   };
 
   // ---------------------------------------------------------------- state
+  // an attention flag: null, or { reason } (reason may be empty). Accepts
+  // true / a string / an object so hand-written JSON and the AI both work.
+  RM.normalizeFlag = function (f) {
+    if (!f) return null;
+    if (f === true) return { reason: '' };
+    if (typeof f === 'string') return { reason: f.trim() };
+    if (typeof f === 'object') return { reason: typeof f.reason === 'string' ? f.reason.trim() : '' };
+    return null;
+  };
   RM.normalizeState = function (raw) {
     var state = RM.clone(raw || {});
     state.meta = state.meta || {};
@@ -1536,6 +1545,8 @@
         // risk t-shirt is planning metadata only — it never pads the schedule
         riskDays: 0,
         locked: !!it.locked,
+        // attention flag (orange flag on the row) with an optional reason
+        flag: RM.normalizeFlag(it.flag),
         // custom scoping-column values, keyed by column key
         custom: (function () {
           var out = {};
@@ -1569,6 +1580,7 @@
           var sched = s.startDay != null && isFinite(s.startDay) && s.durDays != null && isFinite(s.durDays) && s.durDays >= 0;
           return {
             id: s.id || RM.uid('s'), title: s.title || '', done: !!s.done,
+            flag: RM.normalizeFlag(s.flag),
             // stories are numbered from the same pool as features; a missing
             // or colliding number is assigned by the unique-num pass below
             num: s.num != null && isFinite(s.num) ? Math.round(s.num) : null,
