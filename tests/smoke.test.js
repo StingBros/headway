@@ -3463,6 +3463,30 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(/\.r-name-txt,\s*\.st-title-txt\s*\{[^}]*user-select:\s*none/.test(cssT), 'title spans never select text (a selected word would hijack the row drag)');
 }
 
+// ---------------------------------------------------------------- ⌘B / ⌘I in rich editors
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const hostK = [...doc.querySelectorAll('#rows .row.item')].map(r => state().items.find(i => i.id === r.dataset.id)).find(i => i && !i.milestone);
+  window.__headway.selectItem(hostK.id);
+  const ed = doc.querySelector('#panel .wz-ed[data-f="col:description"]');
+  const calls = [];
+  const orig = doc.execCommand;
+  doc.execCommand = (c) => { calls.push(c); return true; };
+  const key = (el, k, mods) => { const ev = new window.KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true, cancelable: true }, mods)); el.dispatchEvent(ev); return ev; };
+  ed.focus();
+  let ev = key(ed, 'b', { metaKey: true });
+  ok(ev.defaultPrevented && calls[calls.length - 1] === 'bold', '⌘B in a rich editor bolds');
+  ev = key(ed, 'i', { ctrlKey: true });
+  ok(ev.defaultPrevented && calls[calls.length - 1] === 'italic', 'Ctrl+I in a rich editor italicises');
+  const n = calls.length;
+  ev = key(ed, 'b', {});
+  ok(!ev.defaultPrevented && calls.length === n, 'a plain b just types');
+  const plain = doc.querySelector('#rows .sc-name') || doc.createElement('div');
+  ev = key(plain, 'b', { metaKey: true });
+  ok(calls.length === n, '⌘B outside a rich editor does nothing');
+  doc.execCommand = orig;
+}
+
 // ---------------------------------------------------------------- story panel estimate buttons
 // Size / Priority / Risk in the story panel are buttons with data-stf AND
 // data-v; the generic data-stf handler must not swallow them.

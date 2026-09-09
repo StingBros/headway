@@ -938,6 +938,18 @@
     if (ed) { ed.focus(); document.execCommand(b.dataset.wzc); }
   });
 
+  // ⌘B / ⌘I (Ctrl on Windows/Linux) bold / italic inside any rich editor —
+  // the desktop webview has no Format menu, so the shortcut has to be ours
+  document.addEventListener('keydown', function (e) {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+    var k = e.key.toLowerCase();
+    if (k !== 'b' && k !== 'i') return;
+    var ed = e.target.closest && e.target.closest('[contenteditable="true"]');
+    if (!ed || ed.classList.contains('sc-name') || ed.classList.contains('st-name')) return; // plain-text titles
+    e.preventDefault();
+    document.execCommand(k === 'b' ? 'bold' : 'italic');
+  });
+
   // typing "- " or "1. " at the start of a line in any rich editor starts a
   // bullet / numbered list (the marker itself is swallowed)
   document.addEventListener('keydown', function (e) {

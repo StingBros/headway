@@ -16,6 +16,7 @@ Format: short sections, bullets, one bold title per notable change —
 - **Flags**: right-click any feature or story → **Flag…** (optional reason) to mark it for attention; an orange flag takes the alert slot on the row (hover for the reason) and shows on Prioritizing cards, Sprinting rows and the panel header. **Edit flag…** / **Unflag** from the same menu. The AI assistant can set `flag` too.
 - **Titles rename on double-click**: on Planning and Prioritizing the feature and story titles are text, like Sprinting. Double-click one, or pick **Rename…** from its context menu, to edit; a single click just selects, and dragging from the title moves the row. Scoping keeps its spreadsheet cells.
 - AI assistant: Markdown tables in replies render as tables.
+- ⌘B / ⌘I (Ctrl+B / Ctrl+I) bold and italicise inside every rich text field.
 - Prioritizing: the board is full width; **Columns → Unset column** hides or shows the catch-all column; clicking a card opens the detail panel on it and clicking the same card again puts the panel away.
 - Sprinting: the main content area is capped at a readable width.
 - Prioritizing swimlanes: the catch-all lanes (the default workstream, "No epic") sit last.
