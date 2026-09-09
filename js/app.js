@@ -118,7 +118,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy };
   }
   var COLOR_MODES = [['workstream', 'Workstream'], ['epic', 'Epic'], ['assignee', 'Assignee'], ['priority', 'Priority']];
   var colorBy = 'workstream'; // what bar colors follow: 'workstream' | 'epic' | 'assignee' | 'priority'
@@ -132,6 +132,7 @@
   var prioStoryCol = 'priority'; // Story-level columns: 'priority' | 'size' | 'risk'
   var prioFeatCol = 'phase';     // Feature-level columns: 'phase' | 'priority' | 'size' | 'risk'
   var prioFields = [];      // scope-column keys shown on prioritizing cards (compact by default)
+  var prioChipHide = [];    // card chips (size / priority / risk / dur / epic / ws) the user hid
   var prioSort = 'priority'; // Prioritizing order: 'priority' | 'doc' | 'title' | 'size'
   var prioFEpic = null;     // Prioritizing epic filter: null = all, '' = no epic, else the epic
   var prioFWs = null;       // Prioritizing workstream filter: null = all, '' = default, else the stream
@@ -186,6 +187,7 @@
     prioStoryCol = ['priority', 'size', 'risk'].indexOf(ui.prioStoryCol) !== -1 ? ui.prioStoryCol : 'priority';
     prioFeatCol = ['phase', 'priority', 'size', 'risk'].indexOf(ui.prioFeatCol) !== -1 ? ui.prioFeatCol : 'phase';
     if (Array.isArray(ui.prioFields)) prioFields = ui.prioFields.map(String);
+    if (Array.isArray(ui.prioChipHide)) prioChipHide = ui.prioChipHide.map(String).filter(function (k) { return PR_CHIPS[k]; });
     prioSort = ['doc', 'title', 'size'].indexOf(ui.prioSort) !== -1 ? ui.prioSort : 'priority';
     if (ui.expanded && typeof ui.expanded === 'object') {
       expanded = ui.expanded;
@@ -1930,6 +1932,18 @@
     if (prioFWs != null && (it.workstream || '') !== prioFWs) return false;
     return true;
   }
+  // chips a feature card can show; the Fields menu hides any of them.
+  // Only chips the document can draw are offered (see prChipAvail).
+  var PR_CHIPS = { size: 'Size', priority: 'Priority', risk: 'Risk', dur: 'Duration', epic: 'Epic', ws: 'Workstream' };
+  function prChipAvail(k) {
+    if (k === 'size') return RM.sizingEnabled(state) && prioFeatCol !== 'size';
+    if (k === 'priority') return RM.priorityEnabled(state) && prioFeatCol !== 'priority';
+    if (k === 'risk') return RM.riskEnabled(state) && prioFeatCol !== 'risk';
+    if (k === 'epic') return prioGroup !== 'epic'; // the swimlane already names the epic
+    if (k === 'ws') return !!state.meta.workstreamsEnabled && prioGroup !== 'ws';
+    return true; // dur
+  }
+  function prChipOn(k) { return prChipAvail(k) && prioChipHide.indexOf(k) === -1; }
   function prCardFields() {
     var by = {};
     scopeCols().forEach(function (c) { if (colShowsOn(c[0], 'feature')) by[c[0]] = c; });
@@ -1958,18 +1972,19 @@
       '<input class="pr-title" data-prf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
       fields + stories +
       '<div class="pr-chips">' +
-      (RM.sizingEnabled(state) && prioFeatCol !== 'size' // the column field's chip is redundant
+      (prChipOn('size') // the column field's chip is redundant; hidden chips come from the Fields menu
         ? '<span class="r-size" tabindex="0" role="button" data-pract="size" title="Size">' +
           (it.size ? esc(it.size) : '·') + '</span>' : '') +
-      (RM.priorityEnabled(state) && prioFeatCol !== 'priority'
+      (prChipOn('priority')
         ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) +
           '" tabindex="0" role="button" data-pract="priority" title="' + esc(priChipTitle(it)) + '">' +
           (priChipContent(it) || '·') + '</span>' : '') +
-      (prioFeatCol === 'risk' ? '' : itemChipHtml('risk', it, 'data-pract')) + itemChipHtml('dur', it, 'data-pract') +
-      (prioGroup === 'epic' ? '' : // the swimlane already names the epic
-        '<span class="pr-chip" tabindex="0" role="button" data-pract="epic" title="Epic">' +
-        '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>') +
-      (state.meta.workstreamsEnabled && prioGroup !== 'ws' 
+      (prChipOn('risk') ? itemChipHtml('risk', it, 'data-pract') : '') +
+      (prChipOn('dur') ? itemChipHtml('dur', it, 'data-pract') : '') +
+      (prChipOn('epic')
+        ? '<span class="pr-chip" tabindex="0" role="button" data-pract="epic" title="Epic">' +
+          '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>' : '') +
+      (prChipOn('ws')
         ? '<span class="pr-chip" tabindex="0" role="button" data-pract="ws" title="Workstream">' +
           '<span class="dd-dot" style="background:#' + wsColor + '"></span>' + esc(it.workstream || RM.defaultWsName(state)) + '</span>' : '') +
       '</div></div>';
@@ -2323,14 +2338,26 @@
       return;
     }
     if (e.target.closest('#prFieldsBtn')) {
-      openDropdown(e.target.closest('#prFieldsBtn'), scopeCols().filter(function (c) { return colShowsOn(c[0], 'feature'); }).map(function (c) {
+      // scope (text) columns opt in; the chips (size / priority / risk /
+      // duration / epic / workstream) are on unless the user hides them
+      var fItems = scopeCols().filter(function (c) { return colShowsOn(c[0], 'feature'); }).map(function (c) {
         return { label: esc(c[1]), checked: prioFields.indexOf(c[0]) !== -1, fn: function () {
           var at = prioFields.indexOf(c[0]);
           if (at === -1) prioFields.push(c[0]); else prioFields.splice(at, 1);
           saveLocal();
           render();
         } };
-      }));
+      });
+      var chipItems = Object.keys(PR_CHIPS).filter(prChipAvail).map(function (k) {
+        return { label: PR_CHIPS[k], checked: prioChipHide.indexOf(k) === -1, fn: function () {
+          var at2 = prioChipHide.indexOf(k);
+          if (at2 === -1) prioChipHide.push(k); else prioChipHide.splice(at2, 1);
+          saveLocal();
+          render();
+        } };
+      });
+      if (fItems.length && chipItems.length) fItems.push({ sep: true });
+      openDropdown(e.target.closest('#prFieldsBtn'), fItems.concat(chipItems));
       return;
     }
     // story rows (Story level): priority chip, add-story button

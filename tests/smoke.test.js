@@ -1857,6 +1857,30 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#prFieldsBtn'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Description/.test(b.textContent)));
   ok(!doc.querySelector('#prioView .pr-rich'), 'unchecking returns cards to compact');
+  // the same menu hides the card chips (duration, epic, workstream, ...)
+  ok(!!doc.querySelector('#prioView .pr-card [data-pract="dur"]') && !!doc.querySelector('#prioView .pr-card [data-pract="epic"]'),
+    'cards show the duration and epic chips by default');
+  click(doc.querySelector('#prFieldsBtn'));
+  {
+    const labels = [...doc.querySelectorAll('#popover .menu-list button')].map(b => b.textContent.trim());
+    ok(['Duration', 'Epic', 'Workstream'].every(l => labels.includes(l)) && !!doc.querySelector('#popover .menu-sep'),
+      'Fields menu lists Duration, Epic and Workstream after a separator');
+    const durOpt = [...doc.querySelectorAll('#popover .menu-list button')].find(b => b.textContent.trim() === 'Duration');
+    ok(durOpt.classList.contains('on'), 'chip entries start checked');
+    click(durOpt);
+  }
+  ok(!doc.querySelector('#prioView .pr-card [data-pract="dur"]') && !!doc.querySelector('#prioView .pr-card [data-pract="epic"]') &&
+    JSON.parse(window.localStorage.getItem('headway-ui-v1')).prioChipHide.includes('dur'),
+    'unchecking Duration drops that chip from every card and persists');
+  click(doc.querySelector('#prFieldsBtn'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => b.textContent.trim() === 'Epic'));
+  ok(!doc.querySelector('#prioView .pr-card [data-pract="epic"]'), 'unchecking Epic hides the epic chip too');
+  click(doc.querySelector('#prFieldsBtn'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => b.textContent.trim() === 'Epic'));
+  click(doc.querySelector('#prFieldsBtn'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => b.textContent.trim() === 'Duration'));
+  ok(!!doc.querySelector('#prioView .pr-card [data-pract="dur"]') && !!doc.querySelector('#prioView .pr-card [data-pract="epic"]'),
+    'rechecking restores both chips');
   // feature level: the Columns dropdown swaps phases for a feature field's ladder
   {
     const heads = () => [...doc.querySelectorAll('#prioView .pr-phhd')].map(h => h.firstChild.textContent.trim());
