@@ -321,10 +321,13 @@
       push('status', lbl + ' — Assignees', names(a, p.assignees), names(b, it.assignees));
       var sa = byId(p.stories), sb = byId(it.stories);
       (it.stories || []).forEach(function (st) {
-        var sl = lbl + ' › ' + shorten(st.title || '(story)', 24);
+        var sl = lbl + ' › #' + st.num + ' ' + shorten(st.title || '(story)', 24);
         var sp = sa[st.id];
         if (!sp) { push('scope', sl, '', 'Story added'); return; }
+        push('scope', sl + ' — #', sp.num != null ? '#' + sp.num : '', '#' + st.num);
         push('scope', sl + ' — Title', sp.title, st.title);
+        push('scope', sl + ' — Depends on', (sp.deps || []).map(function (n) { return '#' + n; }).join(', '),
+          (st.deps || []).map(function (n) { return '#' + n; }).join(', '));
         push('scope', sl + ' — Description', txt(sp.description), txt(st.description));
         push('scope', sl + ' — Size', sp.size, st.size);
         push('scope', sl + ' — Type', RM.typeOf(a, sp, 'story').label, RM.typeOf(b, st, 'story').label);
@@ -335,7 +338,7 @@
         push('status', sl + ' — Assignees', names(a, sp.assignees), names(b, st.assignees));
       });
       (p.stories || []).forEach(function (st) {
-        if (!sb[st.id]) push('scope', lbl + ' › ' + shorten(st.title || '(story)', 24), 'Story removed', '');
+        if (!sb[st.id]) push('scope', lbl + ' › #' + st.num + ' ' + shorten(st.title || '(story)', 24), 'Story removed', '');
       });
     });
     (a.items || []).forEach(function (it) {
@@ -7118,6 +7121,8 @@
   // feature under the pointer is politely refused on drop
   function storyPortDragMove(e) {
     var a = storyBarRect(drag.itemId);
+    drag.targetStory = null; // never keep a target from a previous move
+    drag.overFeature = false;
     if (!a) return;
     var g = grid.getBoundingClientRect();
     var temp = $('#tempLink');
@@ -8610,8 +8615,11 @@
       if (!arr.length) return '';
       return '<div class="val-group"><div class="m-label">' + title + ' (' + arr.length + ')</div>' +
         arr.map(function (x) {
-          return '<div class="val-item ' + cls + '" data-goto="' + (x.it ? x.it.id : '') + '" data-week="' + (x.v.week != null ? x.v.week : '') + '">' +
-            '<span class="vi-id">' + (x.it ? '#' + x.it.num : '⧗') + '</span><span>' + esc(x.v.msg) +
+          // story findings live in global but name their feature and story:
+          // they jump to the feature like any feature finding
+          var stRef = !x.it && x.v.storyId ? RM.storyRef(state, x.v.storyId) : null;
+          return '<div class="val-item ' + cls + '" data-goto="' + (x.it ? x.it.id : (x.v.itemId || '')) + '" data-week="' + (x.v.week != null ? x.v.week : '') + '">' +
+            '<span class="vi-id">' + (x.it ? '#' + x.it.num : stRef ? '#' + stRef.st.num : '⧗') + '</span><span>' + esc(x.v.msg) +
             (x.it ? ' — ' + esc(shorten(x.it.feature, 42)) : '') + '</span></div>';
         }).join('') + '</div>';
     }

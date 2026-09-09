@@ -287,6 +287,23 @@ console.log('— targeted apply');
   stN.items.forEach(function (i) { allNums.push(i.num); (i.stories || []).forEach(function (x) { allNums.push(x.num); }); });
   ok(allNums.every(function (n, i) { return n != null && allNums.indexOf(n) === i; }), 'no two features/stories share a number after a concurrent add (' + allNums.join(',') + ')');
   throws(function () { AI.runTool('update_items', { updates: [{ num: 1, fields: { num: 50 } }] }, AN); }, /assigned by Headway/, 'the AI cannot set numbers directly');
+  // the other way round: the user adds a story while the tool adds a feature
+  // with the same number — the existing story keeps it, the new feature moves
+  var stF = freshState();
+  var AF = fakeApp(stF);
+  var snapF = AF.ai.state;
+  AF.ai.state = function () {
+    var c = snapF();
+    var takenF = RM.nextNum(stF);
+    stF.items[1].stories.push({ id: 'user-story', title: 'User story', num: takenF, deps: [] });
+    stF.items[0].stories[0].deps = [takenF];
+    return c;
+  };
+  AI.runTool('add_items', { phase: 'Scale', items: [{ feature: 'Tool feature' }] }, AF);
+  var userSt = RM.storyRef(stF, 'user-story').st;
+  var toolFeat = stF.items.filter(function (i) { return i.feature === 'Tool feature'; })[0];
+  ok(toolFeat && toolFeat.num !== userSt.num, 'the tool feature moved off the user story’s number (' + toolFeat.num + ' vs ' + userSt.num + ')');
+  eq(RM.resolveStoryDeps(stF, stF.items[0].stories[0]).deps[0].st.id, 'user-story', 'the dep that named the story still resolves to it');
 }
 
 console.log('— jira sync tool');

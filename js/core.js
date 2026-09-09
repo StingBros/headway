@@ -1635,12 +1635,19 @@
         seen[it.num] = 'used';
       }
     });
-    // stories draw from the same pool, in document order after the features
+    // stories draw from the same pool. A story that already holds a number
+    // keeps it (pre-seeded, so a blank story can never take it away and
+    // re-point the deps that name it); blank or colliding ones get numbers
+    // past everything in use, in document order after the features
     state.items.forEach(function (it) {
       it.stories.forEach(function (st) {
-        if (st.num == null || seen[st.num]) { maxNum += 1; st.num = maxNum; }
+        if (st.num != null && !seen[st.num]) { seen[st.num] = true; maxNum = Math.max(maxNum, st.num); }
+      });
+    });
+    state.items.forEach(function (it) {
+      it.stories.forEach(function (st) {
+        if (st.num == null || seen[st.num] !== true) { maxNum += 1; st.num = maxNum; }
         seen[st.num] = 'used';
-        maxNum = Math.max(maxNum, st.num);
       });
     });
     // a story never depends on itself (its number may have just been assigned)
@@ -2352,10 +2359,15 @@
 
     // duplicate nums
     var byNum = {};
-    state.items.forEach(function (it) { (byNum[it.num] = byNum[it.num] || []).push(it); });
+    state.items.forEach(function (it) { (byNum[it.num] = byNum[it.num] || []).push({ it: it }); });
+    // stories share the pool: a story number equal to any other number is a duplicate too
+    state.items.forEach(function (it) { (it.stories || []).forEach(function (st) { (byNum[st.num] = byNum[st.num] || []).push({ it: it, st: st }); }); });
     Object.keys(byNum).forEach(function (n) {
       if (byNum[n].length > 1) {
-        byNum[n].forEach(function (it) { add(it, 'error', 'DUP_NUM', 'Duplicate ID #' + n); });
+        byNum[n].forEach(function (x) {
+          if (x.st) global.push({ level: 'error', code: 'DUP_NUM', storyId: x.st.id, itemId: x.it.id, msg: 'Duplicate ID #' + n + ' (' + RM.levelLabel(state, 'story').toLowerCase() + ' "' + (x.st.title || '(untitled)') + '")' });
+          else add(x.it, 'error', 'DUP_NUM', 'Duplicate ID #' + n);
+        });
       }
     });
 

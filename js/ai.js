@@ -558,9 +558,13 @@
     // numbers are one pool across features and stories: a number the tool
     // handed a new story (or feature) may meanwhile have gone to something
     // the user added — later occurrences move to the next free number
-    var seenNum = {};
+    // (existing stories keep theirs: a new feature that collides moves)
+    var storyNums = {}, seenNum = {};
     live.forEach(function (it) {
-      if (seenNum[it.num]) it.num = RM.nextNum(s);
+      if (baseById[it.id]) (it.stories || []).forEach(function (st) { if (st.num != null) storyNums[st.num] = true; });
+    });
+    live.forEach(function (it) {
+      if (seenNum[it.num] || (!baseById[it.id] && storyNums[it.num])) it.num = RM.nextNum(s);
       seenNum[it.num] = true;
     });
     live.forEach(function (it) {

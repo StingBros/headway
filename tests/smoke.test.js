@@ -3284,7 +3284,6 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(!!sec, 'the story panel has a Dependencies section');
   const secs = [...doc.querySelectorAll('#panel .p-sec')].map(e => e.dataset.sec);
   ok(secs.indexOf('st-deps') > secs.indexOf('st-schedule') && secs.indexOf('st-deps') < secs.indexOf('st-integrations'), 'it sits between Timeline and Integrations');
-  if (!sec.classList.contains('open')) click(doc.querySelector('#panel [data-sectoggle="st-deps"]'));
   const search = doc.querySelector('#panel input[data-stf="stdepsearch"]');
   ok(!!search, 'the section offers a search box');
   search.value = '#' + numA; search.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -3301,6 +3300,11 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(!!doc.querySelector('#panel .dep-chip button[data-strdep="sd_b"]'), 'the other side lists the dependent');
   click(doc.querySelector('#panel .dep-chip button[data-strdep="sd_b"]'));
   ok(depsOf('sd_b').length === 0, 'removing from the dependent side clears the link');
+  // version history records story numbers and dependency changes
+  const enDep = state().history[state().history.length - 1];
+  ok(Array.isArray(enDep.d) && enDep.d.some(op => /Depends on/.test(op[1]) && /#/.test(op[2]) && op[3] === ''),
+    'removing a story dependency records a Depends on diff row (' + JSON.stringify(enDep.d && enDep.d[0]) + ')');
+  ok(enDep.d.some(op => /› #\d+ /.test(op[1])), 'story diff rows carry the story number');
   window.HeadwayApp.ai.commit('story dep fixture cleanup', (s) => {
     [hosts[0].id, hosts[1].id].forEach((id) => { const f = window.RM.itemById(s, id); f.stories = f.stories.filter(x => x.id !== 'sd_a' && x.id !== 'sd_b'); });
   });

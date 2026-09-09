@@ -1242,7 +1242,7 @@ if (!ExcelJS) {
               meta: JSON.parse(JSON.stringify(META)),
               phases: [{ id: 'p1', name: 'Alpha', bucket: false }],
               items: [{ id: 'i1', num: 1, phaseId: 'p1', feature: 'Tagged', tags: ['tech debt', 'q3'],
-                stories: [{ id: 's1', title: 'story one', tags: ['spike'] }, { id: 's2', title: 'story two', num: 40, deps: [2] }] }],
+                stories: [{ id: 's1', title: 'story one', num: 2, tags: ['spike'] }, { id: 's2', title: 'story two', num: 40, deps: [2] }] }],
               team: []
             });
             return RMExcel.exportWorkbook(stT).then(function (bufT) {
@@ -1444,15 +1444,24 @@ section('story numbers');
     { id: 'f1', num: 1, phaseId: 'p1', feature: 'One', stories: [{ id: 'a', title: 'A' }, { id: 'b', title: 'B', num: 7 }] },
     { id: 'f2', num: 3, phaseId: 'p1', feature: 'Two', stories: [{ id: 'c', title: 'C', num: 3 }] }
   ]);
-  eq(sN.items[0].stories.map(function (s) { return s.num; }), [4, 7], 'stories without a number get the next free ones after the features');
-  eq(sN.items[1].stories[0].num, 8, 'a story number that collides with a feature is reassigned');
-  eq(RM.nextNum(sN), 9, 'nextNum spans features and stories');
+  eq(sN.items[0].stories.map(function (s) { return s.num; }), [8, 7], 'a numbered story keeps its number; a blank one gets the next past everything in use');
+  eq(sN.items[1].stories[0].num, 9, 'a story number that collides with a feature is reassigned');
+  eq(RM.nextNum(sN), 10, 'nextNum spans features and stories');
+  // a blank story must never take a number another story holds (that would
+  // silently re-point every dep naming it)
+  var sKeep = mkState([{ id: 'f', num: 1, phaseId: 'p1', feature: 'F', stories: [{ id: 'a', title: 'A' }, { id: 'b', title: 'B', num: 2 }, { id: 'c', title: 'C', num: 3, deps: [2] }] }]);
+  eq(sKeep.items[0].stories.map(function (x) { return x.id + ':' + x.num; }), ['a:4', 'b:2', 'c:3'], 'blank story is numbered past the held ones');
+  eq(RM.resolveStoryDeps(sKeep, sKeep.items[0].stories[2]).deps[0].st.id, 'b', 'the dep still points at the story it named');
+  var sDup = RM.normalizeState(mkState([{ id: 'f', num: 1, phaseId: 'p1', feature: 'F', stories: [{ id: 'a', title: 'A', num: 5 }] }, { id: 'g', num: 2, phaseId: 'p1', feature: 'G', stories: [] }]));
+  sDup.items[1].num = 5; // forced collision, as the targeted apply could leave transiently
+  ok(RM.validate(sDup).global.some(function (g) { return g.code === 'DUP_NUM' && g.storyId === 'a'; }) &&
+    (RM.validate(sDup).byItem['g'] || []).some(function (x) { return x.code === 'DUP_NUM'; }), 'DUP_NUM covers a feature/story collision on both sides');
   eq(RM.storyByNum(sN, 7).st.id, 'b', 'storyByNum finds a story');
   eq(RM.storyByNum(sN, 1), null, 'a feature number is not a story');
   eq(RM.byNum(sN, 1).kind, 'feature', 'byNum: feature');
-  eq(RM.byNum(sN, 8).kind + ':' + RM.byNum(sN, 8).st.id, 'story:c', 'byNum: story');
+  eq(RM.byNum(sN, 9).kind + ':' + RM.byNum(sN, 9).st.id, 'story:c', 'byNum: story');
   eq(RM.byNum(sN, 99), null, 'byNum: nothing');
-  eq(RM.renumberItem(sN, 'f2', 7), 9, 'renumbering a feature onto a story number falls back to the next free one');
+  eq(RM.renumberItem(sN, 'f2', 7), 10, 'renumbering a feature onto a story number falls back to the next free one');
   sN.items[1].stories[0].deps = [7];
   eq(RM.renumberStory(sN, 'f1', 'b', 20), 20, 'renumberStory takes a free number');
   eq(sN.items[1].stories[0].deps, [20], 'story deps follow the renumbered story');
