@@ -2934,19 +2934,33 @@
   });
   $('#sprintView').addEventListener('contextmenu', function (e) {
     var row = e.target.closest('[data-spid]');
-    if (!row || row.dataset.spst || e.target.closest('input,textarea,select')) return;
+    if (!row || e.target.closest('input,textarea,select')) return;
     e.preventDefault();
     e.stopPropagation();
     var cid = row.dataset.spid;
     var itX = RM.itemById(state, cid);
     if (!itX) return;
     var cx = e.clientX, cy = e.clientY;
+    if (row.dataset.spst) {
+      var sid = row.dataset.spst;
+      var stX = storyById(itX, sid);
+      openContextMenu(cx, cy, [
+        { icon: 'calendar-range', label: 'Move to sprint…', fn: function () { openContextMenu(cx, cy, moveStorySprintMenu(cid, sid)); } },
+        stX && sprHasOwn(stX) ? { icon: 'corner-down-right', label: 'With feature', fn: function () {
+          commit('story with feature', function (s) { RM.moveStoryToSprint(s, cid, sid, null, sid); });
+        } } : null,
+        state.team.length ? { icon: 'users', label: 'Assign…', fn: function () { openContextMenu(cx, cy, storyAssignMenuItems(cid, sid)); } } : null
+      ].filter(Boolean));
+      return;
+    }
     openContextMenu(cx, cy, [
+      { icon: 'calendar-range', label: 'Move to sprint…', fn: function () { openContextMenu(cx, cy, moveSprintMenu(cid)); } },
       { icon: 'folder-input', label: 'Move to phase…', fn: function () { openContextMenu(cx, cy, movePhaseMenu(cid)); } },
       { icon: 'tag', label: 'Set epic…', fn: function () { openContextMenu(cx, cy, setEpicMenu(cid, false)); } },
       state.meta.workstreamsEnabled
         ? { icon: 'layers', label: 'Set workstream…', fn: function () { openContextMenu(cx, cy, wsMenuItems(cid, function () { return null; })); } }
         : null,
+      state.team.length ? { icon: 'users', label: 'Assign…', fn: function () { openContextMenu(cx, cy, assignMenuItems(cid)); } } : null,
       isScheduled(itX) ? { icon: 'calendar-off', label: 'Unschedule', fn: function () {
         commit('unschedule', function (s) { RM.moveItemToSprint(s, cid, null, null); });
       } } : null,
@@ -5861,6 +5875,30 @@
         });
       } };
     });
+  }
+  // Sprinting context menu: every sprint of the timeline, then Unscheduled
+  function moveSprintMenu(itemId) {
+    var it = RM.itemById(state, itemId);
+    var cur = it && isScheduled(it) ? sprFirstNum(it) : null;
+    return sprintNums().map(function (n) {
+      return { label: esc(sprintLabel(n)), checked: cur === n, fn: function () {
+        commit('move to sprint', function (s) { RM.moveItemToSprint(s, itemId, n, null); });
+      } };
+    }).concat([{ sep: true }, { icon: 'inbox', label: 'Unscheduled', checked: cur == null, fn: function () {
+      commit('unschedule', function (s) { RM.moveItemToSprint(s, itemId, null, null); });
+    } }]);
+  }
+  // story variant: a sprint gives the story its own timeline; "With feature" drops it
+  function moveStorySprintMenu(itemId, stId) {
+    var st = storyById(RM.itemById(state, itemId) || {}, stId);
+    var cur = st && sprHasOwn(st) ? sprFirstNum(st) : null;
+    return sprintNums().map(function (n) {
+      return { label: esc(sprintLabel(n)), checked: cur === n, fn: function () {
+        commit('move story to sprint', function (s) { RM.moveStoryToSprint(s, itemId, stId, n, stId); });
+      } };
+    }).concat([{ sep: true }, { icon: 'corner-down-right', label: 'With feature', checked: cur == null, fn: function () {
+      commit('story with feature', function (s) { RM.moveStoryToSprint(s, itemId, stId, null, stId); });
+    } }]);
   }
   function setEpicMenu(itemId, withNew) {
     var it = RM.itemById(state, itemId);

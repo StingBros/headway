@@ -3658,6 +3658,45 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     click(doc.querySelector('#sprintView [data-spdd="level"]'));
     click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
   }
+
+  // sprinting context menu: Move to sprint for features and stories, Assign
+  {
+    click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+    const menu = () => [...doc.querySelectorAll('#popover .menu-list button')];
+    const row = doc.querySelector('#sprintView .spv-sec:not([data-spsec="u"]) .spv-row');
+    const id = row.dataset.spid;
+    const secNums = [...doc.querySelectorAll('#sprintView .spv-sec')].map(s => s.dataset.spsec).filter(k => k !== 'u').map(Number);
+    row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 120 }));
+    const mv = menu().find(b => /Move to sprint/.test(b.textContent));
+    ok(!!mv && menu().some(b => /Assign/.test(b.textContent)), 'the row menu offers Move to sprint and Assign');
+    click(mv);
+    const target = secNums.find(n => n !== Number(row.dataset.spsec)) || secNums[0] + 1;
+    const tBtn = menu().find(b => new RegExp('^Sprint ' + target + '\\b').test(b.textContent.trim()));
+    ok(!!tBtn && menu().some(b => /Unscheduled/.test(b.textContent)), 'the submenu lists the sprints and Unscheduled');
+    click(tBtn);
+    const moved = state().items.find(i => i.id === id);
+    ok(moved.startDay === window.RM.sprintStartDay(state().meta, target), 'picking a sprint moves the item there');
+    ok(doc.querySelector('#sprintView .spv-row[data-spid="' + id + '"]').dataset.spsec === String(target), 'and it lists under that sprint');
+    // story rows: Move to sprint gives the story its own timeline
+    click(doc.querySelector('#sprintView [data-spdd="level"]'));
+    click(menu().find(b => /Story/.test(b.textContent)));
+    const stRow = doc.querySelector('#sprintView .spv-row.spv-st');
+    stRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 160 }));
+    const mv2 = menu().find(b => /Move to sprint/.test(b.textContent));
+    ok(!!mv2, 'story rows have a context menu with Move to sprint');
+    click(mv2);
+    const t2 = secNums[0];
+    click(menu().find(b => new RegExp('^Sprint ' + t2 + '\\b').test(b.textContent.trim())));
+    const st = state().items.find(i => i.id === stRow.dataset.spid).stories.find(s => s.id === stRow.dataset.spst);
+    ok(st.startDay === window.RM.sprintStartDay(state().meta, t2) && st.durDays != null, 'the story gets its own timeline in that sprint');
+    const stRow2 = doc.querySelector('#sprintView .spv-row[data-spst="' + st.id + '"]');
+    stRow2.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 160 }));
+    click(menu().find(b => /With feature/.test(b.textContent)));
+    const st2 = state().items.find(i => i.id === stRow.dataset.spid).stories.find(s => s.id === st.id);
+    ok(st2.startDay == null, 'With feature drops the story timeline again');
+    click(doc.querySelector('#sprintView [data-spdd="level"]'));
+    click(menu().find(b => /Feature/.test(b.textContent)));
+  }
 }
 
 ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'commits autosave to localStorage');
