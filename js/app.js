@@ -2703,8 +2703,22 @@
     return true;
   }
   function sprFilterOn() { return !!filterText || sprFPhase != null || sprFEpic != null || sprFWs != null; }
+  // sprint totals read in story points when story sizing is on and its scale is
+  // numeric (Fibonacci / points 1-5); T-shirt sizes have no points to add up
+  function sprPointsOn() {
+    if (!RM.sizingEnabled(state, 'story')) return false;
+    var order = RM.sizeOrderOf(state, 'story');
+    return order.length > 0 && order.every(function (v) {
+      return v !== '' && v != null && !isNaN(Number(v));
+    });
+  }
+  function sprStoryPts(st) {
+    var n = st && st.size ? Number(st.size) : NaN;
+    return isNaN(n) ? 0 : n;
+  }
   function sprSections() {
     var meta = state.meta;
+    var pointsOn = sprPointsOn();
     var nums = sprintNums().concat([null]); // Unscheduled trails the timeline
     var secs = nums.map(function (n) {
       var items = n == null
@@ -2713,18 +2727,24 @@
       var inIds = {};
       items.forEach(function (it) { inIds[it.id] = true; });
       var feats = [];
-      if (sprLevel === 'story') {
+      // the sprint's stories: what story level lists, and what points totals add
+      var ptFeats = sprLevel === 'story' || pointsOn ? [] : null;
+      if (ptFeats) {
         state.items.forEach(function (it) {
           if (!sprMatches(it)) return;
           var sts = sprStoriesOf(it, n, !!inIds[it.id]);
-          if (sts.length) feats.push({ it: it, stories: sts });
+          if (sts.length) ptFeats.push({ it: it, stories: sts });
         });
+        if (sprLevel === 'story') feats = ptFeats;
       }
       var w0 = n == null ? 0 : Math.max(0, RM.sprintRange(meta, n).w0);
       var d0 = n == null ? 0 : RM.sprintStartDay(meta, n);
       var wps = RM.sprintInfo(meta).wps;
+      var points = pointsOn ? ptFeats.reduce(function (a, f) {
+        return a + f.stories.reduce(function (b, st) { return b + sprStoryPts(st); }, 0);
+      }, 0) : null;
       return {
-        num: n, key: sprSecKey(n),
+        num: n, key: sprSecKey(n), points: points,
         title: n == null ? 'Unscheduled' : (RM.sprintsEnabled(meta) ? 'Sprint ' + n : 'Week of ' + RM.fmtShort(RM.weekStartDate(meta, w0))),
         dates: n == null ? '' : RM.fmtShort(RM.weekStartDate(meta, w0)) + ' – ' +
           RM.fmtShort(RM.spanEndDate(meta, d0, Math.min(wps * SPW(), meta.numWeeks * SPW() - d0))),
@@ -2764,14 +2784,21 @@
     return '<span class="spv-chip" tabindex="0" role="button" data-spact="ws" title="Workstream">' +
       '<span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' + esc(it.workstream || RM.defaultWsName(state)) + '</span>';
   }
+  // a row's title is plain text (double-click or Rename… edits it in place);
+  // it takes only the width it needs so the chips sit close by
+  function sprTitleHtml(txt, f) {
+    var s = txt || '';
+    return '<span class="spv-title' + (s ? '' : ' spv-ph') + '" data-spf="' + f + '" title="Double-click to rename">' +
+      esc(s || (f === 'story' ? 'Story' : 'Name')) + '</span>';
+  }
   function sprRowHtml(it, num) {
     return '<div class="spv-row' + (isSel(it.id) ? ' sel' : '') + (it.done ? ' done' : '') +
       '" data-spid="' + it.id + '" data-spsec="' + sprSecKey(num) + '">' +
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
       '<span class="r-num">#' + it.num + '</span>' +
       typeGlyphHtml(it, 'feature') +
-      '<input class="spv-title" data-spf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
-      sprCarryHtml(it) + sprNumTag(num) +
+      sprTitleHtml(it.feature, 'feature') +
+      sprCarryHtml(it) + sprNumTag(num) + '<span class="spv-fill"></span>' +
       '<span class="spv-chip" tabindex="0" role="button" data-spact="epic" title="Epic">' +
       '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>' +
       sprWsChip(it) +
@@ -2784,8 +2811,8 @@
       '" data-spid="' + it.id + '" data-spst="' + st.id + '" data-spsec="' + sprSecKey(num) + '">' +
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
       typeGlyphHtml(st, 'story', it) +
-      '<input class="spv-title" data-spf="story" placeholder="Story" value="' + esc(st.title || '') + '">' +
-      (own ? sprCarryHtml(st) : '') + sprNumTag(num) +
+      sprTitleHtml(st.title, 'story') +
+      (own ? sprCarryHtml(st) : '') + sprNumTag(num) + '<span class="spv-fill"></span>' +
       '<span class="spv-est">' + ['size', 'pri', 'risk'].map(function (k) { return storyChipHtml(k, st, 'data-spact'); }).join('') + sprAsgChip(st, 'st-asg') + '</span>' +
       '</div>';
   }
@@ -2806,7 +2833,8 @@
     return '<section class="spv-sec" data-spsec="' + sec.key + '">' +
       '<div class="spv-sechd"><h3>' + esc(sec.title) + '</h3>' +
       (sec.dates ? '<span class="spv-secdates">' + esc(sec.dates) + '</span>' : '') +
-      '<span class="pr-lanect">' + sec.count + '</span></div>' +
+      '<span class="pr-lanect"' + (sec.points != null ? ' title="Story points"' : '') + '>' +
+      (sec.points != null ? sec.points + ' pt' : sec.count) + '</span></div>' +
       '<div class="spv-rows">' + (body || '<div class="spv-empty">Nothing here' + (sprFilterOn() ? ' matches' : '') + '. Drop a row to move it into this sprint.</div>') + '</div>' +
       (sprLevel === 'feature' ? '<button class="spv-add" data-spadd="' + sec.key + '"><i data-lucide="plus"></i>' + esc('Add ' + lvl('feature')) + '</button>' : '') +
       '</section>';
@@ -2841,7 +2869,8 @@
         '<i data-lucide="' + (sec.num == null ? 'inbox' : 'calendar-range') + '"></i>' +
         '<span class="spv-sbtxt"><span class="spv-sbname">' + esc(sec.title) + '</span>' +
         (sec.dates ? '<small>' + esc(sec.dates) + '</small>' : '') + '</span>' +
-        '<span class="pr-lanect">' + sec.count + '</span></button>';
+        '<span class="pr-lanect"' + (sec.points != null ? ' title="Story points"' : '') + '>' +
+        (sec.points != null ? sec.points + ' pt' : sec.count) + '</span></button>';
     }).join('');
     host.innerHTML = '<div class="spv">' +
       '<aside class="spv-side"><div class="spv-sidehd">Sprints</div>' + side + '</aside>' +
@@ -2895,23 +2924,39 @@
       if (nf) { nf.focus(); nf.setSelectionRange(nf.value.length, nf.value.length); }
     }, 120);
   });
-  $('#sprintView').addEventListener('change', function (e) {
-    var t = e.target;
-    if (!t.dataset || !t.dataset.spf) return;
-    var row = t.closest('[data-spid]');
+  // double-click a title (or Rename… in the row menu) to edit it in place
+  function sprStartRename(row) {
     if (!row) return;
-    var id = row.dataset.spid, stId = row.dataset.spst, val = t.value;
-    if (t.dataset.spf === 'story') {
-      commit('rename story', function (s) {
-        var st = storyById(RM.itemById(s, id) || {}, stId);
-        if (st) st.title = val;
-      });
-    } else {
-      commit('rename', function (s) {
-        var x = RM.itemById(s, id);
-        if (x) x.feature = val;
-      });
+    var span = row.querySelector('.spv-title');
+    if (!span || span.tagName === 'INPUT') return;
+    var id = row.dataset.spid, stId = row.dataset.spst || null;
+    var blank = span.classList.contains('spv-ph');
+    startInlineEdit(span, function (val) {
+      if (stId) {
+        commit('rename story', function (s) {
+          var st = storyById(RM.itemById(s, id) || {}, stId);
+          if (st) st.title = val;
+        });
+      } else {
+        commit('rename', function (s) {
+          var x = RM.itemById(s, id);
+          if (x) x.feature = val;
+        });
+      }
+    });
+    var inp = row.querySelector('input.st-add-input');
+    if (inp) {
+      inp.dataset.spf = stId ? 'story' : 'feature';
+      inp.className = 'st-add-input spv-title';
+      if (blank) { inp.value = ''; }
+      inp.select();
     }
+  }
+  $('#sprintView').addEventListener('dblclick', function (e) {
+    var t = e.target.closest('.spv-title');
+    if (!t || t.tagName === 'INPUT') return;
+    e.preventDefault();
+    sprStartRename(t.closest('[data-spid]'));
   });
   $('#sprintView').addEventListener('keydown', function (e) {
     var t = e.target;
@@ -2922,7 +2967,6 @@
       render();
       return;
     }
-    if (e.key === 'Enter' && t.dataset && t.dataset.spf) t.blur();
   });
   $('#sprintView').addEventListener('click', function (e) {
     if (dragConsumedClick) { dragConsumedClick = false; return; }
@@ -2994,6 +3038,15 @@
       } else if (selectedId !== row.dataset.spid || selStory) select(row.dataset.spid);
     }
   });
+  // the Rename… entry every titled row's menu opens with (re-queried on click:
+  // the menu's own render may have replaced the row element)
+  function sprRenameEntry(row) {
+    if (!row.querySelector('.spv-title')) return null;
+    var sel = row.dataset.spst
+      ? '#sprintView .spv-row[data-spst="' + row.dataset.spst + '"]'
+      : '#sprintView .spv-row[data-spid="' + row.dataset.spid + '"]:not(.spv-st)';
+    return { icon: 'pencil', label: 'Rename…', fn: function () { sprStartRename($(sel)); } };
+  }
   $('#sprintView').addEventListener('contextmenu', function (e) {
     var row = e.target.closest('[data-spid]');
     if (!row || e.target.closest('input,textarea,select')) return;
@@ -3007,6 +3060,7 @@
       var sid = row.dataset.spst;
       var stX = storyById(itX, sid);
       openContextMenu(cx, cy, [
+        sprRenameEntry(row),
         { icon: 'calendar-range', label: 'Move to sprint…', fn: function () { openContextMenu(cx, cy, moveStorySprintMenu(cid, sid)); } },
         stX && sprHasOwn(stX) ? { icon: 'corner-down-right', label: 'With feature', fn: function () {
           commit('story with feature', function (s) { RM.moveStoryToSprint(s, cid, sid, null, sid); });
@@ -3016,6 +3070,7 @@
       return;
     }
     openContextMenu(cx, cy, [
+      sprRenameEntry(row),
       { icon: 'calendar-range', label: 'Move to sprint…', fn: function () { openContextMenu(cx, cy, moveSprintMenu(cid)); } },
       { icon: 'folder-input', label: 'Move to phase…', fn: function () { openContextMenu(cx, cy, movePhaseMenu(cid)); } },
       { icon: 'tag', label: 'Set epic…', fn: function () { openContextMenu(cx, cy, setEpicMenu(cid, false)); } },
@@ -3034,7 +3089,7 @@
   // inside one; stories only reorder among their own feature's stories
   $('#sprintView').addEventListener('pointerdown', function (e) {
     if (e.button !== 0 || drag) return;
-    if (e.target.closest('input,textarea,button,select,[data-spact]')) return;
+    if (e.target.closest('input,textarea,button,select,[data-spact],[contenteditable="true"]')) return;
     var row = e.target.closest('.spv-row');
     if (!row) return;
     drag = { kind: 'sprow', id: row.dataset.spid, stId: row.dataset.spst || null, fromSec: row.dataset.spsec,
@@ -4018,8 +4073,8 @@
   function renderPanelInner() {
     var panel = $('#panel');
     var peek = $('#panelPeek');
-    // the panel lives on Planning AND Scoping: persistent, collapsible
-    if (view !== 'planning' && view !== 'scoping') {
+    // the panel lives on Planning, Scoping AND Sprinting: persistent, collapsible
+    if (view !== 'planning' && view !== 'scoping' && view !== 'sprints') {
       panel.hidden = true; panel.innerHTML = '';
       if (peek) peek.hidden = true;
       return;
@@ -4036,7 +4091,8 @@
       panel.innerHTML =
         '<div id="panelRz"></div>' +
         '<div class="p-top"><button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
-        '<div class="p-empty">No item selected<span>Click a row on the timeline to edit it here.</span></div>';
+        '<div class="p-empty">No item selected<span>Click a row ' +
+        (view === 'sprints' ? '' : 'on the timeline ') + 'to edit it here.</span></div>';
       if (window.lucide) lucide.createIcons();
       return;
     }
@@ -10825,7 +10881,7 @@
     if (inField) return;
     var mod = e.metaKey || e.ctrlKey;
     // [ and ] fold the left pane / the right panel (never while typing — above)
-    if (!mod && !e.altKey && e.key === ']' && (view === 'planning' || view === 'scoping')) {
+    if (!mod && !e.altKey && e.key === ']' && (view === 'planning' || view === 'scoping' || view === 'sprints')) {
       e.preventDefault(); togglePanel(); return;
     }
     if (!mod && !e.altKey && e.key === '[' && (view === 'planning' || view === 'scoping' || view === 'budget')) {

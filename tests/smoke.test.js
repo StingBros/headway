@@ -2127,8 +2127,10 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     const fphBtn = doc.querySelector('#sprintView [data-spdd="fphase"]');
     ok(fphBtn.classList.contains('pr-on') && fphBtn.textContent.indexOf(ph.name) !== -1,
       'an active phase filter lights up and names the phase');
-    ok(Number(doc.querySelector('#sprintView .spv-sbtn[data-spside="u"] .pr-lanect').textContent) ===
-      doc.querySelectorAll('#sprintView .spv-sec[data-spsec="u"] .spv-row').length,
+    // the sidebar mirrors the section header (a plain row count, or a story-point total)
+    const uCt = doc.querySelector('#sprintView .spv-sbtn[data-spside="u"] .pr-lanect').textContent.trim();
+    ok(uCt === doc.querySelector('#sprintView .spv-sec[data-spsec="u"] .spv-sechd .pr-lanect').textContent.trim() &&
+      (/ pt$/.test(uCt) || Number(uCt) === doc.querySelectorAll('#sprintView .spv-sec[data-spsec="u"] .spv-row').length),
       'sidebar counts follow the filtered rows');
     click(fphBtn); pick(/All phases/);
     ok(rowsOf().length === before && !doc.querySelector('#sprintView [data-spdd="fphase"]').classList.contains('pr-on'),
@@ -2154,7 +2156,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const schedRow = doc.querySelector('#sprintView .spv-row[data-spid="' + sched.id + '"]');
   ok(!!schedRow && schedRow.dataset.spsec !== 'u', 'scheduled items list under a sprint');
   ok(!!schedRow.querySelector('[data-spact="epic"]') && !!schedRow.querySelector('[data-spact="size"]') &&
-    !!schedRow.querySelector('input[data-spf="feature"]'), 'rows carry an inline title, epic and size chips');
+    !!schedRow.querySelector('[data-spf="feature"]'), 'rows carry an inline title, epic and size chips');
   ok(doc.querySelectorAll('#sprintView .spv-add').length === secs.length, 'every section ends with an Add feature button');
   // drag an unscheduled row onto a sprint in the sidebar: it gets that
   // sprint's start day and a span, and lists under that sprint
@@ -3697,6 +3699,91 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     click(doc.querySelector('#sprintView [data-spdd="level"]'));
     click(menu().find(b => /Feature/.test(b.textContent)));
   }
+}
+
+// sprinting: titles are text until double-click / Rename; right panel like Scoping
+{
+  const menu = () => [...doc.querySelectorAll('#popover .menu-list button')];
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  const row = doc.querySelector('#sprintView .spv-sec:not([data-spsec="u"]) .spv-row');
+  const id = row.dataset.spid;
+  const it = state().items.find(i => i.id === id);
+  const title = row.querySelector('[data-spf="feature"]');
+  ok(title && title.tagName !== 'INPUT' && title.textContent === it.feature, 'the row title is text, not an input');
+  ok(!!row.querySelector('.spv-fill'), 'a filler pushes the chips right of the narrow title');
+  // click selects and opens the panel
+  click(title);
+  const pName = doc.querySelector('#panel textarea[data-f="feature"]');
+  ok(!doc.querySelector('#panel').hidden && pName && pName.value === it.feature,
+    'clicking a row shows the item in the right panel');
+  // double-click edits; Enter commits (re-query: selecting re-rendered the row)
+  const rowSel = () => doc.querySelector('#sprintView .spv-row[data-spid="' + id + '"]');
+  rowSel().querySelector('[data-spf="feature"]').dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
+  const ed = rowSel().querySelector('input.st-add-input, [data-spf="feature"]');
+  ok(ed && (ed.tagName === 'INPUT' || ed.isContentEditable), 'double-click makes the title editable');
+  ok(ed.dataset.spf === 'feature', 'the editor keeps the field name');
+  ed.value = 'Renamed via sprint';
+  ed.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  ed.dispatchEvent(new window.FocusEvent('blur', { bubbles: true }));
+  ok(state().items.find(i => i.id === id).feature === 'Renamed via sprint', 'Enter commits the new title');
+  // context menu offers Rename…
+  rowSel().dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 120 }));
+  ok(menu().some(b => /Rename/.test(b.textContent)), 'the row context menu offers Rename…');
+  click(menu().find(b => /Rename/.test(b.textContent)));
+  const ed2 = rowSel().querySelector('input.st-add-input');
+  ok(!!ed2, 'Rename… starts the same inline edit');
+  ed2.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  ok(state().items.find(i => i.id === id).feature === 'Renamed via sprint', 'Escape leaves the title alone');
+  // panel peek / toggle on Sprinting
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: ']', bubbles: true }));
+  ok(doc.querySelector('#panel').hidden && !doc.querySelector('#panelPeek').hidden,
+    '] hides the panel and shows the peek button on Sprinting');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: ']', bubbles: true }));
+  ok(!doc.querySelector('#panel').hidden, '] brings it back');
+  // story rows: text title, story panel on select
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click(menu().find(b => /Story/.test(b.textContent)));
+  const stRow = doc.querySelector('#sprintView .spv-row.spv-st');
+  ok(stRow && stRow.querySelector('[data-spf="story"]').tagName !== 'INPUT', 'story titles are text too');
+  click(stRow.querySelector('[data-spf="story"]'));
+  ok(!doc.querySelector('#panel').hidden && !!doc.querySelector('#panel textarea[data-stf="title"]'),
+    'selecting a story row shows the story panel');
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click(menu().find(b => /Feature/.test(b.textContent)));
+  window.HeadwayApp.ai.commit('restore', (s) => { window.RM.itemById(s, id).feature = it.feature; });
+  // sprint totals in story points when the story size scheme is numeric
+  {
+    const scheme0 = state().meta.storySizeScheme;
+    const fRow = doc.querySelector('#sprintView .spv-sec:not([data-spsec="u"]) .spv-row');
+    const fid = fRow.dataset.spid, secKey = fRow.dataset.spsec;
+    const hd = () => doc.querySelector('#sprintView .spv-sec[data-spsec="' + secKey + '"] .spv-sechd .pr-lanect');
+    const side = () => doc.querySelector('#sprintView .spv-sbtn[data-spside="' + secKey + '"] .pr-lanect');
+    window.HeadwayApp.ai.commit('story points setup', (s) => {
+      window.RM.setSizeScheme(s, 'fibonacci', 'story');
+      const f = window.RM.itemById(s, fid);
+      f.stories = f.stories || [];
+      while (f.stories.length < 3) f.stories.push({ id: window.RM.uid('s'), title: 'pt story', done: false });
+      f.stories.slice(0, 3).forEach((st) => { st.size = ''; st.startDay = null; st.durDays = null; });
+    });
+    ok(/^\d+ pt$/.test(hd().textContent.trim()), 'a numeric story scheme totals the sprint in points');
+    const base = Number(hd().textContent.replace(' pt', ''));
+    ok(side().textContent.trim() === hd().textContent.trim(), 'the sidebar entry shows the same total');
+    window.HeadwayApp.ai.commit('story points', (s) => {
+      const f = window.RM.itemById(s, fid);
+      f.stories[0].size = '3'; f.stories[1].size = '5'; f.stories[2].size = '';
+    });
+    ok(Number(hd().textContent.replace(' pt', '')) === base + 8 && side().textContent.trim() === hd().textContent.trim(),
+      'sizing two stories 3 and 5 adds 8 points to the sprint total (an unsized story adds none)');
+    window.HeadwayApp.ai.commit('tshirt stories', (s) => { window.RM.setSizeScheme(s, 'tshirt', 'story'); });
+    ok(hd().textContent.trim() === String(doc.querySelectorAll('#sprintView .spv-sec[data-spsec="' + secKey + '"] .spv-row').length),
+      'a non-numeric story scheme keeps the plain item count');
+    window.HeadwayApp.ai.commit('restore sizing', (s) => {
+      window.RM.setSizeScheme(s, scheme0, 'story');
+      const f = window.RM.itemById(s, fid);
+      f.stories.slice(0, 3).forEach((st) => { st.size = ''; });
+    });
+  }
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
 ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'commits autosave to localStorage');
