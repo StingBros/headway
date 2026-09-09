@@ -3384,8 +3384,8 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   click(doc.querySelector('#detailBtn'));
   click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
   click(doc.querySelector('#viewTabs [data-view="sprints"]'));
-  ok(!!doc.querySelector('#sprintsView .spv-row [data-spact="dur"]') || !!doc.querySelector('.spv-row [data-spact="dur"]'),
-    'sprinting rows carry a duration chip');
+  ok(!!doc.querySelector('#sprintsView .spv-row [data-spact="asg"]') || !!doc.querySelector('.spv-row [data-spact="asg"]'),
+    'sprinting rows carry an assignee chip');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 
   // one Add feature row per group when grouped
@@ -3614,6 +3614,49 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
       ok(secs2[secs2.length - 1].dataset.spsec === String(far), 'scheduling into the last sprint reveals it');
       window.HeadwayApp.ai.commit('span', (s) => { const t = window.RM.itemById(s, it.id); t.startDay = window.RM.sprintStartDay(s.meta, startNum); });
     } else ok(true, 'timeline already ends at the last shown sprint');
+  }
+
+  // sprinting chips: assignees replace duration, workstream chip, heading chips
+  {
+    click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+    const row = doc.querySelector('#sprintView .spv-sec:not([data-spsec="u"]) .spv-row');
+    const id = row.dataset.spid;
+    ok(!!row.querySelector('[data-spact="asg"]') && !row.querySelector('[data-spact="dur"]'), 'feature rows show an assignee chip instead of duration');
+    ok(!!row.querySelector('[data-spact="ws"]'), 'feature rows carry a workstream chip');
+    click(row.querySelector('[data-spact="asg"]'));
+    const member = state().team[0];
+    const mBtn = [...doc.querySelectorAll('#popover .menu-list button')].find(b => b.textContent.indexOf(window.RM.memberLabel(member)) !== -1);
+    ok(!!mBtn, 'the assignee chip opens the roster');
+    click(mBtn);
+    ok((state().items.find(i => i.id === id).assignees || []).indexOf(member.id) !== -1, 'picking a person assigns them');
+    ok(!!doc.querySelector('#sprintView .spv-row[data-spid="' + id + '"] [data-spact="asg"] .avatar'), 'the chip shows their avatar');
+    const wsChip = doc.querySelector('#sprintView .spv-row[data-spid="' + id + '"] [data-spact="ws"]');
+    click(wsChip);
+    const wsBtn = [...doc.querySelectorAll('#popover .menu-list button')].filter(b => !/default|Other/.test(b.textContent))[0];
+    const wsName = wsBtn.textContent.trim();
+    click(wsBtn);
+    ok(state().items.find(i => i.id === id).workstream === wsName, 'the workstream chip sets the workstream');
+    // story level: heading chips and story assignee chip
+    // (priority is 'none' at this point in the suite from an earlier undo — turn
+    // it on so the heading's priority chip has something to render)
+    const prevPriScheme = state().meta.priorityScheme;
+    window.HeadwayApp.ai.commit('priority scheme', (s) => { s.meta.priorityScheme = 'moscow'; });
+    click(doc.querySelector('#sprintView [data-spdd="level"]'));
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Story/.test(b.textContent)));
+    const head = doc.querySelector('#sprintView .spv-feat');
+    ok(head && head.querySelector('.spv-est [data-spact="priority"]') && head.querySelector('.spv-est [data-spact="size"]') && head.querySelector('.spv-est [data-spact="dur"]'),
+      'story-view feature headings show priority, size and duration chips');
+    ok(!head.querySelector('.spv-phase'), 'headings drop the phase column');
+    window.HeadwayApp.ai.commit('priority scheme', (s) => { s.meta.priorityScheme = prevPriScheme; });
+    const stRow = doc.querySelector('#sprintView .spv-row.spv-st');
+    ok(stRow && stRow.querySelector('[data-spact="st-asg"]') && !stRow.querySelector('[data-spact="st-wk"]'), 'story rows show a story assignee chip instead of duration');
+    click(stRow.querySelector('[data-spact="st-asg"]'));
+    const mBtn2 = [...doc.querySelectorAll('#popover .menu-list button')].find(b => b.textContent.indexOf(window.RM.memberLabel(member)) !== -1);
+    click(mBtn2);
+    const stIt = state().items.find(i => i.id === stRow.dataset.spid);
+    ok((stIt.stories.find(s => s.id === stRow.dataset.spst).assignees || []).indexOf(member.id) !== -1, 'picking a person assigns them to the story');
+    click(doc.querySelector('#sprintView [data-spdd="level"]'));
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
   }
 }
 

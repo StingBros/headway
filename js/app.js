@@ -1895,6 +1895,9 @@
     else if (act === 'st-wk') {
       var stW = storyById(RM.itemById(state, itemId) || {}, stId);
       inlineWeeksEditor(anchor, stW ? stW.durDays : null, function (days) { setStoryDur(itemId, stId, days); });
+    } else if (act === 'st-asg') {
+      if (!state.team.length) { toast('Add people in the Resources panel first'); return true; }
+      openDropdown(anchor, storyAssignMenuItems(itemId, stId));
     } else return false;
     return true;
   }
@@ -1954,7 +1957,10 @@
     } else if (act === 'priority') openPriorityEditor(anchor, itemId);
     else if (act === 'risk') itemRiskMenu(anchor, itemId);
     else if (act === 'dur') inlineWeeksEditor(anchor, itA.durDays, function (days) { setItemDur(itemId, days); });
-    else return false;
+    else if (act === 'asg') {
+      if (!state.team.length) { toast('Add people in the Resources panel first'); return true; }
+      openDropdown(anchor, assignMenuItems(itemId));
+    } else return false;
     return true;
   }
   // sort under the active framework: RICE score descending, else the
@@ -2685,6 +2691,17 @@
     var n = s1 - s0, unit = RM.sprintsEnabled(state.meta) ? 'sprint' : 'week';
     return '<span class="spv-info" title="Expecting to carryover for ' + n + ' ' + unit + (n === 1 ? '' : 's') + ' (through ' + unit + ' ' + s1 + ')"><i data-lucide="info"></i></span>';
   }
+  // the est group's assignee chip (feature and story rows alike): a stack of
+  // avatars, or an add-person glyph when nobody's on it yet
+  function sprAsgChip(obj, act) {
+    return '<span class="r-asg" tabindex="0" role="button" data-spact="' + act + '" title="Assignees">' +
+      (avatarStack(obj.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>';
+  }
+  function sprWsChip(it) {
+    if (!state.meta.workstreamsEnabled) return '';
+    return '<span class="spv-chip" tabindex="0" role="button" data-spact="ws" title="Workstream">' +
+      '<span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' + esc(it.workstream || RM.defaultWsName(state)) + '</span>';
+  }
   function sprRowHtml(it, num) {
     return '<div class="spv-row' + (isSel(it.id) ? ' sel' : '') + (it.done ? ' done' : '') +
       '" data-spid="' + it.id + '" data-spsec="' + sprSecKey(num) + '">' +
@@ -2695,7 +2712,8 @@
       sprCarryHtml(it) + sprNumTag(num) +
       '<span class="spv-chip" tabindex="0" role="button" data-spact="epic" title="Epic">' +
       '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>' +
-      '<span class="spv-est">' + ['size', 'pri', 'risk', 'dur'].map(function (k) { return itemChipHtml(k, it, 'data-spact'); }).join('') + '</span>' +
+      sprWsChip(it) +
+      '<span class="spv-est">' + ['size', 'pri', 'risk'].map(function (k) { return itemChipHtml(k, it, 'data-spact'); }).join('') + sprAsgChip(it, 'asg') + '</span>' +
       '</div>';
   }
   function sprStoryRowHtml(it, st, num) {
@@ -2706,17 +2724,18 @@
       typeGlyphHtml(st, 'story', it) +
       '<input class="spv-title" data-spf="story" placeholder="Story" value="' + esc(st.title || '') + '">' +
       (own ? sprCarryHtml(st) : '') + sprNumTag(num) +
-      '<span class="spv-est">' + ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-spact'); }).join('') + '</span>' +
+      '<span class="spv-est">' + ['size', 'pri', 'risk'].map(function (k) { return storyChipHtml(k, st, 'data-spact'); }).join('') + sprAsgChip(st, 'st-asg') + '</span>' +
       '</div>';
   }
   function sprSectionHtml(sec) {
     var body;
     if (sprLevel === 'story') {
       body = sec.feats.map(function (f) {
-        return '<div class="spv-feat" data-spfeat="' + f.it.id + '">' +
+        return '<div class="spv-feat" data-spfeat="' + f.it.id + '" data-spid="' + f.it.id + '">' +
           '<span class="r-num">#' + f.it.num + '</span>' +
           typeGlyphHtml(f.it, 'feature') +
-          '<span class="spv-featname">' + esc(f.it.feature || '(untitled)') + '</span></div>' +
+          '<span class="spv-featname">' + esc(f.it.feature || '(untitled)') + '</span>' +
+          '<span class="spv-est">' + ['pri', 'size', 'dur'].map(function (k) { return itemChipHtml(k, f.it, 'data-spact'); }).join('') + '</span></div>' +
           f.stories.map(function (st) { return sprStoryRowHtml(f.it, st, sec.num); }).join('');
       }).join('');
     } else {
@@ -2901,6 +2920,7 @@
       if (!itC) return;
       if (row.dataset.spst) storyChipAction(chip.dataset.spact, chip, cid, row.dataset.spst);
       else if (chip.dataset.spact === 'epic') openDropdown(chip, setEpicMenu(cid, true));
+      else if (chip.dataset.spact === 'ws') openDropdown(chip, wsMenuItems(cid, function () { return chip; }));
       else itemChipAction(chip.dataset.spact, chip, cid);
       return;
     }
@@ -5193,19 +5213,7 @@
         return;
       } else if (act.dataset.act === 'st-asg') {
         if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
-        openDropdown(act, state.team.map(function (mm) {
-          var onSA = ((storyById(it, stId) || {}).assignees || []).indexOf(mm.id) !== -1;
-          return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onSA, fn: function () {
-            commit('story assignees', function (s) {
-              var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
-              if (!st2) return;
-              st2.assignees = st2.assignees || [];
-              var atA = st2.assignees.indexOf(mm.id);
-              if (atA === -1) st2.assignees.push(mm.id);
-              else st2.assignees.splice(atA, 1);
-            });
-          } };
-        }));
+        openDropdown(act, storyAssignMenuItems(itemId, stId));
       } else if (act.dataset.act === 'st-startd') {
         var stObjD = storyById(it, stId);
         openCalendar(act, stObjD && stObjD.startDay != null ? RM.fmtISO(RM.dayToDate(state.meta, stObjD.startDay)) : '',
@@ -5464,6 +5472,24 @@
           var at = t.assignees.indexOf(mm.id);
           if (at === -1) t.assignees.push(mm.id);
           else t.assignees.splice(at, 1);
+        });
+      } };
+    });
+  }
+
+  // shared by the panel's story-assignee dropdown and the Sprinting story chip
+  function storyAssignMenuItems(itemId, stId) {
+    var it = RM.itemById(state, itemId);
+    return state.team.map(function (mm) {
+      var onSA = ((storyById(it, stId) || {}).assignees || []).indexOf(mm.id) !== -1;
+      return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onSA, fn: function () {
+        commit('story assignees', function (s) {
+          var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
+          if (!st2) return;
+          st2.assignees = st2.assignees || [];
+          var atA = st2.assignees.indexOf(mm.id);
+          if (atA === -1) st2.assignees.push(mm.id);
+          else st2.assignees.splice(atA, 1);
         });
       } };
     });
