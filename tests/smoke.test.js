@@ -1371,7 +1371,8 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
     ok(st.startDay != null && st.durDays >= 5, 'double-clicking the story lane gives it a timeline');
     const stBar = doc.querySelector('#rows .st-bar[data-stbar="' + stId + '"]');
     ok(!!stBar, 'story timeline renders as a mini bar');
-    ok(!stBar.querySelector('[data-port]'), 'story bars have no dependency ports');
+    ok(!!stBar.querySelector('.port[data-port="in"]') && !!stBar.querySelector('.port[data-port="out"]'),
+      'story bars carry the same in/out dependency ports as feature bars');
     ok(!!stBar.querySelector('.stb-label'), 'story bar carries its title as a quiet label');
     // context menu offers Remove timeline; removing clears it
     doc.querySelector('#rows .row.story[data-story="' + stId + '"]')
@@ -3060,6 +3061,41 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const bu = new window.Event('beforeunload', { cancelable: true });
   window.dispatchEvent(bu);
   ok(bu.defaultPrevented, 'beforeunload is blocked while work is unsaved');
+}
+
+// ---------------------------------------------------------------- story dependency arrows and ports
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  // arrows are drawn inside a requestAnimationFrame; jsdom's rAF is a timer,
+  // so run callbacks inline for the length of this block (same trick the
+  // focus-restore tests use)
+  const realRaf = window.requestAnimationFrame;
+  window.requestAnimationFrame = (cb) => cb();
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story detail
+  // a filter from an earlier block may hide some features: host the fixture on
+  // a scheduled feature whose row is actually on screen
+  const host = Array.from(doc.querySelectorAll('#rows .row.item[data-id]'))
+    .map(r => state().items.find(i => i.id === r.dataset.id))
+    .find(i => i && !i.milestone && i.startDay != null);
+  window.HeadwayApp.ai.commit('story arrow fixture', (s) => {
+    const f = window.RM.itemById(s, host.id);
+    const n = window.RM.nextNum(s);
+    f.stories = f.stories || [];
+    f.stories.push({ id: 'ar_1', title: 'arrow one', done: false, num: n, startDay: f.startDay, durDays: 2 },
+      { id: 'ar_2', title: 'arrow two', done: false, num: n + 1, startDay: f.startDay, durDays: 2, deps: [n] });
+  });
+  ok(!!doc.querySelector('#rows .st-bar[data-stbar="ar_1"] .port[data-port="out"]') && !!doc.querySelector('#rows .st-bar[data-stbar="ar_2"] .port[data-port="in"]'), 'story bars carry in/out ports');
+  const edge = doc.querySelector('#arrowPaths g.edge[data-sfrom="ar_1"][data-sto="ar_2"]');
+  ok(!!edge, 'a story dependency draws an arrow between the two story bars');
+  ok(edge && edge.classList.contains('viol'), 'starting on the same day as the dependency marks the arrow as a violation');
+  click(edge.querySelector('path.hit'));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+  ok(window.RM.storyRef(state(), 'ar_2').st.deps.length === 0, 'selecting the arrow and pressing Delete removes the story dependency');
+  window.HeadwayApp.ai.commit('story arrow cleanup', (s) => { const f = window.RM.itemById(s, host.id); f.stories = f.stories.filter(x => x.id !== 'ar_1' && x.id !== 'ar_2'); });
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
+  window.requestAnimationFrame = realRaf;
 }
 
 // ---------------------------------------------------------------- Add buttons only where nothing exists yet
