@@ -3699,6 +3699,54 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   }
 }
 
+
+// stories: Duplicate story in every story context menu
+{
+  const menu = () => [...doc.querySelectorAll('#popover .menu-list button')];
+  const ctx = (el) => el.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 150, clientY: 150 }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const it = state().items.find(i => !i.milestone && i.stories && i.stories.length);
+  window.__headway.selectItem(it.id);
+  const chev = doc.querySelector('#rows .row.item[data-id="' + it.id + '"] [data-act="stories"]');
+  if (chev && !chev.classList.contains('open')) click(chev);
+  const st = it.stories[0];
+  const stRow = doc.querySelector('#rows .row.story[data-story="' + st.id + '"]');
+  ok(!!stRow, 'the feature shows its story row');
+  ctx(stRow);
+  const dup = menu().find(b => /Duplicate story/.test(b.textContent));
+  ok(!!dup, 'planning story rows offer Duplicate story');
+  const nBefore = it.stories.length;
+  click(dup);
+  const after = state().items.find(i => i.id === it.id);
+  const idx = after.stories.findIndex(s => s.id === st.id);
+  const copy = after.stories[idx + 1];
+  ok(after.stories.length === nBefore + 1 && copy && copy.id !== st.id && copy.title === st.title + ' (copy)', 'the copy sits right after the original with a fresh id and "(copy)" title');
+  ok(copy.size === st.size && copy.priority === st.priority && JSON.stringify(copy.assignees || []) === JSON.stringify(st.assignees || []), 'fields carry over');
+  ok(!copy.jiraKey, 'the copy does not point at the original Jira issue');
+  ok(new Set(after.stories.map(s => s.id)).size === after.stories.length, 'story ids stay unique');
+  // the other three menus offer it too
+  ctx(doc.querySelector('#panel'));
+  ok(menu().some(b => /Duplicate story/.test(b.textContent)), 'the panel story menu offers Duplicate story');
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  click(doc.querySelector('#prioView [data-prdd="level"]'));
+  click(menu().find(b => /Story/.test(b.textContent)));
+  const prCard = doc.querySelector('#prioView .pr-card[data-prst]');
+  if (prCard) { ctx(prCard); ok(menu().some(b => /Duplicate story/.test(b.textContent)), 'prioritizing story cards offer Duplicate story'); }
+  else ok(true, 'no story cards on the board in this fixture state');
+  click(doc.querySelector('#prioView [data-prdd="level"]'));
+  click(menu().find(b => /Feature/.test(b.textContent)));
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click(menu().find(b => /Story/.test(b.textContent)));
+  const spRow = doc.querySelector('#sprintView .spv-row.spv-st');
+  ctx(spRow);
+  ok(menu().some(b => /Duplicate story/.test(b.textContent)), 'sprinting story rows offer Duplicate story');
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click(menu().find(b => /Feature/.test(b.textContent)));
+  // restore
+  window.HeadwayApp.ai.commit('undo dup', (s) => { const t = window.RM.itemById(s, it.id); t.stories = t.stories.filter(x => x.id !== copy.id); });
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
 ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'commits autosave to localStorage');
 // desktop: reload from disk only while auto-save is on
 {

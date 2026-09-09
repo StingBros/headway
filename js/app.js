@@ -2599,6 +2599,7 @@
       openContextMenu(cx, cy, [
         { icon: 'rows-3', label: 'Go to feature', fn: function () { select(cid, true); } },
         { sep: true },
+        { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(cid, stIdX); } },
         { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
           commit('delete story', function (s) {
             var t = RM.itemById(s, cid);
@@ -3044,7 +3045,8 @@
         stX && sprHasOwn(stX) ? { icon: 'corner-down-right', label: 'With feature', fn: function () {
           commit('story with feature', function (s) { RM.moveStoryToSprint(s, cid, sid, null, sid); });
         } } : null,
-        state.team.length ? { icon: 'users', label: 'Assign…', fn: function () { openContextMenu(cx, cy, storyAssignMenuItems(cid, sid)); } } : null
+        state.team.length ? { icon: 'users', label: 'Assign…', fn: function () { openContextMenu(cx, cy, storyAssignMenuItems(cid, sid)); } } : null,
+        { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(cid, sid); } }
       ].filter(Boolean));
       return;
     }
@@ -5716,6 +5718,8 @@
         { icon: RM.typeOf(state, stm, 'story').icon, label: 'Type: ' + esc(RM.typeOf(state, stm, 'story').label) + '…', fn: function () {
           openContextMenu(cx, cy, typeMenuItems('story', stm.type, function (k) { setStoryType(stmItemId, stmId, k); }));
         } },
+        { sep: true },
+        { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(stmItemId, stmId); } },
         { icon: 'trash-2', label: 'Delete story', fn: function () {
           commit('delete story', function (s) {
             var t = RM.itemById(s, stmItemId);
@@ -5814,6 +5818,8 @@
     if (selStory) {
       var stMoreId = selStory;
       openContextMenu(e.clientX, e.clientY, [
+        { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(it.id, stMoreId); } },
+        { sep: true },
         { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
           commit('delete story', function (s) {
             var t = RM.itemById(s, it.id);
@@ -6085,6 +6091,21 @@
       copy.stories.forEach(function (st) { st.id = RM.uid('s'); });
       s.items.splice(s.items.indexOf(t) + 1, 0, copy);
       selectedId = copy.id;
+    });
+  }
+
+  function duplicateStory(itemId, stId) {
+    commit('duplicate story', function (s) {
+      var t = RM.itemById(s, itemId);
+      var st = t && storyById(t, stId);
+      if (!st) return;
+      var copy = RM.clone(st);
+      copy.id = RM.uid('s');
+      copy.title = (st.title || 'Story') + ' (copy)';
+      copy.jiraKey = '';
+      t.stories.splice(t.stories.indexOf(st) + 1, 0, copy);
+      selectedId = itemId;
+      selStory = copy.id;
     });
   }
 
