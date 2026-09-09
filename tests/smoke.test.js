@@ -3733,3 +3733,46 @@ window.RMExcel.exportWorkbook(state()).then((buf) => {
   ok(/autoSaveOn\(\)/.test(desk) && /if \(!hit \|\| reloading \|\| !app\(\)\.autoSaveOn\(\)\) return;/.test(desk),
     'the disk watcher skips reloads while auto-save is off');
 }
+
+// rich text: URLs render as links; ⌘-click opens them; storage stays plain
+{
+  const url = 'https://example.com/path?q=1';
+  const firstRow = doc.querySelector('#rows .row.item[data-id]');
+  const it = state().items.find(i => i.id === firstRow.dataset.id);
+  window.HeadwayApp.ai.commit('desc', (s) => { window.RM.itemById(s, it.id).description = '<p>See ' + url + ', then (https://b.example/x). Not a link: example.com</p>'; });
+  // scoping tab renders the anchors
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  const cell = doc.querySelector('#rows .row.item[data-id="' + it.id + '"] .sc-rich[data-scope="description"]');
+  ok(!!cell, 'scoping shows the description cell');
+  const links = cell ? [...cell.querySelectorAll('a.auto-link')] : [];
+  ok(links.length === 2 && links[0].getAttribute('href') === url && links[0].textContent === url, 'a URL in a scoping cell renders as an auto-link');
+  ok(links[1] && links[1].getAttribute('href') === 'https://b.example/x' && /\)\./.test(cell.textContent), 'trailing punctuation stays outside the link');
+  ok(!/example\.com<\/a>/.test(cell.innerHTML.replace(url, '')), 'a bare domain without a scheme is not linked');
+  ok(state().items.find(i => i.id === it.id).description.indexOf('<a') === -1, 'the stored value carries no anchor');
+  // ⌘-click opens; a plain click does not
+  const opened = [];
+  const realOpen = window.open;
+  window.open = (u) => { opened.push(u); return null; };
+  links[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  ok(opened.length === 0, 'a plain click does not open the link');
+  links[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true }));
+  ok(opened.length === 1 && opened[0] === url, '⌘-click opens the URL in a new tab');
+  links[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+  ok(opened.length === 2, 'Ctrl-click opens it too');
+  window.open = realOpen;
+  // editing the cell and blurring stores plain text, not the anchor markup
+  cell.innerHTML = '<p>Go to <a class="auto-link" href="' + url + '">' + url + '</a> now</p>';
+  cell.dispatchEvent(new window.Event('input', { bubbles: true }));
+  cell.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  const stored = state().items.find(i => i.id === it.id).description;
+  ok(stored.indexOf('<a') === -1 && stored.indexOf(url) !== -1, 'reading an edited cell back drops the anchor and keeps the URL text');
+  // the right panel's description editor links too
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  window.__headway.selectItem(it.id);
+  const ed = doc.querySelector('#panel .wz-ed[data-f="col:description"]');
+  ok(!!ed && !!ed.querySelector('a.auto-link[href="' + url + '"]'), 'the panel description editor renders the URL as a link');
+  // desktop shell: capability and opener wiring exist
+  const cap = fs.readFileSync(path.join(ROOT, 'src-tauri/capabilities/default.json'), 'utf8');
+  const desk12 = fs.readFileSync(path.join(ROOT, 'js/desktop.js'), 'utf8');
+  ok(/opener:allow-open-url/.test(cap) && /openUrl/.test(desk12), 'the desktop shell can open URLs');
+}

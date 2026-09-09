@@ -222,6 +222,13 @@
       });
     },
 
+    // open an external http(s) link in the OS browser
+    openUrl: function (url) {
+      var op = window.__TAURI__ && window.__TAURI__.opener;
+      if (!op || !op.openUrl) { window.open(url, '_blank', 'noopener'); return Promise.resolve(); }
+      return op.openUrl(url).catch(function (err) { app().toast('Could not open link: ' + (err && err.message || err), 'err'); });
+    },
+
     // open a known path (start page recents) — rejects if unreadable
     openPath: function (p) {
       return fs.readFile(p).then(function (bytes) {

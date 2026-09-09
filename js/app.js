@@ -833,12 +833,60 @@
     return out === '<br>' ? '' : out;
   }
 
+  // URLs in rich text become links at display time only: the stored value
+  // stays plain (sanitizeHtml drops anchors on the way back in), so a link
+  // is never more than the URL text the user typed
+  var URL_RE = /https?:\/\/[^\s<>"']+/g;
+  function linkifyHtml(html) {
+    if (!html || html.indexOf('http') === -1) return html;
+    var box = document.createElement('div');
+    box.innerHTML = html;
+    (function walk(node) {
+      Array.prototype.slice.call(node.childNodes).forEach(function (ch) {
+        if (ch.nodeType === 1) { if (ch.tagName !== 'A') walk(ch); return; }
+        if (ch.nodeType !== 3 || ch.nodeValue.indexOf('http') === -1) return;
+        var text = ch.nodeValue, frag = document.createDocumentFragment(), last = 0, m;
+        URL_RE.lastIndex = 0;
+        while ((m = URL_RE.exec(text))) {
+          var u = m[0], tail = '';
+          var t = u.match(/[.,;:!?)\]}'"]+$/);
+          if (t) { tail = t[0]; u = u.slice(0, -tail.length); }
+          if (!u) continue;
+          frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+          var a = document.createElement('a');
+          a.className = 'auto-link';
+          a.setAttribute('href', u);
+          a.setAttribute('title', '\u2318-click to open');
+          a.textContent = u;
+          frag.appendChild(a);
+          last = m.index + u.length;
+        }
+        if (!last) return;
+        frag.appendChild(document.createTextNode(text.slice(last)));
+        node.replaceChild(frag, ch);
+      });
+    })(box);
+    return box.innerHTML;
+  }
+  function openExternal(url) {
+    if (!/^https?:\/\//i.test(url)) return;
+    if (window.HeadwayDesktop && window.HeadwayDesktop.openUrl) { window.HeadwayDesktop.openUrl(url); return; }
+    window.open(url, '_blank', 'noopener');
+  }
+  // \u2318 / Ctrl-click follows an auto-link; a plain click only places the caret
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a.auto-link');
+    if (!a) return;
+    e.preventDefault();
+    if (e.metaKey || e.ctrlKey) openExternal(a.getAttribute('href'));
+  });
+
   // display a stored scope value as rich HTML; legacy plain-text values keep
   // their line breaks
   function richDisplay(v) {
     if (!v) return '';
-    if (/<[a-z][\s\S]*>/i.test(v)) return sanitizeHtml(v);
-    return esc(v).replace(/\n/g, '<br>');
+    if (/<[a-z][\s\S]*>/i.test(v)) return linkifyHtml(sanitizeHtml(v));
+    return linkifyHtml(esc(v).replace(/\n/g, '<br>'));
   }
 
   // WYSIWYG editor block; the host wires the commit (blur / Save)
@@ -854,7 +902,7 @@
       btn('insertOrderedList', 'Numbered list', '<i data-lucide="list-ordered"></i>') +
       '</div>' +
       '<div class="wz-ed" contenteditable="true" data-f="' + field + '" data-ph="' + esc(placeholder || '') + '">' +
-      sanitizeHtml(html) + '</div></div>';
+      linkifyHtml(sanitizeHtml(html)) + '</div></div>';
   }
   // toolbar buttons act on their editor without stealing its selection
   document.addEventListener('pointerdown', function (e) {

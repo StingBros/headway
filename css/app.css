@@ -1607,6 +1607,9 @@ body[data-view="budget"] .hl-cols .bu-only { text-align: left; padding-left: 4px
 .wz-ed:empty::before { content: attr(data-ph); color: var(--ink-3); pointer-events: none; }
 .wz-ed ul, .wz-ed ol { margin: 4px 0; padding-left: 20px; }
 .wz-ed p, .wz-ed div { margin: 0 0 4px; }
+/* auto-linked URLs in any rich text field (display only; never stored) */
+.auto-link { color: var(--blue); text-decoration: underline; text-underline-offset: 2px; cursor: text; }
+.auto-link:hover { cursor: pointer; }
 .p-story .st-edit.has-body { color: var(--blue); }
 
 /* rich scoping cell mirrors the textarea look */
