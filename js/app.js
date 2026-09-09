@@ -5719,11 +5719,27 @@
   // ourselves (rowsEl survives renders).
   var lanePress = null; // { id, t } of the last empty-lane click
 
+  // a title's double-click is counted by hand: the first click selects the
+  // row, which re-renders and replaces the node, so the browser never fires
+  // a native dblclick on it (same story as placing on an empty lane)
+  var titlePress = null; // { key, t } of the last click on a title span
   rowsEl.addEventListener('click', function (e) {
     if (dragConsumedClick) { dragConsumedClick = false; return; }
     // scoping text cells and inline editors edit in place — selecting would
     // re-render and steal their focus
     if (e.target.closest('.sc-edit,.st-add-input,.hc-edit,input.r-name,.sc-name,.st-name')) return;
+    var tEl = e.target.closest('.r-name-txt,.st-title-txt');
+    if (tEl) {
+      var tRow0 = tEl.closest('.row');
+      var tKey = tRow0 ? (tRow0.dataset.story ? 'st:' + tRow0.dataset.story : tRow0.dataset.id) : null;
+      var tNow = Date.now();
+      if (tKey && titlePress && titlePress.key === tKey && tNow - titlePress.t < 450) {
+        titlePress = null;
+        plStartRename(tRow0.dataset.id, tRow0.dataset.story || null);
+        return;
+      }
+      titlePress = tKey ? { key: tKey, t: tNow } : null;
+    } else titlePress = null;
     var act = e.target.closest('[data-act]');
     var rowEl = e.target.closest('.row');
     if (!rowEl) return;

@@ -3443,6 +3443,26 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
+// ---------------------------------------------------------------- title double-click counted by hand; titles never select text
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  window.__headway.selectItem(null);
+  const hostRow = [...doc.querySelectorAll('#rows .row.item')].find(r => r.querySelector('.r-name-txt'));
+  const hid = hostRow.dataset.id;
+  const titleOf = () => doc.querySelector('#rows .row.item[data-id="' + hid + '"] .r-name-txt');
+  click(titleOf()); // selects (re-renders the row)
+  ok(!doc.querySelector('#rows .row.item[data-id="' + hid + '"] input.r-name'), 'a single click on a title does not open the editor');
+  click(titleOf()); // second click within the double-click window, on the re-rendered node
+  const inp = doc.querySelector('#rows .row.item[data-id="' + hid + '"] input.r-name');
+  ok(!!inp, 'two quick clicks on a title open the rename editor even though the row re-rendered in between');
+  inp.value = 'Renamed by two clicks';
+  inp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  ok(state().items.find(i => i.id === hid).feature === 'Renamed by two clicks', 'Enter commits the rename');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  const cssT = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  ok(/\.r-name-txt,\s*\.st-title-txt\s*\{[^}]*user-select:\s*none/.test(cssT), 'title spans never select text (a selected word would hijack the row drag)');
+}
+
 // ---------------------------------------------------------------- story panel estimate buttons
 // Size / Priority / Risk in the story panel are buttons with data-stf AND
 // data-v; the generic data-stf handler must not swallow them.

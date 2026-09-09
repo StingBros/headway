@@ -479,7 +479,10 @@ input.r-name {
 }
 input.r-name:hover { border-color: var(--line-2); background: var(--surface); }
 /* outside Scoping the title is plain text until a double-click (or Rename…)
-   swaps the editor in: same metrics, same hover affordance */
+   swaps the editor in: same metrics, same hover affordance. No text selection:
+   a selected word would turn the next drag into a native text drag and the
+   row would not move */
+.r-name-txt, .st-title-txt { user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
 span.r-name {
   flex: 1; min-width: 0;
   font: inherit; font-weight: 400; color: var(--ink);
