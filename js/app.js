@@ -2113,7 +2113,9 @@
             ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-prstact'); }).join('') +
             '</div>';
         }).join('') +
-        '<button class="pr-st-add" data-prstadd="1"><i data-lucide="plus"></i>' + esc('Add ' + lvl('story')) + '</button></div>'
+        ((it.stories || []).length ? '' : // add via the story context menu once one exists
+          '<button class="pr-st-add" data-prstadd="1"><i data-lucide="plus"></i>' + esc('Add ' + lvl('story')) + '</button>') +
+        '</div>'
       : '';
     return '<div class="sp-card pr-card" data-prcard="' + it.id + '" style="--ws-c:#' + wsColor + '">' +
       '<div class="pr-head">' + typeGlyphHtml(it, 'feature') +
@@ -2250,7 +2252,7 @@
     var mine = prSortItems(items.filter(function (it) { return prFeatVal(it) === col.key && prMatches(it); }));
     return '<div class="sp-col" data-prcol="' + esc(col.key) + '"' + (laneAttr || '') + '>' +
       '<div class="sp-colbody">' + mine.map(prCardHtml).join('') + '</div>' +
-      (prioFeatCol === 'phase' // a new feature needs a phase to land in
+      (prioFeatCol === 'phase' && !mine.length // a new feature needs a phase to land in; a filled column adds via the context menu
         ? '<button class="pr-add" data-pradd="' + col.key + '"' + (laneAttr || '') + '><i data-lucide="plus"></i> Add</button>' : '') +
       '</div>';
   }
@@ -2598,6 +2600,7 @@
       openContextMenu(cx, cy, [
         { icon: 'rows-3', label: 'Go to feature', fn: function () { select(cid, true); } },
         { sep: true },
+        storyInsertEntries(cid, stIdX)[0], storyInsertEntries(cid, stIdX)[1],
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(cid, stIdX); } },
         { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
           commit('delete story', function (s) {
@@ -2883,7 +2886,7 @@
       '<span class="pr-lanect"' + (sec.points != null ? ' title="Story points"' : '') + '>' +
       (sec.points != null ? fmtPts(sec.points) + ' pt' : sec.count) + '</span></div>' +
       '<div class="spv-rows">' + (body || '<div class="spv-empty">Nothing here' + (sprFilterOn() ? ' matches' : '') + '. Drop a row to move it into this sprint.</div>') + '</div>' +
-      (sprLevel === 'feature' ? '<button class="spv-add" data-spadd="' + sec.key + '"><i data-lucide="plus"></i>' + esc('Add ' + lvl('feature')) + '</button>' : '') +
+      (sprLevel === 'feature' && !sec.items.length ? '<button class="spv-add" data-spadd="' + sec.key + '"><i data-lucide="plus"></i>' + esc('Add ' + lvl('feature')) + '</button>' : '') +
       '</section>';
   }
   function renderSprintPage() {
@@ -3113,6 +3116,8 @@
           commit('story with feature', function (s) { RM.moveStoryToSprint(s, cid, sid, null, sid); });
         } } : null,
         state.team.length ? { icon: 'users', label: 'Assign…', fn: function () { openContextMenu(cx, cy, storyAssignMenuItems(cid, sid)); } } : null,
+        { sep: true },
+        storyInsertEntries(cid, sid)[0], storyInsertEntries(cid, sid)[1],
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(cid, sid); } }
       ].filter(Boolean));
       return;
@@ -3850,7 +3855,7 @@
                     : '')) +
               '</div></div>'));
       });
-      html.push(
+      if (!(it.stories || []).length) html.push( // a feature with stories adds via the story context menu
         '<div class="row story story-add" data-id="' + it.id + '">' +
         '<div class="row-left"><span class="st-pad"></span>' +
         '<i data-lucide="plus" class="st-add-ico"></i>' +
@@ -3905,22 +3910,13 @@
             '</span><span class="band-count">' + g.by[key].length + '</span></div>' +
             '<div class="row-lane"></div></div>');
           g.by[key].forEach(function (it) { itemRowsHtml(html, it, cyclic); });
-          html.push(addRowHtml(p, { epic: key, workstream: wsKey }, true));
         });
       }
-      // click-to-add row; group rows (indented) put the feature into that
-      // epic / workstream, the phase row adds it at the phase's end
-      function addRowHtml(ph, group, sub) {
-        var where = ph.name;
-        if (group && group.epic) where = group.epic;
-        else if (group && group.epic === '') where = 'no epic';
-        else if (group && group.workstream) where = group.workstream;
-        else if (group && group.workstream === '') where = RM.defaultWsName(state);
-        return '<div class="row addrow' + (sub ? ' sub' : '') + '" data-kind="addrow" data-phase="' + ph.id + '"' +
-          (group && group.epic != null ? ' data-epic="' + esc(group.epic) + '"' : '') +
-          (group && group.workstream != null ? ' data-ws="' + esc(group.workstream) + '"' : '') +
-          '>' +
-          '<div class="row-left" title="Add a ' + esc(lvl('feature').toLowerCase()) + ' to ' + esc(where) + '"><span class="addrow-lab"><i data-lucide="plus"></i> ' + esc('Add ' + lvl('feature')) + '</span></div>' +
+      // click-to-add row, shown only while the phase has no features: a
+      // filled phase adds through Insert feature above / below
+      function addRowHtml(ph) {
+        return '<div class="row addrow" data-kind="addrow" data-phase="' + ph.id + '">' +
+          '<div class="row-left" title="Add a ' + esc(lvl('feature').toLowerCase()) + ' to ' + esc(ph.name) + '"><span class="addrow-lab"><i data-lucide="plus"></i> ' + esc('Add ' + lvl('feature')) + '</span></div>' +
           '<div class="row-lane"></div></div>';
       }
       var wsKey = null;
@@ -3938,7 +3934,7 @@
           if (groupEpic) epicBands(wg.by[key], true, key);
           else {
             wg.by[key].forEach(function (it) { itemRowsHtml(html, it, cyclic); });
-            html.push(addRowHtml(p, { workstream: key }, true));
+
           }
         });
       } else if (groupEpic) {
@@ -3950,7 +3946,7 @@
       // click-to-add row at the bottom of the phase — only when the phase
       // isn't already split into groups that carry their own add rows
       var grouped = (groupWs && state.meta.workstreamsEnabled) || groupEpic;
-      if (!grouped || !items.length) html.push(addRowHtml(p, null, false));
+      if (!items.length) html.push(addRowHtml(p));
     });
 
     rowsEl.innerHTML = html.join('');
@@ -4367,7 +4363,8 @@
       (it.milestone ? '' : // milestones carry no stories
         sec('stories', esc(lvl('story', true)), '',
           '<div class="p-stories">' + storyRows + '</div>' +
-          '<input data-f="storyadd" placeholder="' + esc('+ add ' + lvl('story').toLowerCase() + '…') + '" style="width:100%;margin-top:6px">')) +
+          ((it.stories || []).length ? '' : // with stories present, the story context menu inserts
+            '<input data-f="storyadd" placeholder="' + esc('+ add ' + lvl('story').toLowerCase() + '…') + '" style="width:100%;margin-top:6px">'))) +
 
       (vlist.length
         ? sec('checks', 'Checks', '',
@@ -5873,6 +5870,7 @@
           openContextMenu(cx, cy, typeMenuItems('story', stm.type, function (k) { setStoryType(stmItemId, stmId, k); }));
         } },
         { sep: true },
+        storyInsertEntries(stmItemId, stmId)[0], storyInsertEntries(stmItemId, stmId)[1],
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(stmItemId, stmId); } },
         { icon: 'trash-2', label: 'Delete story', fn: function () {
           commit('delete story', function (s) {
@@ -5890,14 +5888,7 @@
         return;
       }
       items = [
-        it.milestone ? null : { icon: 'plus', label: esc('Add ' + lvl('story').toLowerCase()), fn: function () {
-          if (detailMode !== 'story') { expanded[itemId] = true; saveLocal(); }
-          render();
-          requestAnimationFrame(function () {
-            var inp = rowsEl.querySelector('.row.story-add[data-id="' + itemId + '"] .st-add-input');
-            if (inp) inp.focus();
-          });
-        } },
+        it.milestone ? null : { icon: 'plus', label: esc('Add ' + lvl('story').toLowerCase()), fn: function () { addStoryNear(itemId, null, 0); } },
         { icon: 'plus', label: esc('Insert ' + lvl('feature').toLowerCase() + ' above'), fn: function () { addFeatureNear(itemId, 0); } },
         { icon: 'plus', label: esc('Insert ' + lvl('feature').toLowerCase() + ' below'), fn: function () { addFeatureNear(itemId, 1); } },
         { icon: 'plus', label: 'New phase…', fn: function () { phaseModal(null); } },
@@ -5972,6 +5963,7 @@
     if (selStory) {
       var stMoreId = selStory;
       openContextMenu(e.clientX, e.clientY, [
+        storyInsertEntries(it.id, stMoreId)[0], storyInsertEntries(it.id, stMoreId)[1],
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(it.id, stMoreId); } },
         { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
           commit('delete story', function (s) {
@@ -6247,6 +6239,33 @@
     });
   }
 
+  // a blank story next to stId (offset 0 = above, 1 = below; no anchor = at
+  // the end), opened for editing: the panel title when the panel is up,
+  // else the inline title on the Prioritizing card or the Planning row
+  function addStoryNear(itemId, stId, offset) {
+    var newId = RM.uid('s');
+    commit('add story', function (s) {
+      var t = RM.itemById(s, itemId);
+      if (!t || t.milestone) return;
+      t.stories = t.stories || [];
+      var anchor = stId ? storyById(t, stId) : null;
+      var idx = anchor ? t.stories.indexOf(anchor) + offset : t.stories.length;
+      t.stories.splice(idx, 0, { id: newId, title: '', done: false });
+      expanded[itemId] = true;
+      selectedId = itemId;
+      selStory = newId;
+    });
+    var ed = $('#panel textarea[data-stf="title"]') ||
+      document.querySelector('.pr-story[data-prst="' + newId + '"] input[data-prstf="title"]') ||
+      document.querySelector('.row.story[data-story="' + newId + '"] input');
+    if (ed && ed.focus) ed.focus();
+  }
+  function storyInsertEntries(itemId, stId) {
+    return [
+      { icon: 'plus', label: esc('Insert ' + lvl('story').toLowerCase() + ' above'), fn: function () { addStoryNear(itemId, stId, 0); } },
+      { icon: 'plus', label: esc('Insert ' + lvl('story').toLowerCase() + ' below'), fn: function () { addStoryNear(itemId, stId, 1); } }
+    ];
+  }
   function duplicateStory(itemId, stId) {
     commit('duplicate story', function (s) {
       var t = RM.itemById(s, itemId);

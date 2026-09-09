@@ -9,6 +9,10 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- **Add only where nothing exists yet**: the Add feature / Add story buttons and rows show only in an empty phase, sprint section, Prioritizing column or story list. Everywhere else, right-click: features get Insert above/below, and stories now do too (**Insert story above / below**, on the row, the card, the sprint row and the panel).
+- Right panel: Estimate, then People, then Tags.
+- Fix: the story panel's Size, Priority and Risk buttons did nothing.
+- Fix: an AI edit rewrote the whole document, so it looked like a reload and could overwrite what you were editing. The assistant now applies only the items it changed and stays on your current view.
 - Tags: features and stories carry free-form labels, edited in the detail panel's **Tags** section (Enter or a comma adds one, the box suggests tags already in the document). Filter by tag with `#tag`; tags ride along in the Excel round trip, push to Jira as labels, and the AI assistant can read and set them.
 - Item types: every epic, feature and story carries a type (Feature, Bug, Task, Story, Subtask, Epic by default; add your own in Setup → Hierarchy). Rows show the icon for non-default types; pick a type from the panel, the context menu or Edit epic.
 - Hierarchy settings: rename the three levels, choose which types each accepts, or allow any type at any level.

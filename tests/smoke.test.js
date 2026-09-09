@@ -873,9 +873,14 @@ ok(doc.body.dataset.view === 'planning', 'view switches back to planning');
 
 // ---------------------------------------------------------------- blank add rows
 {
+  // only a phase with no features shows the add row (filled phases add via
+  // Insert above/below): give the document one
+  window.HeadwayApp.ai.commit('blank phase', (s) => {
+    s.phases.push({ id: 'ph_blank_probe', name: 'Blank probe', description: '', bucket: false, collapsed: false });
+  });
   const before = state().items.length;
   const addRow = doc.querySelector('#rows .row.addrow');
-  ok(!!addRow, 'phases end with a blank add row');
+  ok(!!addRow && addRow.dataset.phase === 'ph_blank_probe', 'an empty phase ends with a blank add row');
   click(addRow.querySelector('.row-lane'));
   ok(state().items.length === before, 'the add row\'s timeline lane is inert');
   click(addRow.querySelector('.row-left'));
@@ -892,6 +897,11 @@ ok(doc.body.dataset.view === 'planning', 'view switches back to planning');
   click(doc.querySelector('#panel [data-sectoggle="stories"]'));
   ok(!doc.querySelector('#panel .p-sec[data-sec="stories"]').classList.contains('open'), 'and toggles closed again');
   ok(!doc.querySelector('#panel input[data-f="headcount"]'), 'headcount input is gone from the panel');
+  // fold the probe phase away: its new feature moves to the first phase
+  window.HeadwayApp.ai.commit('blank phase cleanup', (s) => {
+    s.items.forEach((i) => { if (i.phaseId === 'ph_blank_probe') i.phaseId = s.phases[0].id; });
+    s.phases = s.phases.filter(p => p.id !== 'ph_blank_probe');
+  });
 }
 {
   ok(!/No people yet/.test(doc.querySelector('#resGrid').textContent), 'no "No people yet" message');
@@ -912,25 +922,12 @@ const groupBtn = Array.from(doc.querySelectorAll('#popover .menu-list button')).
 click(groupBtn);
 ok(doc.querySelectorAll('#rows .row.eband').length > 3, 'epic group bands rendered (' + doc.querySelectorAll('#rows .row.eband').length + ')');
 {
-  // every epic group ends with its own "Add feature" row that files the new
-  // feature into that epic, right after the group's last row
-  const subAdds = doc.querySelectorAll('#rows .row.addrow.sub[data-epic]');
-  ok(subAdds.length === doc.querySelectorAll('#rows .row.eband').length, 'every epic group ends with an Add feature row');
+  // groups always hold at least one feature, so no group carries an
+  // "Add feature" row: the context menu (Insert above/below) adds features
+  ok(doc.querySelectorAll('#rows .row.addrow.sub').length === 0, 'non-empty epic groups have no Add feature row');
   ok([...doc.querySelectorAll('#rows .addrow-lab')].every(l => /Add Feature/.test(l.textContent)), 'add rows say "Add Feature"');
-  const gAdd = [...subAdds].find(r => r.dataset.epic);
-  const gEpic = gAdd.dataset.epic, gPhase = gAdd.dataset.phase;
-  const nBefore = state().items.length;
-  click(gAdd.querySelector('.row-left'));
-  const s2 = state();
-  const added = s2.items.filter(i => i.feature === '' && i.epic === gEpic).pop();
-  ok(s2.items.length === nBefore + 1 && added && added.phaseId === gPhase, 'clicking a group add row adds a feature to that epic');
-  const lastOfGroup = s2.items.map((i, idx) => ({ i, idx })).filter(x => x.i.phaseId === gPhase && x.i.epic === gEpic).pop();
-  ok(lastOfGroup.i.id === added.id, 'the new feature lands at the end of its epic group');
-  if (doc.activeElement && doc.activeElement.blur) doc.activeElement.blur();
-  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
-  ok(state().items.length === nBefore, 'undo removes the added feature');
   // Insert feature above inherits the anchor's epic while grouped
+  const nBefore = state().items.length;
   const anchorRow = [...doc.querySelectorAll('#rows .row.item')].find(r => (state().items.find(i => i.id === r.dataset.id) || {}).epic);
   const anchorIt = state().items.find(i => i.id === anchorRow.dataset.id);
   anchorRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 220, clientY: 220 }));
@@ -968,8 +965,8 @@ window.eval("document.querySelector('[data-menu=\"view\"]').click()");
 click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Group by workstream/.test(b.textContent)));
 ok(doc.querySelectorAll('#rows .row.eband[data-ws]').length > 1,
   'workstream group bands rendered (' + doc.querySelectorAll('#rows .row.eband[data-ws]').length + ')');
-ok(doc.querySelectorAll('#rows .row.addrow.sub[data-ws]').length === doc.querySelectorAll('#rows .row.eband[data-ws]').length,
-  'every workstream group ends with an Add feature row');
+ok(doc.querySelectorAll('#rows .row.addrow.sub[data-ws]').length === 0,
+  'non-empty workstream groups have no Add feature row');
 window.eval("document.querySelector('[data-menu=\"view\"]').click()");
 click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Group by workstream/.test(b.textContent)));
 ok(doc.querySelectorAll('#rows .row.eband').length === 0, 'workstream grouping toggles back off');
@@ -1225,8 +1222,14 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
   sl.value = 'Task'; sl.dispatchEvent(new window.Event('change', { bubbles: true }));
   const fl = doc.querySelector('input[data-suhlabel="feature"]');
   fl.value = 'Capability'; fl.dispatchEvent(new window.Event('change', { bubbles: true }));
+  window.HeadwayApp.ai.commit('empty phase probe', (s) => {
+    s.phases.push({ id: 'ph_empty_probe', name: 'Empty probe', description: '', bucket: false, collapsed: false });
+  });
   click(doc.querySelector('.tab[data-view="planning"]') || doc.querySelector('[data-view="planning"]'));
   ok([...doc.querySelectorAll('.addrow-lab')].some(el => /Add Capability/.test(el.textContent)), 'Add-row wording follows the level label');
+  window.HeadwayApp.ai.commit('empty phase probe cleanup', (s) => {
+    s.phases = s.phases.filter(p => p.id !== 'ph_empty_probe');
+  });
   // reset the labels back to their defaults through Setup, since the inputs
   // do not survive the view switch
   click(doc.querySelector('#btnSetup'));
@@ -1968,7 +1971,9 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     ok(sizeOf() === was, 'undo restores the size');
     click(colsBtn());
     click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Phase/.test(b.textContent)));
-    ok(heads().length === state().phases.length && !!doc.querySelector('#prioView .pr-add'), 'Columns → Phase brings the phase board and Add back');
+    ok(heads().length === state().phases.length, 'Columns → Phase brings the phase board back');
+    ok([...doc.querySelectorAll('#prioView .sp-col')].every(c => !!c.querySelector('.pr-add') === !c.querySelector('.pr-card')),
+      'the Add button sits only under empty phase columns');
   }
   // the Feature / Story dropdown leads the toolbar, like every other view
   {
@@ -2159,7 +2164,9 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(!!schedRow && schedRow.dataset.spsec !== 'u', 'scheduled items list under a sprint');
   ok(!!schedRow.querySelector('[data-spact="epic"]') && !!schedRow.querySelector('[data-spact="size"]') &&
     !!schedRow.querySelector('[data-spf="feature"]'), 'rows carry an inline title, epic and size chips');
-  ok(doc.querySelectorAll('#sprintView .spv-add').length === secs.length, 'every section ends with an Add feature button');
+  ok([...doc.querySelectorAll('#sprintView .spv-sec')].every(sec =>
+    !!sec.querySelector('.spv-add') === !sec.querySelector('.spv-rows .spv-row')),
+    'only an empty section ends with an Add feature button');
   // drag an unscheduled row onto a sprint in the sidebar: it gets that
   // sprint's start day and a span, and lists under that sprint
   const uRow = doc.querySelector('#sprintView .spv-sec[data-spsec="u"] .spv-row');
@@ -2729,9 +2736,10 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     const it = state().items.find(i => i.id === r.dataset.id);
     return it && !it.milestone;
   });
-  ok(doc.querySelectorAll('#rows .row.story-add').length === visNonMs.length,
-    'story detail gives EVERY non-milestone feature an add-story row (' +
-    doc.querySelectorAll('#rows .row.story-add').length + '/' + visNonMs.length + ')');
+  const visNoStories = visNonMs.filter(r => !(state().items.find(i => i.id === r.dataset.id).stories || []).length);
+  ok(doc.querySelectorAll('#rows .row.story-add').length === visNoStories.length,
+    'story detail gives every story-less non-milestone feature an add-story row (' +
+    doc.querySelectorAll('#rows .row.story-add').length + '/' + visNoStories.length + ')');
   ok(!doc.querySelector('#rows .row.item .r-chev[data-act="stories"]'),
     'story detail disables the per-row expand toggles');
   ok(![...doc.querySelectorAll('#rows .row.item .r-chev svg')].length,
@@ -3054,6 +3062,71 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(bu.defaultPrevented, 'beforeunload is blocked while work is unsaved');
 }
 
+// ---------------------------------------------------------------- Add buttons only where nothing exists yet
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const withSt = state().items.find(i => i.stories && i.stories.length && !i.milestone);
+  const noSt = state().items.find(i => (!i.stories || !i.stories.length) && !i.milestone);
+  window.HeadwayApp.ai.commit('add-row probe', (s) => {
+    s.phases.push({ id: 'ph_add_probe', name: 'Add probe', description: '', bucket: false, collapsed: false });
+  });
+  const addRows = [...doc.querySelectorAll('#rows .row.addrow')];
+  ok(addRows.length === 1 && addRows[0].dataset.phase === 'ph_add_probe', 'only the empty phase shows an Add feature row');
+  window.HeadwayApp.ai.commit('add-row probe cleanup', (s) => { s.phases = s.phases.filter(p => p.id !== 'ph_add_probe'); });
+  // story add rows: only under a feature without stories
+  window.__headway.selectItem(withSt.id);
+  ok(!doc.querySelector('#panel [data-f="storyadd"]'), 'the panel of a feature with stories has no add-story box');
+  if (noSt) {
+    window.__headway.selectItem(noSt.id);
+    ok(!!doc.querySelector('#panel [data-f="storyadd"]'), 'the panel of a feature without stories offers the add-story box');
+  }
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  const stAddRows = [...doc.querySelectorAll('#rows .row.story-add')];
+  ok(stAddRows.every(r => !(state().items.find(i => i.id === r.dataset.id).stories || []).length),
+    'story add rows appear only under features without stories');
+  // Prioritizing: Add story button only on cards without stories
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  ok([...doc.querySelectorAll('#prioView [data-prstadd]')].every(b => {
+    const card = b.closest('[data-prcard]');
+    return !(state().items.find(i => i.id === card.dataset.prcard).stories || []).length;
+  }), 'Prioritizing cards with stories have no Add story button');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- story context menu: insert above / below
+{
+  const host = state().items.find(i => i.stories && i.stories.length >= 1 && !i.milestone);
+  window.__headway.selectItem(host.id);
+  const first = host.stories[0];
+  click(doc.querySelector('#panel [data-pst-edit="' + first.id + '"]'));
+  doc.querySelector('#panel').dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 300, clientY: 300 }));
+  const below = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Insert story below/.test(b.textContent));
+  const above = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Insert story above/.test(b.textContent));
+  ok(!!below && !!above, 'the story context menu offers Insert story above and below');
+  const nBefore = host.stories.length;
+  click(below);
+  let stories = window.RM.itemById(state(), host.id).stories;
+  ok(stories.length === nBefore + 1 && stories[1].title === '' && stories[0].id === first.id, 'Insert below adds a blank story right after the anchor');
+  const inserted = stories[1];
+  ok(!!doc.querySelector('#panel textarea[data-stf="title"]') && doc.querySelector('#panel .p-crumb'), 'the new story opens in the panel');
+  ok(doc.activeElement === doc.querySelector('#panel textarea[data-stf="title"]'), 'its title is focused for typing');
+  doc.querySelector('#panel').dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 300, clientY: 300 }));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Insert story above/.test(b.textContent)));
+  stories = window.RM.itemById(state(), host.id).stories;
+  ok(stories.length === nBefore + 2 && stories[1].title === '' && stories[2].id === inserted.id, 'Insert above adds a blank story right before the anchor');
+  // the Planning story row menu offers the same entries
+  const row = doc.querySelector('#rows .row.story[data-story="' + first.id + '"]');
+  if (row) {
+    row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+    ok(!![...doc.querySelectorAll('#popover .menu-list button')].find(b => /Insert story below/.test(b.textContent)), 'the story row menu offers Insert story below');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  }
+  window.HeadwayApp.ai.commit('insert probe cleanup', (s) => {
+    const f = window.RM.itemById(s, host.id);
+    f.stories = f.stories.filter(x => x.title !== '' || x.id === first.id);
+  });
+}
+
 // ---------------------------------------------------------------- story panel estimate buttons
 // Size / Priority / Risk in the story panel are buttons with data-stf AND
 // data-v; the generic data-stf handler must not swallow them.
@@ -3229,9 +3302,13 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   click(doc.querySelector('#detailBtn'));
   click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story detail: every feature open
   const seedRow = doc.querySelector('#rows .row.story[data-story]');
-  const addInp = doc.querySelector('#rows .row.story-add[data-id="' + seedRow.dataset.id + '"] .st-add-input');
-  addInp.value = 'Second story';
-  addInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  // a feature that already has a story adds the next one from the story's context menu
+  seedRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Insert story below/.test(b.textContent)));
+  window.HeadwayApp.ai.commit('name story', (s) => {
+    const f = window.RM.itemById(s, seedRow.dataset.id);
+    f.stories.forEach((st) => { if (st.title === '') st.title = 'Second story'; });
+  });
   const host = state().items.find(i => i.id === seedRow.dataset.id);
   ok(host.stories.length >= 2, 'feature now has two stories for the drag');
   const stRows = doc.querySelectorAll('#rows .row.story[data-story][data-id="' + host.id + '"]');
@@ -3250,7 +3327,11 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     'dragging a story row in Planning moves it to the drop row\'s feature (' + (dest && dest.id) + ')');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   ok(state().items.find(i => i.id === host.id).stories[0].id === firstId, 'undo restores the story order');
-  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true })); // drop the added story
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true })); // drop the story's name
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true })); // and the inserted story
+  ok(state().items.find(i => i.id === host.id).stories.length === host.stories.length - 1, 'undo drops the inserted story');
+  const upBtn = doc.querySelector('#panel [data-stf="up"]');
+  if (upBtn) click(upBtn); // the insert opened the story in the panel; back to the feature
   click(doc.querySelector('#detailBtn'));
   click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
 }
