@@ -1993,6 +1993,7 @@
   }
   // board-level match: the text filter plus the epic / workstream dropdowns
   function prMatches(it) {
+    if (it.milestone) return false; // milestones are dates, not work to rank
     if (!matchesFilter(it)) return false;
     if (prioFEpic != null && (it.epic || '') !== prioFEpic) return false;
     if (prioFWs != null && (it.workstream || '') !== prioFWs) return false;

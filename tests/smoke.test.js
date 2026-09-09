@@ -3562,6 +3562,18 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok(state().meta.itemTypes.find(t => t.key === 'bug').color === '112233', 'changing the color input sets the type color');
     window.HeadwayApp.ai.setView('planning');
   }
+
+  // milestones stay off the prioritizing board; Jira issue-type icons are 14px
+  {
+    const feat = state().items.find(i => !i.milestone && i.stories && i.stories.length === 0) || state().items.find(i => !i.milestone);
+    window.HeadwayApp.ai.commit('milestone', (s) => { const it = window.RM.itemById(s, feat.id); it.milestone = true; it.durDays = it.startDay == null ? null : 1; });
+    click(doc.querySelector('#viewTabs [data-view="prio"]'));
+    ok(!doc.querySelector('#prioView [data-prcard="' + feat.id + '"]'), 'a milestone has no card on the prioritizing board');
+    window.HeadwayApp.ai.commit('milestone', (s) => { window.RM.itemById(s, feat.id).milestone = false; });
+    ok(!!doc.querySelector('#prioView [data-prcard="' + feat.id + '"]'), 'clearing the flag brings the card back');
+    const css = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+    ok(/\.jr-types td svg\.lucide\s*\{[^}]*width:\s*14px[^}]*height:\s*14px/.test(css), 'Jira issue-type table icons are sized like every other icon');
+  }
 }
 
 ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'commits autosave to localStorage');
