@@ -3851,7 +3851,11 @@
                     return '<div class="st-bar' + (selStory === st.id ? ' selected' : '') + '" data-stbar="' + st.id + '" data-id="' + it.id + '" style="left:' + (st.startDay * dayPx()) +
                       'px;width:' + stW + 'px;--bar-c:' + color + '">' +
                       '<span class="stb-label' + (stLabW <= stW ? '' : ' out') + '">' + esc(st.title) + '</span>' +
-                      '<span class="bh l" data-act="sh-l"></span><span class="bh r" data-act="sh-r"></span></div>';
+                      '<span class="bh l" data-act="sh-l"></span><span class="bh r" data-act="sh-r"></span>' +
+                      // same in/out circles as feature bars — stories link to stories
+                      '<span class="port p-in" data-port="in" title="Drag to another story: this depends on it"></span>' +
+                      '<span class="port p-out" data-port="out" title="Drag to another story: it depends on this"></span>' +
+                      '</div>';
                   })()
                 // no timeline of its own: the title sits, faint and boxless,
                 // where the feature starts — it rides along with the feature
@@ -3991,6 +3995,14 @@
     var r = el.getBoundingClientRect();
     return { left: r.left - g.left, right: r.right - g.left, cy: r.top - g.top + r.height / 2, top: r.top - g.top, bottom: r.bottom - g.top };
   }
+  // the same measurement for a story's own little bar
+  function storyBarRect(stId) {
+    var el = rowsEl.querySelector('[data-stbar="' + stId + '"]');
+    if (!el) return null;
+    var g = grid.getBoundingClientRect();
+    var r = el.getBoundingClientRect();
+    return { left: r.left - g.left, right: r.right - g.left, cy: r.top - g.top + r.height / 2, top: r.top - g.top, bottom: r.bottom - g.top };
+  }
 
   function renderArrows() {
     var gEl = $('#arrowPaths');
@@ -4019,6 +4031,23 @@
         '<path class="hit" d="' + d + '"></path>' +
         '<path class="vis" d="' + d + '"></path></g>');
     });
+    // story → story arrows, drawn only when both little bars are on screen
+    RM.storyDepEdges(state).forEach(function (e) {
+      var dep = e[0], ref = e[1];
+      var a = storyBarRect(dep.st.id), b = storyBarRect(ref.st.id);
+      if (!a || !b) return;
+      var dw = RM.storyWindow(state, dep.it, dep.st);
+      var w = RM.storyWindow(state, ref.it, ref.st);
+      var viol = !!(w && dw && w.startDay < dw.endDay && !dep.st.done);
+      var related = selStory && (selStory === dep.st.id || selStory === ref.st.id);
+      var edgeSel = selectedEdge && selectedEdge.sfrom === dep.st.id && selectedEdge.sto === ref.st.id;
+      var d = curvePath(a.right + 1, a.cy, b.left - 3, b.cy);
+      out.push('<g class="edge story' + (viol ? ' viol' : '') + (related ? ' sel-related' : '') +
+        (edgeSel ? ' hot' : '') +
+        '" data-sfrom="' + dep.st.id + '" data-sto="' + ref.st.id + '" data-explicit="true">' +
+        '<path class="hit" d="' + d + '"></path>' +
+        '<path class="vis" d="' + d + '"></path></g>');
+    });
     gEl.innerHTML = out.join('');
   }
 
@@ -4029,15 +4058,30 @@
   }
 
   // arrow click selects the edge; Delete removes it
-  var selectedEdge = null; // { fromId, toId }
+  var selectedEdge = null; // { fromId, toId } for features | { sfrom, sto } for stories
   $('#arrows').addEventListener('click', function (e) {
     var g = e.target.closest('g.edge');
     if (!g) return;
-    selectedEdge = { fromId: g.dataset.from, toId: g.dataset.to };
+    selectedEdge = g.dataset.sfrom
+      ? { sfrom: g.dataset.sfrom, sto: g.dataset.sto }
+      : { fromId: g.dataset.from, toId: g.dataset.to };
     requestAnimationFrame(renderArrows);
   });
   function deleteSelectedEdge() {
     if (!selectedEdge) return false;
+    if (selectedEdge.sfrom) {
+      var dep = RM.storyRef(state, selectedEdge.sfrom);
+      var ref = RM.storyRef(state, selectedEdge.sto);
+      selectedEdge = null;
+      if (!dep || !ref) { requestAnimationFrame(renderArrows); return true; }
+      var depNum = dep.st.num;
+      commit('remove story dep', function (s) {
+        var t = RM.storyRef(s, ref.st.id);
+        if (t) t.st.deps = (t.st.deps || []).filter(function (n) { return n !== depNum; });
+      });
+      toast('Removed: ' + RM.storyLabel(state, ref) + ' no longer depends on ' + RM.storyLabel(state, dep));
+      return true;
+    }
     var from = RM.itemById(state, selectedEdge.fromId);
     var to = RM.itemById(state, selectedEdge.toId);
     selectedEdge = null;
@@ -6872,6 +6916,10 @@
       return;
     }
     var stBarEl = e.target.closest('[data-stbar]');
+    if (portEl && stBarEl) {
+      startPortDrag(e, stBarEl.dataset.stbar, portEl.dataset.port, true);
+      return;
+    }
     if (stBarEl) {
       var sh = e.target.closest('[data-act="sh-l"],[data-act="sh-r"]');
       startStoryBarDrag(e, stBarEl.dataset.id, stBarEl.dataset.stbar,
@@ -6908,9 +6956,9 @@
   // drag from a bar's edge circle to another bar/row to create a dependency.
   // left circle (in) = this item depends ON the target; right circle (out) =
   // this item is a dependency FOR the target. Esc/Delete cancels mid-draw.
-  function startPortDrag(e, itemId, port) {
+  function startPortDrag(e, itemId, port, story) {
     drag = {
-      kind: 'port', itemId: itemId, port: port,
+      kind: 'port', itemId: itemId, port: port, story: !!story,
       x0: e.clientX, y0: e.clientY,
       moved: true, lastE: e // drawing starts on mousedown, not after a threshold
     };
@@ -6926,10 +6974,11 @@
     if (!drag || drag.kind !== 'port') return;
     drag = null;
     $('#tempLink').setAttribute('hidden', '');
-    $$('.bar.link-target').forEach(function (el) { el.classList.remove('link-target'); });
+    $$('.bar.link-target,.st-bar.link-target').forEach(function (el) { el.classList.remove('link-target'); });
     dragConsumedClick = true;
   }
   function portDragMove(e) {
+    if (drag.story) { storyPortDragMove(e); return; }
     var a = barRect(drag.itemId);
     if (!a) return;
     var g = grid.getBoundingClientRect();
@@ -6960,9 +7009,43 @@
     }
     temp.setAttribute('d', curvePath(sx, a.cy, ex, ey));
   }
+  // the story flavour: only story bars and story rows are targets, and a
+  // feature under the pointer is politely refused on drop
+  function storyPortDragMove(e) {
+    var a = storyBarRect(drag.itemId);
+    if (!a) return;
+    var g = grid.getBoundingClientRect();
+    var temp = $('#tempLink');
+    temp.removeAttribute('hidden');
+    var sx = drag.port === 'out' ? a.right + 1 : a.left - 3;
+
+    $$('.st-bar.link-target').forEach(function (el) { el.classList.remove('link-target'); });
+    var under = document.elementFromPoint(e.clientX, e.clientY);
+    var tb = under && under.closest && under.closest('[data-stbar],.row.story[data-story],[data-bar],.row.item');
+    var tid = tb && (tb.dataset.stbar || (tb.classList.contains('story') ? tb.dataset.story : null));
+    drag.targetStory = tid && tid !== drag.itemId ? tid : null;
+    // a feature bar or row under the pointer is not a target, but remember it
+    // so the drop can explain why
+    drag.overFeature = !tid && !!tb;
+
+    var ex = e.clientX - g.left, ey = e.clientY - g.top;
+    if (drag.targetStory) {
+      var tEl = rowsEl.querySelector('[data-stbar="' + drag.targetStory + '"]');
+      if (tEl) {
+        tEl.classList.add('link-target');
+        var b = storyBarRect(drag.targetStory);
+        if (b) {
+          ex = drag.port === 'out' ? b.left - 3 : b.right + 1;
+          ey = b.cy;
+        }
+      }
+    }
+    temp.setAttribute('d', curvePath(sx, a.cy, ex, ey));
+  }
   function portDragEnd(d) {
     $('#tempLink').setAttribute('hidden', '');
-    $$('.bar.link-target').forEach(function (el) { el.classList.remove('link-target'); });
+    $$('.bar.link-target,.st-bar.link-target').forEach(function (el) { el.classList.remove('link-target'); });
+    if (d.story) { storyPortDragEnd(d); return; }
     if (!d.targetId) return;
     var src = RM.itemById(state, d.itemId);
     var tgt = RM.itemById(state, d.targetId);
@@ -6976,6 +7059,29 @@
     }
     commit('link', function (s) { RM.itemById(s, dependent.id).deps.push(depOn.num); });
     toast('#' + dependent.num + ' now depends on #' + depOn.num);
+  }
+  function storyPortDragEnd(d) {
+    if (!d.targetStory) {
+      if (d.overFeature) toast('Stories link to stories — drop on a story bar or row');
+      return;
+    }
+    var src = RM.storyRef(state, d.itemId);
+    var tgt = RM.storyRef(state, d.targetStory);
+    if (!src || !tgt || src.st.id === tgt.st.id) return;
+    // out-port: target depends on source; in-port: source depends on target
+    var depOn = d.port === 'out' ? src : tgt;
+    var dependent = d.port === 'out' ? tgt : src;
+    if ((dependent.st.deps || []).indexOf(depOn.st.num) !== -1) {
+      toast('#' + dependent.st.num + ' already depends on #' + depOn.st.num);
+      return;
+    }
+    commit('link stories', function (s) {
+      var t = RM.storyRef(s, dependent.st.id);
+      if (!t) return;
+      t.st.deps = t.st.deps || [];
+      t.st.deps.push(depOn.st.num);
+    });
+    toast('#' + dependent.st.num + ' now depends on #' + depOn.st.num);
   }
 
   // scoping column resize (widths remembered in the browser); dragging the

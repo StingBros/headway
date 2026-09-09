@@ -679,7 +679,7 @@ body.cap-off .hc-lab { display: none !important; }
   color: var(--ink);
 }
 .st-add-input:focus { outline: none; background: var(--surface); border-radius: 5px; box-shadow: inset 0 0 0 1px var(--line-2); }
-/* a story's own little timeline bar — move/resize like item bars, no ports */
+/* a story's own little timeline bar — move/resize and link like item bars */
 .st-bar {
   position: absolute; top: 5px; height: 17px; border-radius: 4px;
   background: var(--bar-c); opacity: .8; cursor: grab; z-index: 2;
@@ -720,6 +720,21 @@ body.cap-off .hc-lab { display: none !important; }
 .bar.selected { outline: 2px solid var(--ink); outline-offset: 1.5px; }
 /* a selected story wears the outline itself; its feature only keeps the row mark */
 .st-bar.selected { outline: 2px solid var(--ink); outline-offset: 1.5px; z-index: 3; }
+/* link ports on the shorter story bar: same circles, tucked a little closer */
+.st-bar .port {
+  position: absolute; top: 50%; margin-top: -5px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--surface); border: 2px solid var(--blue);
+  box-shadow: 0 1px 3px rgba(24, 36, 48, .3);
+  opacity: 0; transform: scale(.7);
+  transition: opacity .12s, transform .12s;
+  cursor: crosshair; z-index: 4;
+}
+.st-bar .port.p-in { left: -13px; }
+.st-bar .port.p-out { right: -13px; }
+.row:hover .st-bar .port, .st-bar:hover .port { opacity: 1; transform: scale(1); }
+.st-bar .port:hover { background: var(--blue); }
+.st-bar.link-target { outline: 2px solid var(--blue); outline-offset: 2px; }
 /* unscheduled story: its name sits where the feature starts — no box */
 .st-ghost {
   position: absolute; top: 0; bottom: 0; display: flex; align-items: center;
