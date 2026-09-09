@@ -857,7 +857,7 @@
           var a = document.createElement('a');
           a.className = 'auto-link';
           a.setAttribute('href', u);
-          a.setAttribute('title', '\u2318-click to open');
+          a.setAttribute('title', (/Mac|iPhone|iPad/.test(navigator.platform || '') ? '\u2318' : 'Ctrl') + '-click to open');
           a.textContent = u;
           frag.appendChild(a);
           last = m.index + u.length;
@@ -884,10 +884,15 @@
 
   // display a stored scope value as rich HTML; legacy plain-text values keep
   // their line breaks
-  function richDisplay(v) {
+  // displayHtml is what the editor round-trips to, so no-op guards compare
+  // against it; richDisplay adds the display-only links on top.
+  function displayHtml(v) {
     if (!v) return '';
-    if (/<[a-z][\s\S]*>/i.test(v)) return linkifyHtml(sanitizeHtml(v));
-    return linkifyHtml(esc(v).replace(/\n/g, '<br>'));
+    if (/<[a-z][\s\S]*>/i.test(v)) return sanitizeHtml(v);
+    return esc(v).replace(/\n/g, '<br>');
+  }
+  function richDisplay(v) {
+    return linkifyHtml(displayHtml(v));
   }
 
   // WYSIWYG editor block; the host wires the commit (blur / Save)
@@ -1659,8 +1664,8 @@
     // and how much of that scope is already done
     var curSp = currentSprintNum();
     var spBars = sprintNums().map(function (n) {
-      var sIts = itemsInSprint(n);
-      var sSts = storiesInSprint(n, sIts);
+      var sIts = itemsOverlappingSprint(n);
+      var sSts = storiesOverlappingSprint(n, sIts);
       var tot = sIts.length + sSts.length;
       if (!tot) return '';
       var done = sIts.filter(function (i) { return i.done; }).length +
@@ -1704,7 +1709,8 @@
     var meta = state.meta;
     var now = new Date();
     var d = RM.dateToDay(meta, new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())));
-    var wk = Math.max(0, Math.min(meta.numWeeks - 1, Math.floor((d || 0) / SPW())));
+    if (d == null) return null;   // today sits outside the timeline: no current sprint
+    var wk = Math.max(0, Math.min(meta.numWeeks - 1, Math.floor(d / SPW())));
     return RM.sprintNumForWeek(meta, wk);
   }
   function sprintNums() {
@@ -1738,6 +1744,31 @@
       (it.stories || []).forEach(function (st) {
         var own = st.startDay != null && st.durDays != null;
         if (own ? sprFirstNum(st) === num : inIds[it.id]) out.push({ it: it, st: st });
+      });
+    });
+    return out;
+  }
+  // Reporting counts differently from Sprinting: a bar shows everything that
+  // is *in flight* during the sprint, so a three-sprint feature lands in all
+  // three bars. Sprinting lists a row once, in the sprint it starts in.
+  function itemsOverlappingSprint(num) {
+    var meta = state.meta;
+    var r = RM.sprintRange(meta, num);
+    return state.items.filter(function (it) {
+      return RM.itemInWeeks(meta, it, r.w0, r.w1) && matchesFilter(it);
+    });
+  }
+  function storiesOverlappingSprint(num, items) {
+    var meta = state.meta;
+    var r = RM.sprintRange(meta, num);
+    var inIds = {};
+    items.forEach(function (it) { inIds[it.id] = true; });
+    var out = [];
+    state.items.forEach(function (it) {
+      if (!matchesFilter(it)) return;
+      (it.stories || []).forEach(function (st) {
+        var own = st.startDay != null && st.durDays != null;
+        if (own ? RM.itemInWeeks(meta, st, r.w0, r.w1) : inIds[it.id]) out.push({ it: it, st: st });
       });
     });
     return out;
@@ -2397,7 +2428,7 @@
     if (!it) return;
     var key = ed.dataset.prsc;
     var v = sanitizeHtml(ed.innerHTML);
-    if (v === RM.scopeValue(it, key) || v === richDisplay(RM.scopeValue(it, key))) return;
+    if (v === RM.scopeValue(it, key) || v === displayHtml(RM.scopeValue(it, key))) return;
     commit('scope ' + key, function (s) { RM.setScopeValue(RM.itemById(s, id), key, v); });
   });
   $('#prioView').addEventListener('keydown', function (e) {
@@ -2734,7 +2765,9 @@
       };
     });
     var cur = RM.sprintsEnabled(meta) ? currentSprintNum() : null;
-    var keep = function (s) { return s.num == null || s.num === cur || s.items.length || s.feats.length; };
+    // count is level-aware (stories in story mode), so a sprint whose features
+    // have no visible stories trims away instead of rendering empty
+    var keep = function (s) { return s.num == null || s.num === cur || s.count > 0; };
     var first = -1, last = -1;
     secs.forEach(function (s, i) { if (s.num != null && keep(s)) { if (first === -1) first = i; last = i; } });
     var un = secs[secs.length - 1];
@@ -4994,7 +5027,7 @@
       var st = storyById(it, selStory);
       if (!st) return;
       var cur = RM.storyScopeValue(st, f.slice(6));
-      if (v === cur || v === richDisplay(cur)) return;
+      if (v === cur || v === displayHtml(cur)) return;
       var stId = selStory;
       commit('story field', function (s) {
         var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
@@ -6432,7 +6465,7 @@
     if (!sSt) return;
     var sVal = sanitizeHtml(e.target.innerHTML);
     var sCur = RM.storyScopeValue(sSt, sf);
-    if (sVal === sCur || sVal === richDisplay(sCur)) return;
+    if (sVal === sCur || sVal === displayHtml(sCur)) return;
     commit('story field', function (s) {
       var st2 = storyById(RM.itemById(s, sItemId) || {}, sStId);
       if (!st2) return;
@@ -6450,7 +6483,7 @@
     if (!itemId) return;
     var val = sanitizeHtml(e.target.innerHTML);
     var prev = RM.scopeValue(RM.itemById(state, itemId), f);
-    if (val === prev || val === richDisplay(prev)) return;
+    if (val === prev || val === displayHtml(prev)) return;
     commit('scope ' + f, function (s) {
       var t = RM.itemById(s, itemId);
       if (t) RM.setScopeValue(t, f, val);

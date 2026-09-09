@@ -3700,6 +3700,139 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
 }
 
 ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'commits autosave to localStorage');
+// desktop: reload from disk only while auto-save is on
+{
+  ok(typeof window.HeadwayApp.autoSaveOn === 'function', 'HeadwayApp exposes autoSaveOn()');
+  const was = window.HeadwayApp.autoSaveOn();
+  click(doc.querySelector('.menu-btn[data-menu="file"]'));
+  const tog = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Auto.?save/i.test(b.textContent));
+  if (tog) {
+    click(tog);
+    ok(window.HeadwayApp.autoSaveOn() === !was, 'autoSaveOn() follows the File menu toggle');
+    click(doc.querySelector('.menu-btn[data-menu="file"]'));
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Auto.?save/i.test(b.textContent)));
+    ok(window.HeadwayApp.autoSaveOn() === was, 'toggling back restores it');
+  } else ok(true, 'auto-save toggle is desktop-only in this build');
+  const desk = fs.readFileSync(path.join(ROOT, 'js/desktop.js'), 'utf8');
+  ok(/autoSaveOn\(\)/.test(desk) && /if \(!hit \|\| reloading \|\| !app\(\)\.autoSaveOn\(\)\) return;/.test(desk),
+    'the disk watcher skips reloads while auto-save is off');
+}
+
+// rich text: URLs render as links; ⌘-click opens them; storage stays plain
+{
+  const url = 'https://example.com/path?q=1';
+  const firstRow = doc.querySelector('#rows .row.item[data-id]');
+  const it = state().items.find(i => i.id === firstRow.dataset.id);
+  window.HeadwayApp.ai.commit('desc', (s) => { window.RM.itemById(s, it.id).description = '<p>See ' + url + ', then (https://b.example/x). Not a link: example.com</p>'; });
+  // scoping tab renders the anchors
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  const cell = doc.querySelector('#rows .row.item[data-id="' + it.id + '"] .sc-rich[data-scope="description"]');
+  ok(!!cell, 'scoping shows the description cell');
+  const links = cell ? [...cell.querySelectorAll('a.auto-link')] : [];
+  ok(links.length === 2 && links[0].getAttribute('href') === url && links[0].textContent === url, 'a URL in a scoping cell renders as an auto-link');
+  ok(links[1] && links[1].getAttribute('href') === 'https://b.example/x' && /\)\./.test(cell.textContent), 'trailing punctuation stays outside the link');
+  ok(!/example\.com<\/a>/.test(cell.innerHTML.replace(url, '')), 'a bare domain without a scheme is not linked');
+  ok(state().items.find(i => i.id === it.id).description.indexOf('<a') === -1, 'the stored value carries no anchor');
+  // ⌘-click opens; a plain click does not
+  const opened = [];
+  const realOpen = window.open;
+  window.open = (u) => { opened.push(u); return null; };
+  links[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  ok(opened.length === 0, 'a plain click does not open the link');
+  links[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true }));
+  ok(opened.length === 1 && opened[0] === url, '⌘-click opens the URL in a new tab');
+  links[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+  ok(opened.length === 2, 'Ctrl-click opens it too');
+  window.open = realOpen;
+  // editing the cell and blurring stores plain text, not the anchor markup
+  cell.innerHTML = '<p>Go to <a class="auto-link" href="' + url + '">' + url + '</a> now</p>';
+  cell.dispatchEvent(new window.Event('input', { bubbles: true }));
+  cell.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  const stored = state().items.find(i => i.id === it.id).description;
+  ok(stored.indexOf('<a') === -1 && stored.indexOf(url) !== -1, 'reading an edited cell back drops the anchor and keeps the URL text');
+  // the right panel's description editor links too
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  window.__headway.selectItem(it.id);
+  const ed = doc.querySelector('#panel .wz-ed[data-f="col:description"]');
+  ok(!!ed && !!ed.querySelector('a.auto-link[href="' + url + '"]'), 'the panel description editor renders the URL as a link');
+  // desktop shell: capability and opener wiring exist
+  const cap = fs.readFileSync(path.join(ROOT, 'src-tauri/capabilities/default.json'), 'utf8');
+  const desk12 = fs.readFileSync(path.join(ROOT, 'js/desktop.js'), 'utf8');
+  ok(/opener:allow-open-url/.test(cap) && /openUrl/.test(desk12), 'the desktop shell can open URLs');
+}
+
+// reporting: Delivery-by-sprint counts an item in every sprint it is in flight
+{
+  const meta0 = state().meta;
+  const it = state().items.find(i => !i.milestone && i.startDay != null);
+  const prev = { startDay: it.startDay, durDays: it.durDays, riskDays: it.riskDays, locked: it.locked };
+  const perSprint = window.RM.sprintDays(meta0);
+  const nums = [];
+  for (let w = 0; w < meta0.numWeeks; w++) { const n = window.RM.sprintNumForWeek(meta0, w); if (nums.indexOf(n) === -1) nums.push(n); }
+  const startNum = nums[0];
+  // feature counts per delivery bar, keyed by the bar's label
+  const delivCounts = () => {
+    click(doc.querySelector('#viewTabs [data-view="reports"]'));
+    const card = [...doc.querySelectorAll('#reportsView .rp-card, .rp-card')].find(c => c.querySelector('h2') && /Delivery by/.test(c.querySelector('h2').textContent));
+    const out = {};
+    if (!card) return out;
+    [...card.querySelectorAll('.rp-bar-row')].forEach((r) => {
+      const m = r.querySelector('.rp-bar-val').textContent.match(/(\d+) feature/);
+      out[r.querySelector('.rp-bar-label').textContent] = m ? Number(m[1]) : 0;
+    });
+    return out;
+  };
+  window.HeadwayApp.ai.commit('span', (s) => { const t = window.RM.itemById(s, it.id); t.startDay = null; t.durDays = perSprint; t.riskDays = 0; t.locked = false; });
+  const base = delivCounts();
+  window.HeadwayApp.ai.commit('span', (s) => { const t = window.RM.itemById(s, it.id); t.startDay = window.RM.sprintStartDay(s.meta, startNum); t.durDays = perSprint * 3; });
+  const spanned = delivCounts();
+  const grew = Object.keys(spanned).filter(k => spanned[k] - (base[k] || 0) === 1);
+  ok(grew.length === 3, 'a three-sprint feature counts in three delivery bars (grew in ' + grew.length + ')');
+  // sprinting still lists that row exactly once, under the sprint it starts in
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  const rows = doc.querySelectorAll('#sprintView .spv-row[data-spid="' + it.id + '"]');
+  ok(rows.length === 1 && rows[0].dataset.spsec === String(startNum), 'sprinting still lists the spanning row once, in its start sprint');
+  window.HeadwayApp.ai.commit('span', (s) => {
+    const t = window.RM.itemById(s, it.id);
+    t.startDay = prev.startDay; t.durDays = prev.durDays; t.riskDays = prev.riskDays; t.locked = prev.locked;
+  });
+  const back = state().items.find(i => i.id === it.id);
+  ok(back.startDay === prev.startDay && back.durDays === prev.durDays, 'the item is restored to its original schedule');
+}
+
+// rich text: focusing and blurring an unchanged legacy value commits nothing
+{
+  const firstRow = doc.querySelector('#rows .row.item[data-id]');
+  const it = state().items.find(i => i.id === firstRow.dataset.id);
+  const legacy = 'See https://example.com/a\nline two';
+  window.HeadwayApp.ai.commit('desc', (s) => { window.RM.itemById(s, it.id).description = legacy; });
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  const cell = doc.querySelector('#rows .row.item[data-id="' + it.id + '"] .sc-rich[data-scope="description"]');
+  ok(!!cell && !!cell.querySelector('a.auto-link'), 'the legacy value renders with a link');
+  const before = JSON.stringify(window.__headway.getState());
+  cell.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+  cell.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  const after = JSON.stringify(window.__headway.getState());
+  ok(before === after, 'a no-op focus/blur on a linkified cell commits nothing (state and history unchanged)');
+  ok(state().items.find(i => i.id === it.id).description === legacy, 'the stored description is byte-identical');
+}
+
+// sprinting: story level hides sprints whose features have no visible stories
+{
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Story/.test(b.textContent)));
+  const btns = [...doc.querySelectorAll('#sprintView .spv-sbtn')].filter(b => b.dataset.spside !== 'u');
+  const emptyEnd = b => b && b.querySelector('.pr-lanect').textContent.trim() === '0' && !b.classList.contains('today');
+  ok(btns.length === 0 || (!emptyEnd(btns[0]) && !emptyEnd(btns[btns.length - 1])),
+    'story level trims empty sprints at both ends');
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
+}
+
+// NOTE: this export promise chain must stay LAST in this file — its .then /
+// .catch bodies run after every synchronous block, and the .then calls
+// process.exit. New blocks go ABOVE this line.
 window.RMExcel.exportWorkbook(state()).then((buf) => {
   const bytes = buf.size != null ? buf.size : buf.byteLength;
   ok(buf && bytes > 20000, 'xlsx export produced a workbook (' + bytes + ' bytes)');
@@ -3789,64 +3922,3 @@ window.RMExcel.exportWorkbook(state()).then((buf) => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(1);
 });
-
-// desktop: reload from disk only while auto-save is on
-{
-  ok(typeof window.HeadwayApp.autoSaveOn === 'function', 'HeadwayApp exposes autoSaveOn()');
-  const was = window.HeadwayApp.autoSaveOn();
-  click(doc.querySelector('.menu-btn[data-menu="file"]'));
-  const tog = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Auto.?save/i.test(b.textContent));
-  if (tog) {
-    click(tog);
-    ok(window.HeadwayApp.autoSaveOn() === !was, 'autoSaveOn() follows the File menu toggle');
-    click(doc.querySelector('.menu-btn[data-menu="file"]'));
-    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Auto.?save/i.test(b.textContent)));
-    ok(window.HeadwayApp.autoSaveOn() === was, 'toggling back restores it');
-  } else ok(true, 'auto-save toggle is desktop-only in this build');
-  const desk = fs.readFileSync(path.join(ROOT, 'js/desktop.js'), 'utf8');
-  ok(/autoSaveOn\(\)/.test(desk) && /if \(!hit \|\| reloading \|\| !app\(\)\.autoSaveOn\(\)\) return;/.test(desk),
-    'the disk watcher skips reloads while auto-save is off');
-}
-
-// rich text: URLs render as links; ⌘-click opens them; storage stays plain
-{
-  const url = 'https://example.com/path?q=1';
-  const firstRow = doc.querySelector('#rows .row.item[data-id]');
-  const it = state().items.find(i => i.id === firstRow.dataset.id);
-  window.HeadwayApp.ai.commit('desc', (s) => { window.RM.itemById(s, it.id).description = '<p>See ' + url + ', then (https://b.example/x). Not a link: example.com</p>'; });
-  // scoping tab renders the anchors
-  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
-  const cell = doc.querySelector('#rows .row.item[data-id="' + it.id + '"] .sc-rich[data-scope="description"]');
-  ok(!!cell, 'scoping shows the description cell');
-  const links = cell ? [...cell.querySelectorAll('a.auto-link')] : [];
-  ok(links.length === 2 && links[0].getAttribute('href') === url && links[0].textContent === url, 'a URL in a scoping cell renders as an auto-link');
-  ok(links[1] && links[1].getAttribute('href') === 'https://b.example/x' && /\)\./.test(cell.textContent), 'trailing punctuation stays outside the link');
-  ok(!/example\.com<\/a>/.test(cell.innerHTML.replace(url, '')), 'a bare domain without a scheme is not linked');
-  ok(state().items.find(i => i.id === it.id).description.indexOf('<a') === -1, 'the stored value carries no anchor');
-  // ⌘-click opens; a plain click does not
-  const opened = [];
-  const realOpen = window.open;
-  window.open = (u) => { opened.push(u); return null; };
-  links[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
-  ok(opened.length === 0, 'a plain click does not open the link');
-  links[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true }));
-  ok(opened.length === 1 && opened[0] === url, '⌘-click opens the URL in a new tab');
-  links[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
-  ok(opened.length === 2, 'Ctrl-click opens it too');
-  window.open = realOpen;
-  // editing the cell and blurring stores plain text, not the anchor markup
-  cell.innerHTML = '<p>Go to <a class="auto-link" href="' + url + '">' + url + '</a> now</p>';
-  cell.dispatchEvent(new window.Event('input', { bubbles: true }));
-  cell.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
-  const stored = state().items.find(i => i.id === it.id).description;
-  ok(stored.indexOf('<a') === -1 && stored.indexOf(url) !== -1, 'reading an edited cell back drops the anchor and keeps the URL text');
-  // the right panel's description editor links too
-  click(doc.querySelector('#viewTabs [data-view="planning"]'));
-  window.__headway.selectItem(it.id);
-  const ed = doc.querySelector('#panel .wz-ed[data-f="col:description"]');
-  ok(!!ed && !!ed.querySelector('a.auto-link[href="' + url + '"]'), 'the panel description editor renders the URL as a link');
-  // desktop shell: capability and opener wiring exist
-  const cap = fs.readFileSync(path.join(ROOT, 'src-tauri/capabilities/default.json'), 'utf8');
-  const desk12 = fs.readFileSync(path.join(ROOT, 'js/desktop.js'), 'utf8');
-  ok(/opener:allow-open-url/.test(cap) && /openUrl/.test(desk12), 'the desktop shell can open URLs');
-}

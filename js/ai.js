@@ -354,7 +354,7 @@
     autoOrder: 'boolean — re-sort rows by start date after moves',
     groupWs: 'boolean — group rows by workstream',
     groupEpic: 'boolean — group rows by epic',
-    colorBy: "'workstream' | 'epic' | 'assignee' | 'priority' — what bar colours follow",
+    colorBy: "'workstream' | 'epic' | 'assignee' | 'priority' | 'type' — what bar colours follow",
     autoSave: 'boolean — desktop: write to the open file automatically',
     detailMode: "'feature' | 'story' — Planning row detail level"
   };
@@ -1536,7 +1536,8 @@
     if (s.provider === 'claude') {
       modelOpts = AI.CLAUDE_MODELS.map(function (m) { return '<option value="' + m[0] + '"' + (s.claudeModel === m[0] ? ' selected' : '') + '>' + m[1] + '</option>'; }).join('');
     } else {
-      var ids = (AI.modelCache || []).slice();
+      // the cache belongs to one base URL: ignore it when the endpoint changed
+      var ids = (AI.modelCache && AI.modelCacheBase === s.baseUrl ? AI.modelCache : []).slice();
       if (s.model && ids.indexOf(s.model) === -1) ids.unshift(s.model);
       modelOpts = ids.length ? ids.map(function (id) { return '<option value="' + esc(id) + '"' + (s.model === id ? ' selected' : '') + '>' + esc(AI.shortModel(id)) + '</option>'; }).join('') : '<option value="">No model</option>';
     }

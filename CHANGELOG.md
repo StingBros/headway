@@ -20,6 +20,7 @@ Format: short sections, bullets, one bold title per notable change —
 - AI assistant: the drawer loads the gateway's models when opened and the effort levels a model supports when you pick one, switching to Medium when the current level is not offered.
 - Prioritizing: the Fields menu always offers the Priority and Risk chips (even when the columns are by that field), and the toolbar filters by phase like Sprinting.
 - Desktop: the open file reloads from disk after external changes only while Auto save is on, so unsaved edits are never replaced.
+- **Links in rich text**: any URL typed into a description or scope field renders as a link; ⌘-click (Ctrl-click on Windows/Linux) opens it in the browser. The stored text stays plain.
 
 ## 1.0.11 — 2026-09-08
 
