@@ -7,6 +7,11 @@ both come from the matching section here. Newest first.
 Format: short sections, bullets, one bold title per notable change —
 `**Feature title**: a short, impactful description and use case.`
 
+## Unreleased
+
+- **Titles rename on double-click**: on Planning and Prioritizing the feature and story titles are text, like Sprinting. Double-click one, or pick **Rename…** from its context menu, to edit; a single click just selects. Scoping keeps its spreadsheet cells.
+- AI assistant: Markdown tables in replies render as tables.
+
 ## 1.0.12 — 2026-09-09
 
 ### New
