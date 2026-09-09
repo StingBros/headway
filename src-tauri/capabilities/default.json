@@ -32,6 +32,17 @@
       ]
     },
     {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://**"
+        },
+        {
+          "url": "http://**"
+        }
+      ]
+    },
+    {
       "identifier": "http:default",
       "allow": [
         {
