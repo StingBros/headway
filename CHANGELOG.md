@@ -9,6 +9,7 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- Tags: features and stories carry free-form labels, edited in the detail panel's **Tags** section (Enter or a comma adds one, the box suggests tags already in the document). Filter by tag with `#tag`; tags ride along in the Excel round trip, push to Jira as labels, and the AI assistant can read and set them.
 - Item types: every epic, feature and story carries a type (Feature, Bug, Task, Story, Subtask, Epic by default; add your own in Setup → Hierarchy). Rows show the icon for non-default types; pick a type from the panel, the context menu or Edit epic.
 - Hierarchy settings: rename the three levels, choose which types each accepts, or allow any type at any level.
 - Jira: sync and CSV export use each type's Jira issue type; the three fixed type fields in Setup → Jira are replaced by a per-type table. Existing documents keep their previous names.

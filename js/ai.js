@@ -259,6 +259,7 @@
     if (it.done) o.done = true;
     if (it.locked) o.locked = true;
     if (it.jiraKey) o.jiraKey = it.jiraKey;
+    if (it.tags && it.tags.length) o.tags = it.tags.slice();
     if (it.stories && it.stories.length) {
       o.stories = it.stories.length;
       var dn = it.stories.filter(function (s) { return s.done; }).length;
@@ -379,7 +380,7 @@
     },
     {
       name: 'add_items',
-      description: 'Create features in a phase. Each item: feature (title, required), type (Feature, Bug, Task, … — a type label or key from Setup → Hierarchy), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps (feature numbers), start (ISO date), durDays or end (ISO date), deadline (ISO), milestone (boolean, zero duration; milestones ignore size and priority), headcount, teamType, stories ([{title, type, description, ac, size, priority, done}]). Returns the new feature numbers.',
+      description: 'Create features in a phase. Each item: feature (title, required), type (Feature, Bug, Task, … — a type label or key from Setup → Hierarchy), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps (feature numbers), start (ISO date), durDays or end (ISO date), deadline (ISO), milestone (boolean, zero duration; milestones ignore size and priority), headcount, teamType, tags (array of strings), stories ([{title, type, description, ac, size, priority, done, tags}]). Returns the new feature numbers.',
       parameters: {
         type: 'object',
         properties: {
@@ -391,7 +392,7 @@
     },
     {
       name: 'update_items',
-      description: 'Change features or stories. Each update: num (feature number, required), story (story id, to change that story instead), fields (object merged into the target). Feature fields: feature, type (Feature, Bug, Task, … — a type label or key from Setup → Hierarchy), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps, start (ISO date or null to unschedule), durDays, end (ISO date), deadline, milestone, headcount, teamType, locked, done, phase (name or id), assignees (team ids), custom ({columnKey: text}), jiraKey, addStories ([{title, type, description, ac, size, priority}] appends stories). Story fields: title, type, description, ac, size, priority, risk, done, start, durDays, end, deadline, assignees. Use delete: true to remove the target.',
+      description: 'Change features or stories. Each update: num (feature number, required), story (story id, to change that story instead), fields (object merged into the target). Feature fields: feature, type (Feature, Bug, Task, … — a type label or key from Setup → Hierarchy), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps, start (ISO date or null to unschedule), durDays, end (ISO date), deadline, milestone, headcount, teamType, locked, done, phase (name or id), assignees (team ids), tags (array of strings — replaces the list), custom ({columnKey: text}), jiraKey, addStories ([{title, type, description, ac, size, priority}] appends stories). Story fields: title, type, description, ac, size, priority, risk, done, start, durDays, end, deadline, assignees, tags (array of strings). Use delete: true to remove the target.',
       parameters: {
         type: 'object',
         properties: {
@@ -470,6 +471,9 @@
       } else if (k === 'phase') {
         target.phaseId = phaseIdOf({ phases: fields.__phases || [] }, v);
         changed.push('phase');
+      } else if (k === 'tags') {
+        target.tags = RM.normalizeTags(v);
+        changed.push('tags');
       } else if (k === 'deps') {
         target.deps = (Array.isArray(v) ? v : [v]).map(Number).filter(function (n) { return !isNaN(n); });
         changed.push('deps');
@@ -703,7 +707,7 @@
     '## Model',
     '- Time is counted in working days from meta.timelineStart (weekends and non-work days do not exist in the index). Holidays stretch bars. A sprint = meta.weeksPerSprint weeks; sprint numbers count from meta.sprintAnchor / sprintAnchorNum. Tools accept and report ISO dates; day indexes appear in raw sections.',
     '- Phases hold features (state.phases; each item has phaseId). bucket=true phases are backlog shelves (Next / Future).',
-    '- Features (state.items) have num (the user-facing #id), feature (title), workstream, epic, size, risk, priority, deps (numbers of features that must finish first), startDay/durDays (null = unscheduled), deadline, milestone, locked, done, headcount, teamType, assignees (team ids), rich-text fields (description, enables, outOfScope, notes, extDeps — plain text is fine when writing), custom column values, jiraKey, and stories, type (Feature / Bug / Task …; types and the per-level allowed list live in meta.itemTypes and meta.hierarchy, and each type\'s jira field is the Jira issue type used by sync).',
+    '- Features (state.items) have num (the user-facing #id), feature (title), workstream, epic, size, risk, priority, deps (numbers of features that must finish first), startDay/durDays (null = unscheduled), deadline, milestone, locked, done, headcount, teamType, assignees (team ids), rich-text fields (description, enables, outOfScope, notes, extDeps — plain text is fine when writing), custom column values, jiraKey, tags (free-form labels shared with stories, exported as Jira labels), and stories, type (Feature / Bug / Task …; types and the per-level allowed list live in meta.itemTypes and meta.hierarchy, and each type\'s jira field is the Jira issue type used by sync).',
     '- Stories belong to a feature: id, title, done, size, priority, risk, description, ac (acceptance criteria — a built-in column shown on stories by default), optional own startDay/durDays, deadline, assignees, jiraKey.',
     '- Sizing schemes: feature sizes (t-shirt XS–XL with working days per size in meta.sizeDays, or story points), story sizes, risk (none / L-M-H …), priority (none, MoSCoW M/S/C/W, levels C/H/M/L, RICE). Values are validated against the active scheme; read the summary before setting them.',
     '- Team (state.team): people or seats with role, rate-card type, workstreams, capacity (heads at 40 h; 0.5 = half-time), hourly rate and cost, weekHours overrides. Capacity checks only run when meta.capacityEnabled.',

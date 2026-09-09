@@ -157,6 +157,21 @@ console.log('— tools');
   AI.runTool('update_items', { updates: [{ num: 4, delete: true }] }, A);
   ok(!RM.itemByNum(st, 4), 'delete removes a feature');
 
+  // tags: normalized on the way in, replaced wholesale on update
+  {
+    AI.runTool('add_items', { items: [{ feature: 'Tagged', tags: ['x', 'x', 'Y'],
+      stories: [{ title: 'st', tags: ' a , a ,b ' }] }] }, A);
+    var tg = st.items[st.items.length - 1];
+    eq(tg.tags, ['x', 'Y'], 'add_items stores de-duplicated tags');
+    eq(tg.stories[0].tags, ['a', 'b'], 'story tags normalize too');
+    AI.runTool('update_items', { updates: [{ num: tg.num, fields: { tags: ['fresh'] } }] }, A);
+    eq(RM.itemByNum(st, tg.num).tags, ['fresh'], 'update_items replaces the tag list');
+    AI.runTool('update_items', { updates: [{ num: tg.num, story: tg.stories[0].id, fields: { tags: [] } }] }, A);
+    eq(RM.itemByNum(st, tg.num).stories[0].tags, [], 'an empty list clears story tags');
+    ok(AI.runTool('get_project', {}, A).items.some(function (x) { return String(x.tags) === 'fresh'; }),
+      'the item summary line carries tags');
+  }
+
   var up = AI.runTool('update_project', { ops: [{ op: 'set', path: 'meta/vision', value: 'Ship it' }, { op: 'push', path: 'meta/holidayRanges', value: { name: 'Offsite', start: '2026-08-20', end: '2026-08-21' } }] }, A);
   eq(up.changes, ['set meta/vision', 'push meta/holidayRanges'], 'update_project reports its changes');
   eq(st.meta.vision, 'Ship it', 'vision set through the app commit');

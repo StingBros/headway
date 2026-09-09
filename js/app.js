@@ -578,17 +578,28 @@
   }
 
   // ownOnly: judge the feature by its own fields, not its stories' titles
+  function tagsHit(tags, q) {
+    return (tags || []).some(function (t) { return String(t).toLowerCase().indexOf(q) !== -1; });
+  }
   function matchesFilter(it, ownOnly) {
     if (!filterText) return true;
     var q = filterText.toLowerCase();
+    // "#urgent" searches tags only — the rest of the fields stay out of it
+    if (q.charAt(0) === '#') {
+      var tq = q.slice(1);
+      if (!tq) return true;
+      return tagsHit(it.tags, tq) ||
+        (!ownOnly && (it.stories || []).some(function (st) { return tagsHit(st.tags, tq); }));
+    }
     return (it.feature || '').toLowerCase().indexOf(q) !== -1 ||
       (it.epic || '').toLowerCase().indexOf(q) !== -1 ||
       (it.workstream || '').toLowerCase().indexOf(q) !== -1 ||
+      tagsHit(it.tags, q) ||
       state.meta.scopeCols.some(function (c) {
         return RM.htmlToText(RM.scopeValue(it, c.key)).toLowerCase().indexOf(q) !== -1;
       }) ||
       (!ownOnly && (it.stories || []).some(function (st) {
-        return (st.title || '').toLowerCase().indexOf(q) !== -1;
+        return (st.title || '').toLowerCase().indexOf(q) !== -1 || tagsHit(st.tags, q);
       }));
   }
 
@@ -2161,7 +2172,9 @@
     if (prioFEpic != null && (it.epic || '') !== prioFEpic) return false;
     if (prioFWs != null && (it.workstream || '') !== prioFWs) return false;
     if (!filterText) return true;
-    return (st.title || '').toLowerCase().indexOf(filterText.toLowerCase()) !== -1 || matchesFilter(it, true);
+    var pq = filterText.toLowerCase();
+    if (pq.charAt(0) === '#') return tagsHit(st.tags, pq.slice(1)) || matchesFilter(it, true);
+    return (st.title || '').toLowerCase().indexOf(pq) !== -1 || tagsHit(st.tags, pq) || matchesFilter(it, true);
   }
   // every visible story as { it, st } pairs, in document order
   function prStoryPairs(items) {
@@ -4270,7 +4283,7 @@
       fields: 'text', details: 'info', schedule: 'calendar-range',
       people: 'users', deps: 'git-merge', stories: 'list-todo',
       timeline: 'chart-gantt', checks: 'shield-check',
-      meta: 'tags', danger: 'trash-2', integrations: 'plug'
+      meta: 'tags', danger: 'trash-2', integrations: 'plug', tags: 'tag'
     };
     function sec(key, label, summary, body) {
       return '<div class="p-sec c' + (secOpen(key) ? ' open' : '') + '" data-sec="' + key + '">' +
@@ -4299,6 +4312,8 @@
       '<textarea class="p-name" data-f="feature" rows="1" placeholder="' + esc(lvl('feature') + ' name') + '">' + esc(it.feature) + '</textarea>' +
 
       sec('fields', 'Fields', '', fieldEds) +
+
+      sec('tags', 'Tags', (it.tags || []).length ? String(it.tags.length) : '', tagsBody(it)) +
 
       sec('details', 'Details', '',
         '<div class="p-grid2">' +
@@ -4442,6 +4457,7 @@
       '</div><div class="m-hint">Stories inherit workstream and epic from their feature.</div></div></div>' +
 
       sec2('fields', 'Fields', fieldEds) +
+      sec2('tags', 'Tags', tagsBody(st)) +
       sec2('people', 'People',
         '<label class="p-lab">Assignees</label>' +
         '<div class="chips">' +
@@ -4471,6 +4487,62 @@
       '<button class="p-sechead" tabindex="-1">' +
       '<i data-lucide="chevron-right"></i><span class="p-seclab">' + label + '</span>' +
       '</button><div class="p-secbody">' + body + '</div></div>';
+  }
+
+  // ---- tags: free-form labels, edited only here (rows and cards stay lean).
+  // The datalist offers every other tag in the document.
+  function tagsBody(o) {
+    var tags = (o && o.tags) || [];
+    var own = {};
+    tags.forEach(function (t) { own[String(t).toLowerCase()] = true; });
+    var opts = RM.allTags(state).filter(function (t) { return !own[String(t).toLowerCase()]; });
+    return '<div class="chips p-tags">' +
+      tags.map(function (t) {
+        return '<span class="tag-chip">' + esc(t) +
+          '<button data-tagrm="' + esc(t) + '" title="Remove tag"><i data-lucide="x"></i></button></span>';
+      }).join('') +
+      '<input class="p-tag-in" data-tagadd="1" list="tagOptions" autocomplete="off" placeholder="Add tag\u2026">' +
+      '</div>' +
+      '<datalist id="tagOptions">' +
+      opts.map(function (t) { return '<option value="' + esc(t) + '">'; }).join('') +
+      '</datalist>';
+  }
+  // the object the panel is editing: the open story, else the feature
+  function tagTarget() {
+    var it = selectedId && RM.itemById(state, selectedId);
+    if (!it) return null;
+    return selStory ? storyById(it, selStory) : it;
+  }
+  function tagsOfTarget() {
+    var t = tagTarget();
+    return (t && t.tags) || [];
+  }
+  function commitTags(list) {
+    var itId = selectedId, stId = selStory;
+    commit('tags', function (s) {
+      var x = RM.itemById(s, itId);
+      if (!x) return;
+      var target = stId ? storyById(x, stId) : x;
+      if (target) RM.setTags(s, target, list);
+    });
+  }
+  // the panel re-renders on every commit — put the caret back in the input
+  function focusTagInput() {
+    requestAnimationFrame(function () {
+      var el = $('#panel .p-tag-in');
+      if (el) el.focus();
+    });
+  }
+  // returns true when something was actually added (the panel then re-rendered)
+  function addTagFromInput(inp) {
+    var v = (inp.value || '').trim();
+    inp.value = '';
+    if (!v || !tagTarget()) return false;
+    var cur = tagsOfTarget();
+    var next = cur.concat([v]);
+    if (RM.normalizeTags(next).length === cur.length) return false; // already there
+    commitTags(next);
+    return true;
   }
 
   // ---- shared dropdown: a button that opens the same list UI the menu bar
@@ -4823,6 +4895,12 @@
     }
     var it = selectedId && RM.itemById(state, selectedId);
     if (!it) return;
+    var tagRm = e.target.closest('[data-tagrm]');
+    if (tagRm) {
+      var gone = tagRm.dataset.tagrm;
+      commitTags(tagsOfTarget().filter(function (t) { return t !== gone; }));
+      return;
+    }
     var msChip = e.target.closest('[data-act="msstyle"]');
     if (msChip) { openDropdown(msChip, msStyleItems(it.id, it)); return; }
     var tyChip = e.target.closest('[data-act="itype"]');
@@ -5071,6 +5149,8 @@
   //   stcol:<key> — a story's scope column (Description / Acceptance criteria
   //                 are story fields; the rest live in st.custom)
   $('#panel').addEventListener('focusout', function (e) {
+    var tinOut = e.target.closest && e.target.closest('[data-tagadd]');
+    if (tinOut) { addTagFromInput(tinOut); return; }
     var ed = e.target.classList && e.target.classList.contains('wz-ed') ? e.target : null;
     if (!ed || !ed.dataset.f) return;
     commitPanelEd(ed);
@@ -5244,6 +5324,24 @@
 
   // Enter in the story add input triggers change
   $('#panel').addEventListener('keydown', function (e) {
+    var tin = e.target.closest && e.target.closest('[data-tagadd]');
+    if (tin) {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        if (addTagFromInput(tin)) focusTagInput();
+        return;
+      }
+      if (e.key === 'Backspace' && !tin.value) {
+        var curTags = tagsOfTarget();
+        if (curTags.length) {
+          e.preventDefault();
+          commitTags(curTags.slice(0, curTags.length - 1));
+          focusTagInput();
+        }
+        return;
+      }
+      if (e.key === 'Escape') { tin.value = ''; return; }
+    }
     if (e.key === 'Enter' && e.target.dataset.f === 'storyadd') {
       e.target.blur();
     }
@@ -5271,7 +5369,7 @@
     var isArea = t.tagName === 'TEXTAREA';
     if (isArea ? (!t.classList.contains('p-name') || e.shiftKey) : t.tagName !== 'INPUT') return;
     if (!isArea && ['checkbox', 'radio', 'range', 'file', 'color'].indexOf(t.type) !== -1) return;
-    if (t.dataset.act === 'st-add' || t.dataset.f === 'depsearch') return;
+    if (t.dataset.act === 'st-add' || t.dataset.f === 'depsearch' || t.dataset.tagadd) return;
     e.preventDefault();
     var wasSel = t.value !== t.defaultValue;
     t.blur();

@@ -91,6 +91,16 @@ eq(fb.issuetype, { name: 'Story' }, 'a default-type feature resolves to Story');
 eq(fb.duedate, '2026-09-01', 'a deadline wins as the due date');
 ok(!fb.parent, 'no epic key, no parent');
 ok(!fb.assignee, 'no assignee, no Jira assignee');
+// tags become plain slugged labels on both levels
+{
+  var tSt = RM.clone(state);
+  RM.setTags(tSt, RM.itemById(tSt, 'a'), ['Tech Debt', 'q3']);
+  RM.setTags(tSt, RM.itemById(tSt, 'a').stories[0], ['Story Tag']);
+  var tf = JR.featureFields(tSt, RM.itemById(tSt, 'a'), cfg, 'HW-1', info);
+  ok(tf.labels.indexOf('tech-debt') !== -1 && tf.labels.indexOf('q3') !== -1, 'feature tags push as slugged labels');
+  var ts = JR.storyFields(tSt, RM.itemById(tSt, 'a'), RM.itemById(tSt, 'a').stories[0], cfg, 'HW-5', info);
+  ok(ts.labels.indexOf('story-tag') !== -1, 'story tags push as slugged labels');
+}
 var fs1 = JR.storyFields(state, RM.itemById(state, 'a'), RM.itemById(state, 'a').stories[0], cfg, 'HW-5', info);
 eq(fs1.issuetype, { name: 'Sub-task' }, 'a Subtask story resolves to Sub-task');
 eq(fs1.customfield_10015, '2026-07-27', 'a story without its own timeline takes the feature’s start');

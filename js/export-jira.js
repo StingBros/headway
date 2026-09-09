@@ -24,6 +24,11 @@
   function slug(s) {
     return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   }
+  // free-form tags become plain slugged labels (no prefix — they are the
+  // user's own vocabulary)
+  function tagLabels(o) {
+    return ((o && o.tags) || []).map(slug);
+  }
   function labelList(parts) {
     return parts.filter(Boolean).join(' ');
   }
@@ -70,7 +75,7 @@
             section('Notes', it.notes)
           ]),
           'Parent': (it.epic && state.epicJira[it.epic]) || '',
-          'Labels': labelList([ws, phase, it.size ? 'size-' + slug(it.size) : '']),
+          'Labels': labelList([ws, phase, it.size ? 'size-' + slug(it.size) : ''].concat(tagLabels(it))),
           'Priority': it.priority || '',
           'Due Date': it.deadline || '',
           'Start Date': sched ? iso(meta, it.startDay) : '',
@@ -90,7 +95,7 @@
               section('Acceptance criteria', s.ac)
             ]),
             'Parent': it.jiraKey || '',
-            'Labels': labelList(['feature-' + slug(it.feature), ws, phase]),
+            'Labels': labelList(['feature-' + slug(it.feature), ws, phase].concat(tagLabels(s))),
             'Priority': s.priority || '',
             'Due Date': s.deadline || '',
             'Start Date': ssched ? iso(meta, s.startDay) : '',

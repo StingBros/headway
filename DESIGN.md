@@ -26,7 +26,8 @@ state = {
               riskDays,               // always 0 — risk no longer pads the schedule
               locked, done,
               jiraKey,                // "HW-12" typed in after a Jira CSV import; null = none
-              stories: [ { id, title, done, startDay, durDays, jiraKey } ] } ] // story timeline optional (both null = none)
+              tags: [ string ],       // free-form labels; RM.normalizeTags trims/caps/dedupes
+              stories: [ { id, title, done, startDay, durDays, jiraKey, tags } ] } ] // story timeline optional (both null = none)
   team:   [ { id, name, type, workstream?, capacity,             // "roles"; capacity = heads at 40 h (0.5 = half)
               rate, cost,                                        // hourly bill rate / hourly cost (budgeting; 0 = unset)
               weekHours: { isoMonday: hours } } ]                // default 40 h/week; 0 = off
