@@ -10,6 +10,7 @@ Format: short sections, bullets, one bold title per notable change —
 ## Unreleased
 
 - Flagged rows are tinted light orange in the left pane, darker when selected.
+- The Planning / Scoping left pane no longer shows #numbers on rows (they stay in the panel header, on cards and on sprint rows).
 
 ## 1.0.13 — 2026-09-09
 

@@ -3419,6 +3419,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   window.__headway.selectItem(host.id);
   ok(row().classList.contains('flagged') && row().classList.contains('selected'), 'selected + flagged combine (darker orange)');
   const cssF = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  ok(/#rows \.row\.item \.row-left \.r-num, #rows \.row\.story \.row-left \.r-num \{ display: none; \}/.test(cssF), 'the left pane hides item and story numbers');
   ok(/\.row\.flagged \.row-left[^{]*\{[^}]*--flag-soft/.test(cssF) && /\.row\.flagged\.selected \.row-left[^{]*\{[^}]*--flag-sel/.test(cssF), 'flagged rows use the light orange at rest and the darker one when selected');
   ok(/--flag-sel:/.test(cssF.split('html[data-theme="dark"]')[1] || ''), 'the dark theme defines its own flag tints');
   ctxOn(row());

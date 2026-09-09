@@ -684,6 +684,10 @@ body.cap-off .hc-lab { display: none !important; }
    32px, so story titles still line up with the feature titles above them */
 .st-pad { width: 53px; flex: 0 0 53px; position: relative; }
 .row.story .r-num.st-num { width: 32px; flex: 0 0 32px; text-align: right; padding-right: 7px; }
+/* the left pane shows no numbers at all — they live in the panel header, on
+   cards and on sprint rows; hiding both keeps story titles aligned with the
+   feature titles (53px pad = grip 18 + chev 20 + dot 15 for both) */
+#rows .row.item .row-left .r-num, #rows .row.story .row-left .r-num { display: none; }
 /* story rows drag by their grip (reorder, or move to another feature) */
 .st-grip {
   position: absolute; left: 0; top: 0; bottom: 0; width: 18px;
