@@ -2109,6 +2109,7 @@
       ? '<div class="pr-stories">' + (it.stories || []).map(function (st) {
           return '<div class="pr-story" data-prst="' + st.id + '">' +
             '<i data-lucide="corner-down-right" class="pr-st-ico"></i>' +
+            '<span class="r-num st-num">#' + st.num + '</span>' +
             '<input class="pr-st-title" data-prstf="title" placeholder="Story" value="' + esc(st.title) + '">' +
             ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-prstact'); }).join('') +
             '</div>';
@@ -2215,6 +2216,7 @@
       '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' +
       '<span class="pr-stfeatname">' + esc(it.feature || '(untitled)') + '</span></div>' +
       '<div class="pr-head">' + typeGlyphHtml(st, 'story', it) +
+      '<span class="r-num st-num">#' + st.num + '</span>' +
       '<input class="pr-title pr-st-title" data-prstf="title" placeholder="Story" value="' + esc(st.title || '') + '"></div>' +
       '<div class="pr-chips">' + chips + '</div></div>';
   }
@@ -2539,7 +2541,7 @@
       var addId = stCardA.dataset.prcard, newSt = RM.uid('s');
       commit('add story', function (s) {
         var x = RM.itemById(s, addId);
-        if (x) x.stories.push({ id: newSt, title: '', done: false });
+        if (x) x.stories.push({ id: newSt, title: '', done: false, num: RM.nextNum(s) });
       });
       var ni = $('#prioView [data-prst="' + newSt + '"] input');
       if (ni) ni.focus();
@@ -2860,6 +2862,7 @@
     return '<div class="spv-row spv-st' + (isSel(it.id) && selStory === st.id ? ' sel' : '') + (st.done ? ' done' : '') +
       '" data-spid="' + it.id + '" data-spst="' + st.id + '" data-spsec="' + sprSecKey(num) + '">' +
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
+      '<span class="r-num st-num">#' + st.num + '</span>' +
       typeGlyphHtml(st, 'story', it) +
       sprTitleHtml(st.title, 'story') +
       (own ? sprCarryHtml(st) : '') + sprNumTag(num) + '<span class="spv-fill"></span>' +
@@ -3775,6 +3778,8 @@
           '<div class="row story' + (selStory === st.id ? ' selected' : '') +
           '" data-story="' + st.id + '" data-id="' + it.id + '">' +
           '<div class="row-left"><span class="st-pad"><span class="st-grip" title="Drag to reorder or move to another feature"><i data-lucide="grip-vertical"></i></span></span>' +
+          // the story number sits in the same column as the feature numbers above
+          '<span class="r-num st-num">#' + st.num + '</span>' +
           (st.done ? '<span class="r-doneck st-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
           typeGlyphHtml(st, 'story', it) +
           (view === 'scoping'
@@ -4268,7 +4273,8 @@
 
     var storyRows = it.stories.map(function (st) {
       var hasBody = !!(st.description || st.ac);
-      return '<div class="p-story">' +
+      return '<div class="p-story" data-pst="' + st.id + '">' +
+        '<span class="r-num st-num">#' + st.num + '</span>' +
         '<input type="text" data-pst-title="' + st.id + '" value="' + esc(st.title) + '">' +
         '<button class="st-del st-edit' + (hasBody ? ' has-body' : '') + '" style="opacity:1" data-pst-edit="' + st.id +
         '" title="Description &amp; acceptance criteria"><i data-lucide="pencil"></i></button>' +
@@ -4440,6 +4446,8 @@
       '<div class="p-top">' +
       '<button class="p-crumb" data-stf="up" title="Back to #' + it.num + '">' +
       '<i data-lucide="corner-left-up"></i>#' + it.num + ' ' + esc(shorten(it.feature || '(untitled)', 26)) + '</button>' +
+      '<span class="p-lead"><span class="p-num">#<input class="p-num-edit" data-stf="num" value="' + st.num +
+      '" style="width:' + (String(st.num).length + 1.6) + 'ch" title="' + esc(lvl('story')) + ' #"></span></span>' +
       typeChipHtml('stype', 'story', st) +
       '<button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-stf="title" rows="1" placeholder="' + esc(lvl('story') + ' title') + '">' + esc(st.title) + '</textarea>' +
@@ -5232,6 +5240,14 @@
         });
         return;
       }
+      if (stf === 'num') {
+        var stNewNum;
+        commit('renumber story', function (s) { stNewNum = RM.renumberStory(s, it.id, stId, sval); });
+        if (stNewNum != null && String(stNewNum) !== String(sval).trim()) {
+          toast('#' + sval + ' isn\u2019t available \u2014 used #' + stNewNum + ' instead');
+        }
+        return;
+      }
       commit('story ' + stf, function (s) {
         var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
         if (!st2) return;
@@ -5313,7 +5329,7 @@
       if (sv) {
         expanded[it.id] = true;
         commit('add story', function (s) {
-          RM.itemById(s, it.id).stories.push({ id: RM.uid('s'), title: sv, done: false });
+          RM.itemById(s, it.id).stories.push({ id: RM.uid('s'), title: sv, done: false, num: RM.nextNum(s) });
         });
       }
       return;
@@ -6233,7 +6249,15 @@
       copy.id = RM.uid('i');
       copy.num = RM.nextNum(s);
       copy.feature = t.feature + ' (copy)';
-      copy.stories.forEach(function (st) { st.id = RM.uid('s'); });
+      // fresh ids and numbers for the copied stories; dependencies among them
+      // follow the copy, links to stories outside it keep pointing there
+      var next = copy.num + 1, numMap = {};
+      copy.stories.forEach(function (st) {
+        st.id = RM.uid('s');
+        if (st.num != null) numMap[st.num] = next;
+        st.num = next++;
+      });
+      RM.remapStoryDeps(copy.stories, numMap);
       s.items.splice(s.items.indexOf(t) + 1, 0, copy);
       selectedId = copy.id;
     });
@@ -6250,7 +6274,7 @@
       t.stories = t.stories || [];
       var anchor = stId ? storyById(t, stId) : null;
       var idx = anchor ? t.stories.indexOf(anchor) + offset : t.stories.length;
-      t.stories.splice(idx, 0, { id: newId, title: '', done: false });
+      t.stories.splice(idx, 0, { id: newId, title: '', done: false, num: RM.nextNum(s) });
       expanded[itemId] = true;
       selectedId = itemId;
       selStory = newId;
@@ -6273,6 +6297,7 @@
       if (!st) return;
       var copy = RM.clone(st);
       copy.id = RM.uid('s');
+      copy.num = RM.nextNum(s);
       copy.title = (st.title || 'Story') + ' (copy)';
       copy.jiraKey = '';
       t.stories.splice(t.stories.indexOf(st) + 1, 0, copy);
@@ -6701,7 +6726,7 @@
       var v = e.target.value.trim();
       if (!v) return;
       commit('add story', function (s) {
-        RM.itemById(s, itemId).stories.push({ id: RM.uid('s'), title: v, done: false });
+        RM.itemById(s, itemId).stories.push({ id: RM.uid('s'), title: v, done: false, num: RM.nextNum(s) });
       });
       requestAnimationFrame(function () {
         var again = rowsEl.querySelector('.row.story-add[data-id="' + itemId + '"] .st-add-input');

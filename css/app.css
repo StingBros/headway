@@ -451,6 +451,9 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
   font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
   text-align: right; padding-right: 7px;
 }
+/* stories carry the same number chip; outside the Planning grid it hugs the
+   glyph instead of holding the feature column's fixed width */
+.r-num.st-num { width: auto; flex: 0 0 auto; text-align: left; padding-right: 0; }
 .r-dot { width: 8px; height: 8px; border-radius: 2.5px; flex: 0 0 8px; margin-right: 7px; }
 /* milestones carry a hollow diamond / star / circle, not a filled square:
    the inline background color shows only through the ring mask */
@@ -644,9 +647,10 @@ body.cap-off .hc-lab { display: none !important; }
 .row.story { height: var(--story-h); }
 .row.story .row-left { background: var(--paper-2); border-bottom-color: var(--line); }
 .row.story .row-lane { border-bottom-color: transparent; }
-/* 85px = grip 18 + chev 20 + num 32 + dot 15 — story titles line up with
-   the feature titles above them */
-.st-pad { width: 85px; flex: 0 0 85px; position: relative; }
+/* 53px = grip 18 + chev 20 + dot 15; the story's #number holds the remaining
+   32px, so story titles still line up with the feature titles above them */
+.st-pad { width: 53px; flex: 0 0 53px; position: relative; }
+.row.story .r-num.st-num { width: 32px; flex: 0 0 32px; text-align: right; padding-right: 7px; }
 /* story rows drag by their grip (reorder, or move to another feature) */
 .st-grip {
   position: absolute; left: 0; top: 0; bottom: 0; width: 18px;
@@ -872,6 +876,9 @@ body.cap-off .hc-lab { display: none !important; }
 }
 /* number + milestone chip sit on one centered line at the top of the panel */
 .p-lead { display: inline-flex; align-items: center; gap: 6px; padding-top: 8px; min-width: 0; }
+/* in the story panel the number follows the breadcrumb, so it rides at the
+   crumb's height instead of the feature panel's centered line */
+.p-top .p-crumb + .p-lead { padding-top: 3px; }
 .p-num { font-family: var(--mono); font-size: 11px; color: var(--ink-3); display: inline-flex; align-items: center; }
 .p-num-edit {
   width: 44px; padding: 2px 3px;
@@ -1054,6 +1061,7 @@ input[type="checkbox"]:focus-visible {
 .p-actions { display: flex; gap: 8px; margin-top: 18px; }
 .p-stories { display: flex; flex-direction: column; gap: 3px; }
 .p-story { display: flex; align-items: center; gap: 7px; padding: 2px 0; }
+.p-story .r-num.st-num { font-size: 10px; }
 .p-story input[type=text] { flex: 1; border-color: transparent; padding: 3px 6px; font-size: 12.5px; }
 .p-story input[type=text]:hover { border-color: var(--line-2); }
 
@@ -2478,7 +2486,8 @@ body[data-view="sprints"] #rowFilter { display: none; }
 input.spv-title { max-width: 60%; }
 /* the filler after the sprint tag pushes every chip to the right edge */
 .spv-fill { flex: 1 1 auto; min-width: 8px; }
-.spv-st .spv-title { font-weight: 500; margin-left: 40px; }
+.spv-st .spv-title { font-weight: 500; }
+.spv-st .r-num.st-num { width: 34px; margin-left: 26px; text-align: right; padding-right: 7px; }
 .spv-tag {
   flex: none; font-size: 10px; font-weight: 600; color: var(--ink-3);
   border: 1px dashed var(--line-3); border-radius: 999px; padding: 1px 7px; white-space: nowrap;
@@ -2885,6 +2894,7 @@ body[data-view="scoping"] .row.story .sc-edit { height: 50px; min-height: 50px; 
 .pr-stories { display: flex; flex-direction: column; gap: 2px; margin-top: 7px; }
 .pr-story { display: flex; align-items: center; gap: 5px; }
 .pr-story .pr-st-ico { width: 11px; height: 11px; color: var(--ink-3); flex: none; margin-left: 2px; }
+.pr-story .r-num.st-num, .pr-stcard .pr-head .r-num.st-num { font-size: 10px; }
 .pr-story .pr-st-title { flex: 1; min-width: 0; font-size: 11.5px; padding: 2px 4px; }
 .pr-story .r-risk, .pr-story .r-size, .pr-story .r-wk { flex: none; }
 .pr-st-add {

@@ -3127,6 +3127,78 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   });
 }
 
+// ---------------------------------------------------------------- story numbers everywhere
+// Every list that shows a story shows its #number, and the story panel edits
+// it exactly like the feature number (shared pool, so a feature's number is
+// refused and falls back to the next free one).
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const host = state().items.find(i => !i.milestone && (i.stories || []).length);
+  const st0 = host.stories[0];
+  ok(typeof st0.num === 'number' && !state().items.some(i => i.num === st0.num), 'stories carry a number that no feature uses');
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story detail
+  const rowNum = doc.querySelector('#rows .row.story[data-story="' + st0.id + '"] .r-num');
+  ok(!!rowNum && rowNum.textContent.trim() === '#' + st0.num, 'Planning story rows show the story number');
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
+  window.__headway.selectItem(host.id);
+  const listNum = doc.querySelector('#panel .p-story[data-pst="' + st0.id + '"] .r-num');
+  ok(!!listNum && listNum.textContent.trim() === '#' + st0.num, 'the feature panel story list shows numbers');
+  click(doc.querySelector('#panel [data-pst-edit="' + st0.id + '"]'));
+  const numIn = doc.querySelector('#panel input.p-num-edit[data-stf="num"]');
+  ok(!!numIn && numIn.value === String(st0.num), 'the story panel header shows the editable number');
+  const free = window.RM.nextNum(state()) + 5;
+  numIn.value = String(free); numIn.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(window.RM.storyRef(state(), st0.id).st.num === free, 'changing the number renumbers the story');
+  const feat = state().items.find(i => i.id !== host.id && !i.milestone);
+  const numIn2 = doc.querySelector('#panel input.p-num-edit[data-stf="num"]');
+  numIn2.value = String(feat.num); numIn2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(window.RM.storyRef(state(), st0.id).st.num !== feat.num, 'a feature number is refused (falls back to a free one)');
+  // Sprinting and Prioritizing: switch to the story level through the real
+  // Feature / Story dropdown each view puts first in its toolbar
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Story/.test(b.textContent)));
+  ok([...doc.querySelectorAll('#sprintView .spv-row.spv-st .r-num')].length > 0, 'Sprinting story rows show numbers');
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  click(doc.querySelector('#prioView [data-prdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Story/.test(b.textContent)));
+  const prNums = [...doc.querySelectorAll('#prioView .pr-stcard .pr-head .r-num, #prioView .pr-story .r-num')];
+  ok(prNums.length > 0 && prNums.every(n => /^#\d+$/.test(n.textContent.trim())), 'Prioritizing story rows/cards show numbers');
+  click(doc.querySelector('#prioView [data-prdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+{
+  // duplicating a feature gives the copied stories fresh numbers and remaps deps among them
+  // pick a feature the Planning grid is actually showing (earlier blocks may
+  // leave a filter on)
+  const rowEl = [...doc.querySelectorAll('#rows .row.item[data-id]')]
+    .find(r => { const it = state().items.find(i => i.id === r.dataset.id); return it && !it.milestone; });
+  const host = state().items.find(i => i.id === rowEl.dataset.id);
+  window.HeadwayApp.ai.commit('dup num fixture', (s) => {
+    const f = window.RM.itemById(s, host.id);
+    const n1 = window.RM.nextNum(s);
+    f.stories.push({ id: 'dn_1', title: 'first', done: false, num: n1 }, { id: 'dn_2', title: 'second', done: false, num: n1 + 1, deps: [n1] });
+  });
+  const nBefore = state().items.length;
+  const row = doc.querySelector('#rows .row.item[data-id="' + host.id + '"]');
+  row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /^Duplicate$/.test(b.textContent.trim())));
+  const copy = state().items[state().items.findIndex(i => i.id === host.id) + 1];
+  ok(state().items.length === nBefore + 1 && copy && copy.id !== host.id, 'the feature is duplicated');
+  const c1 = copy.stories.find(s => s.title === 'first'), c2 = copy.stories.find(s => s.title === 'second');
+  const orig1 = window.RM.storyRef(state(), 'dn_1').st;
+  ok(c1 && c2 && c1.num !== orig1.num && String(c2.deps) === String(c1.num), 'the copied story depends on the copied story’s new number');
+  window.HeadwayApp.ai.commit('dup num cleanup', (s) => {
+    s.items = s.items.filter(i => i.id !== copy.id);
+    const f = window.RM.itemById(s, host.id); f.stories = f.stories.filter(x => x.id !== 'dn_1' && x.id !== 'dn_2');
+  });
+}
+
 // ---------------------------------------------------------------- story panel estimate buttons
 // Size / Priority / Risk in the story panel are buttons with data-stf AND
 // data-v; the generic data-stf handler must not swallow them.
