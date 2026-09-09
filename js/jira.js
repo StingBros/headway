@@ -372,6 +372,23 @@
         plan.links.push({ blockerNum: n, blockerId: dep.id, blockedNum: it.num, blockedId: it.id });
       });
     });
+    // story -> story dependencies become the same Blocks link, as long as
+    // both stories are being pushed (their features are in this run)
+    if (cfg.pushStories) {
+      work.forEach(function (it) {
+        it.stories.forEach(function (st) {
+          var res = RM.resolveStoryDeps(state, st);
+          res.deps.forEach(function (ref) {
+            if (!workId[ref.it.id]) return;
+            plan.links.push({
+              story: true,
+              blockerNum: ref.st.num, blockerId: ref.st.id, blockerTitle: ref.st.title,
+              blockedNum: st.num, blockedId: st.id, blockedTitle: st.title
+            });
+          });
+        });
+      });
+    }
     // people: who resolved, who did not
     var people = {}, unresolved = [];
     work.forEach(function (it) {
@@ -765,6 +782,10 @@
         var keyOf = {};
         plan.features.forEach(function (f) { if (f.key) keyOf[f.id] = f.key; });
         plan.updates.forEach(function (u) { if (u.kind === 'feature') keyOf[u.id] = u.key; });
+        // story links resolve against the stories created in step 3 and the
+        // ones that already had a key (ids never collide across the two)
+        plan.stories.forEach(function (s2) { if (s2.key) keyOf[s2.id] = s2.key; });
+        plan.updates.forEach(function (u) { if (u.kind === 'story') keyOf[u.id] = u.key; });
         var links = plan.links.filter(function (l) { return keyOf[l.blockerId] && keyOf[l.blockedId]; });
         var i = 0;
         return links.reduce(function (p, l) {

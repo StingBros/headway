@@ -292,7 +292,9 @@
 
     // ---- Stories sheet
     var sws = wb.addWorksheet('Stories');
-    sws.getRow(1).values = ['Item #', 'Feature', 'Story', 'Done', 'Description', 'Acceptance Criteria', 'Tags'];
+    // '#' and 'Depends on' are trailing columns added later: older importers
+    // stop at Tags, and this importer reads them only when the header says so
+    sws.getRow(1).values = ['Item #', 'Feature', 'Story', 'Done', 'Description', 'Acceptance Criteria', 'Tags', '#', 'Depends on'];
     sws.getRow(1).font = { bold: true };
     sws.getColumn(1).width = 8;
     sws.getColumn(2).width = 44;
@@ -301,6 +303,8 @@
     sws.getColumn(5).width = 50;
     sws.getColumn(6).width = 50;
     sws.getColumn(7).width = 22;
+    sws.getColumn(8).width = 8;
+    sws.getColumn(9).width = 16;
     var srow = 2;
     state.items.forEach(function (it) {
       it.stories.forEach(function (st) {
@@ -308,7 +312,9 @@
         // sheet keeps the formatted version losslessly
         sws.getRow(srow).values = [it.num, it.feature, st.title, st.done ? 'Yes' : 'No',
           RM.htmlToText(st.description || ''), RM.htmlToText(st.ac || ''),
-          (st.tags || []).length ? st.tags.join(', ') : null];
+          (st.tags || []).length ? st.tags.join(', ') : null,
+          st.num != null ? st.num : null,
+          (st.deps || []).length ? st.deps.join(', ') : null];
         srow += 1;
       });
     });
@@ -717,6 +723,9 @@
       // Tags is a trailing column added later — read it only when the header
       // says so, so older workbooks without it still import
       var storyTagCol = /^tags$/i.test(cellText(sws.getCell(1, 7))) ? 7 : 0;
+      // story number + story-to-story dependencies, same header guard
+      var storyNumCol = /^#$/.test(cellText(sws.getCell(1, 8))) ? 8 : 0;
+      var storyDepCol = /^depends on$/i.test(cellText(sws.getCell(1, 9))) ? 9 : 0;
       for (var sr = 2; sr <= sws.rowCount; sr++) {
         var numTxt = cellText(sws.getCell(sr, 1));
         var title = cellText(sws.getCell(sr, 3));
@@ -726,7 +735,11 @@
           target.stories.push({
             title: title, done: /^y(es)?$/i.test(cellText(sws.getCell(sr, 4))),
             description: cellText(sws.getCell(sr, 5)), ac: cellText(sws.getCell(sr, 6)),
-            tags: storyTagCol ? cellText(sws.getCell(sr, storyTagCol)) : ''
+            tags: storyTagCol ? cellText(sws.getCell(sr, storyTagCol)) : '',
+            num: storyNumCol ? (parseInt(cellText(sws.getCell(sr, storyNumCol)), 10) || null) : null,
+            // hand-typed values may carry '#' and any of , ; whitespace;
+            // normalize drops whatever is not a positive integer
+            deps: storyDepCol ? cellText(sws.getCell(sr, storyDepCol)).replace(/#/g, '').split(/[,;\s]+/).filter(Boolean) : []
           });
         }
       }

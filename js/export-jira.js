@@ -100,7 +100,7 @@
             'Due Date': s.deadline || '',
             'Start Date': ssched ? iso(meta, s.startDay) : '',
             'End Date': ssched ? RM.fmtISO(RM.spanEndDate(meta, s.startDay, s.durDays)) : '',
-            'Blocked By': '',
+            'Blocked By': RM.resolveStoryDeps(state, s).deps.map(function (r) { return r.st.jiraKey; }).filter(Boolean).join(' '),
             'Jira Key': s.jiraKey || ''
           });
         });

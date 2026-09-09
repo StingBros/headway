@@ -1242,7 +1242,7 @@ if (!ExcelJS) {
               meta: JSON.parse(JSON.stringify(META)),
               phases: [{ id: 'p1', name: 'Alpha', bucket: false }],
               items: [{ id: 'i1', num: 1, phaseId: 'p1', feature: 'Tagged', tags: ['tech debt', 'q3'],
-                stories: [{ id: 's1', title: 'story one', tags: ['spike'] }] }],
+                stories: [{ id: 's1', title: 'story one', tags: ['spike'] }, { id: 's2', title: 'story two', num: 40, deps: [2] }] }],
               team: []
             });
             return RMExcel.exportWorkbook(stT).then(function (bufT) {
@@ -1259,6 +1259,9 @@ if (!ExcelJS) {
                   ok(rt2.source === 'template', 'tags doc without the tool sheet parses as a template');
                   eq(rt2.state.items[0].tags, ['tech debt', 'q3'], 'template path re-reads the Roadmap Tags column');
                   eq(rt2.state.items[0].stories[0].tags, ['spike'], 'template path re-reads the Stories Tags column');
+                  eq(rt2.state.items[0].stories.map(function (x) { return x.num; }),
+                    stT.items[0].stories.map(function (x) { return x.num; }), 'template path re-reads the Stories # column');
+                  eq(rt2.state.items[0].stories[1].deps, [stT.items[0].stories[0].num], 'template path re-reads the Stories Depends on column');
                   // an older workbook has no Tags columns at all
                   var wbT3 = new ExcelJS.Workbook();
                   return wbT3.xlsx.load(bufT).then(function () {
@@ -1266,13 +1269,15 @@ if (!ExcelJS) {
                     var rws3 = wbT3.getWorksheet('Roadmap');
                     rws3.spliceColumns(rws3.columnCount, 1);
                     var sws3 = wbT3.getWorksheet('Stories');
-                    sws3.spliceColumns(7, 1);
+                    sws3.spliceColumns(7, 3);
                     return wbT3.xlsx.writeBuffer();
                   }).then(function (bufT3) {
                     return RMExcel.importWorkbook(bufT3);
                   }).then(function (rt3) {
                     eq(rt3.state.items[0].tags, [], 'a pre-tags workbook still imports, with no tags');
                     eq(rt3.state.items[0].stories[0].tags, [], 'and its stories carry no tags');
+                    eq(rt3.state.items[0].stories[1].deps, [], 'a workbook without the Depends on column imports with no story deps');
+                    ok(rt3.state.items[0].stories[0].num > 0, 'and normalize assigns fresh story numbers');
                     finish();
                   });
                 });

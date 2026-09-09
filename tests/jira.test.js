@@ -22,12 +22,12 @@ var state = RM.normalizeState({
   items: [
     { id: 'a', num: 1, phaseId: 'p1', feature: 'Alpha', epic: 'Known Epic', workstream: 'Data', size: 'M', priority: 'H', type: 'bug',
       startDay: 0, durDays: 5, assignees: ['m1'], description: '<p>First</p><p>Second line</p>',
-      stories: [{ id: 's1', title: 'Story one', done: false, assignees: ['m2'], type: 'subtask' }, { id: 's2', title: 'Story two', jiraKey: 'HW-20', done: false, type: 'bug' }] },
+      stories: [{ id: 's1', title: 'Story one', num: 10, done: false, assignees: ['m2'], type: 'subtask' }, { id: 's2', title: 'Story two', num: 11, jiraKey: 'HW-20', done: false, type: 'bug' }] },
     { id: 'b', num: 2, phaseId: 'p1', feature: 'Beta', epic: 'New Epic', jiraKey: 'HW-10', deps: [1], deadline: '2026-09-01',
       startDay: 12, durDays: 5, done: false, stories: [] },
     { id: 'c', num: 3, phaseId: 'p1', feature: 'Gamma', jiraKey: 'HW-99', stories: [] },
     { id: 'd', num: 5, phaseId: 'p1', feature: 'Delta', jiraKey: 'HW-30', done: true, startDay: 5, durDays: 5, epic: 'Known Epic',
-      stories: [{ id: 's3', title: 'Story three', done: true }] },
+      stories: [{ id: 's3', title: 'Story three', num: 12, deps: [11], done: true }] },
     { id: 'm', num: 4, phaseId: 'p1', feature: 'Launch', milestone: true, startDay: 15, durDays: 0, deps: [1], jiraKey: 'HW-77', stories: [] }
   ]
 });
@@ -130,13 +130,15 @@ eq(plan.transitions.map(function (t) { return t.kind + ':' + (t.key || t.id); })
 ok(!plan.updates[0].fields.project && !plan.updates[0].fields.issuetype, 'updates drop project and issue type');
 eq(plan.pulls.map(function (p) { return p.key + ':' + p.done; }), ['HW-10:true'], 'a Done status in Jira pulls back as done');
 eq(plan.missing.map(function (m) { return m.key; }), ['HW-99'], 'keys Jira does not know are reported, not updated');
-eq(plan.links.length, 1, 'one dependency link planned (the milestone’s dependency is dropped)');
+eq(plan.links.filter(function (l) { return !l.story; }).length, 1, 'one feature dependency link planned (the milestone’s dependency is dropped)');
+ok(plan.links.some(function (l) { return l.story && l.blockerId === 's2' && l.blockedId === 's3'; }),
+  'a story dependency is planned as a link between the two stories');
 eq(plan.people, { total: 2, unresolved: ['Bob Stone'] }, 'people summary names who did not match');
 eq(plan.sprints.create, [{ num: 2, name: 'Sprint 2', start: '2026-08-10', end: '2026-08-23' }], 'a Headway sprint with no Jira sprint is created');
 eq(plan.sprints.assign.map(function (a) { return a.ref.kind + ':' + a.ref.id + '→' + a.num + (a.sprintId ? '#' + a.sprintId : ''); }),
   ['feature:a→1#501', 'story:s2→1#501', 'feature:b→2', 'feature:d→1#501'],
   'scheduled features are placed; sub-task stories follow their parent; the Bug story (not a subtask) is placed by its feature’s day; the milestone is skipped');
-eq(plan.counts, { create: 4, update: 4, link: 1, pull: 1, missing: 1, done: 2, sprintsCreate: 1, sprintAssign: 4 }, 'counts summarise the plan');
+eq(plan.counts, { create: 4, update: 4, link: 2, pull: 1, missing: 1, done: 2, sprintsCreate: 1, sprintAssign: 4 }, 'counts summarise the plan');
 eq(JR.keysOf(state, cfg), ['HW-20', 'HW-10', 'HW-99', 'HW-30'], 'keysOf lists every linked key except milestones');
 var planNoBoard = JR.plan(state, cfg, { remote: info.remote, types: info.types, startField: null, accounts: {}, board: null });
 eq(planNoBoard.sprints, null, 'no board, no sprint work');
@@ -182,9 +184,11 @@ JR.apply(plan, client, null).then(function (result) {
   var updB = upd.filter(function (c) { return c[1] === '/rest/api/3/issue/HW-10'; })[0];
   eq(updB[2].fields.parent, { key: 'HW-100' }, 'an updated feature gets its newly created epic as parent');
   var links = calls.filter(function (c) { return c[1] === '/rest/api/3/issueLink'; });
-  eq(links.length, 1, 'the dependency became a link');
+  eq(links.length, 2, 'the feature dependency and the story dependency each became a link');
   eq(links[0][2].outwardIssue, { key: 'HW-101' }, 'the dependency (blocker) is the outward issue');
   eq(links[0][2].inwardIssue, { key: 'HW-10' }, 'the dependent is the inward issue');
+  ok(links.some(function (c) { return JSON.stringify(c[2].outwardIssue) === '{"key":"HW-20"}' && JSON.stringify(c[2].inwardIssue) === '{"key":"HW-103"}'; }),
+    'the story link resolves the keyed blocker and the freshly created dependent');
   var sprintCreate = calls.filter(function (c) { return c[1] === '/rest/agile/1.0/sprint'; });
   eq(sprintCreate.length, 1, 'one sprint created');
   eq(sprintCreate[0][2].originBoardId, 7, 'on the project’s board');
@@ -424,6 +428,14 @@ JR.apply(plan, client, null).then(function (result) {
   s4.meta.jira.lastErrors = 2;
   eq(JR.status(s4).kind, 'error', 'problems in the last sync read as error');
   eq(JR.status(s4).linked, 3, 'linked feature count excludes the milestone');
+}).then(function () {
+  console.log('— jira csv story deps');
+  var JX = require('../js/export-jira.js');
+  var xrows = JX.rows(state, { features: true, stories: true });
+  var xs3 = xrows.filter(function (r) { return r['Summary'] === 'Story three'; })[0];
+  eq(xs3['Blocked By'], 'HW-20', 'a story row lists the Jira keys of its story dependencies');
+  var xs1 = xrows.filter(function (r) { return r['Summary'] === 'Story one'; })[0];
+  eq(xs1['Blocked By'], '', 'a story with no dependencies leaves Blocked By blank');
 }).then(function () {
   console.log('— auto-sync');
   var base = RM.clone(state);

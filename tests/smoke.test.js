@@ -4402,6 +4402,32 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
   });
   });
 }).then(() => {
+  // ---- story numbers and story-to-story dependencies survive a save/reload
+  // (the Stories sheet's own "#" / "Depends on" columns are asserted in
+  // tests/core.test.js — ExcelJS writes whole rows through `row.values =
+  // [...]`, which silently drops arrays built in this jsdom realm)
+  const dependentId = 'story-dep-probe';
+  window.HeadwayApp.ai.commit('add a dependent story', (s) => {
+    const it = s.items[0];
+    it.stories.push({ id: dependentId, title: 'Dependent story', num: window.RM.nextNum(s), deps: [it.stories[0].num] });
+  });
+  const host0 = state().items[0];
+  ok(host0.stories.length >= 2 && host0.stories.every((x) => x.num > 0),
+    'every story carries a number (' + host0.stories.map((x) => x.num).join(',') + ')');
+  const depNum = host0.stories[0].num;
+  ok(String(window.RM.storyRef(state(), dependentId).st.deps) === String(depNum),
+    'the dependency is stored as a story number');
+  return window.RMExcel.exportWorkbook(state())
+    .then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
+    .then((ab) => window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), 'Deps.xlsx', true))
+    .then(() => {
+      const back = window.RM.storyRef(state(), dependentId);
+      ok(!!back && String(back.st.deps) === String(depNum),
+        'story dependencies survive an xlsx round trip (got ' + (back && back.st.deps) + ')');
+      ok(!!back && back.st.num > 0 && state().items[0].stories[0].num === depNum,
+        'story numbers survive an xlsx round trip');
+    });
+}).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
 }).catch((e) => {
