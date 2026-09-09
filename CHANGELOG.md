@@ -7,6 +7,13 @@ both come from the matching section here. Newest first.
 Format: short sections, bullets, one bold title per notable change —
 `**Feature title**: a short, impactful description and use case.`
 
+## Unreleased
+
+### New
+
+- **Story numbers**: every story has a # from the same pool as features; it shows on every row and card and edits in the story panel.
+- **Story dependencies**: a story can depend on any other story. Add one in the story panel's Dependencies section (by # or name) or drag a story bar's edge circle onto another story; arrows and order warnings work like features; links push to Jira and the Stories sheet carries them.
+
 ## 1.0.12 — 2026-09-09
 
 ### New
