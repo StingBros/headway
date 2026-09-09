@@ -236,6 +236,7 @@
     if (it.priority) o.priority = it.priority;
     if (it.risk) o.risk = it.risk;
     if (it.milestone) o.milestone = true;
+    if (it.type && it.type !== RM.defaultTypeFor(state, 'feature')) o.type = it.type;
     if (it.startDay != null && it.durDays != null) {
       o.start = isoOfDay(meta, it.startDay);
       o.end = spanEndIso(meta, it.startDay, it.durDays);
@@ -366,7 +367,7 @@
     },
     {
       name: 'add_items',
-      description: 'Create features in a phase. Each item: feature (title, required), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps (feature numbers), start (ISO date), durDays or end (ISO date), deadline (ISO), milestone (boolean, zero duration; milestones ignore size and priority), headcount, teamType, stories ([{title, description, ac, size, priority, done}]). Returns the new feature numbers.',
+      description: 'Create features in a phase. Each item: feature (title, required), type (Feature, Bug, Task, … — a type label or key from Setup → Hierarchy), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps (feature numbers), start (ISO date), durDays or end (ISO date), deadline (ISO), milestone (boolean, zero duration; milestones ignore size and priority), headcount, teamType, stories ([{title, type, description, ac, size, priority, done}]). Returns the new feature numbers.',
       parameters: {
         type: 'object',
         properties: {
@@ -378,7 +379,7 @@
     },
     {
       name: 'update_items',
-      description: 'Change features or stories. Each update: num (feature number, required), story (story id, to change that story instead), fields (object merged into the target). Feature fields: feature, workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps, start (ISO date or null to unschedule), durDays, end (ISO date), deadline, milestone, headcount, teamType, locked, done, phase (name or id), assignees (team ids), custom ({columnKey: text}), jiraKey, addStories ([{title, description, ac, size, priority}] appends stories). Story fields: title, description, ac, size, priority, risk, done, start, durDays, end, deadline, assignees. Use delete: true to remove the target.',
+      description: 'Change features or stories. Each update: num (feature number, required), story (story id, to change that story instead), fields (object merged into the target). Feature fields: feature, type (Feature, Bug, Task, … — a type label or key from Setup → Hierarchy), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps, start (ISO date or null to unschedule), durDays, end (ISO date), deadline, milestone, headcount, teamType, locked, done, phase (name or id), assignees (team ids), custom ({columnKey: text}), jiraKey, addStories ([{title, type, description, ac, size, priority}] appends stories). Story fields: title, type, description, ac, size, priority, risk, done, start, durDays, end, deadline, assignees. Use delete: true to remove the target.',
       parameters: {
         type: 'object',
         properties: {
@@ -390,7 +391,7 @@
     },
     {
       name: 'update_project',
-      description: 'Edit any other part of the document with path operations, e.g. project settings (meta/title, meta/vision, meta/timelineStart, meta/endDate, meta/weeksPerSprint, meta/sprintAnchor, meta/sprintAnchorNum, meta/workDays, meta/sizeScheme, meta/sizeDays/M, meta/priorityScheme, meta/storyPriorityScheme, meta/riskScheme, meta/capacityEnabled, meta/holidayRanges (push {name,start,end}), meta/scopeCols (push {key:"c<slug>", label}), meta/jira), phases (phases/@id/name, phases/- to append {name, bucket}), team (team/@id/rate, team/- to append {name, role, type, workstreams, capacity, rate, cost}), teamTypes, wsColors/<name>, epicIcons/<name> (lucide icon), epicJira/<name>, wsOrder. Path segments: #num = feature by number, @id = element by id, digits = index, "-" = append. Ops: set (path, value), delete (path), push (path, value). Prefer add_items / update_items for features and stories.',
+      description: 'Edit any other part of the document with path operations, e.g. project settings (meta/title, meta/vision, meta/timelineStart, meta/endDate, meta/weeksPerSprint, meta/sprintAnchor, meta/sprintAnchorNum, meta/workDays, meta/sizeScheme, meta/sizeDays/M, meta/priorityScheme, meta/storyPriorityScheme, meta/riskScheme, meta/capacityEnabled, meta/holidayRanges (push {name,start,end}), meta/scopeCols (push {key:"c<slug>", label}), meta/jira, meta/itemTypes (array of {key,label,icon,jira}), meta/hierarchy/levels/<i>/types, meta/hierarchy/anyTypeAnyLevel, epicTypes/<name>), phases (phases/@id/name, phases/- to append {name, bucket}), team (team/@id/rate, team/- to append {name, role, type, workstreams, capacity, rate, cost}), teamTypes, wsColors/<name>, epicIcons/<name> (lucide icon), epicJira/<name>, wsOrder. Path segments: #num = feature by number, @id = element by id, digits = index, "-" = append. Ops: set (path, value), delete (path), push (path, value). Prefer add_items / update_items for features and stories.',
       parameters: {
         type: 'object',
         properties: {
@@ -407,7 +408,7 @@
     },
     {
       name: 'sync_jira',
-      description: 'Sync the project with Jira Cloud (needs the Jira connection on this machine and a project key in Setup → Jira; get_project summary shows jira.canSync). Creates issues for features (and stories, when that option is on) that have no Jira key, updates linked issues from Headway, adds "blocks" links for dependencies, and reads Done state back from Jira. Call with dryRun: true first to see what would change, and confirm with the user before applying. Adjust the mapping (issue types, epics, stories) through update_project on meta/jira.',
+      description: 'Sync the project with Jira Cloud (needs the Jira connection on this machine and a project key in Setup → Jira; get_project summary shows jira.canSync). Creates issues for features (and stories, when that option is on) that have no Jira key, updates linked issues from Headway, adds "blocks" links for dependencies, and reads Done state back from Jira. Call with dryRun: true first to see what would change, and confirm with the user before applying. Adjust the mapping (epics, stories) through update_project on meta/jira, and issue types through meta/itemTypes.',
       parameters: { type: 'object', properties: { dryRun: { type: 'boolean', description: 'true = preview only' } } }
     },
     {
@@ -460,6 +461,12 @@
       } else if (k === 'deps') {
         target.deps = (Array.isArray(v) ? v : [v]).map(Number).filter(function (n) { return !isNaN(n); });
         changed.push('deps');
+      } else if (k === 'type') {
+        var want = String(v).trim().toLowerCase();
+        var hit = RM.itemTypes({ meta: meta }).filter(function (t) { return t.key.toLowerCase() === want || t.label.toLowerCase() === want; })[0];
+        if (!hit) throw new Error('unknown type "' + v + '"');
+        target.type = hit.key;
+        changed.push('type');
       } else if ((k === 'stories' || k === 'addStories') && !isStory) {
         var made = (Array.isArray(v) ? v : []).map(function (s) {
           var st = { id: RM.uid('s'), title: '', done: false };
@@ -684,7 +691,7 @@
     '## Model',
     '- Time is counted in working days from meta.timelineStart (weekends and non-work days do not exist in the index). Holidays stretch bars. A sprint = meta.weeksPerSprint weeks; sprint numbers count from meta.sprintAnchor / sprintAnchorNum. Tools accept and report ISO dates; day indexes appear in raw sections.',
     '- Phases hold features (state.phases; each item has phaseId). bucket=true phases are backlog shelves (Next / Future).',
-    '- Features (state.items) have num (the user-facing #id), feature (title), workstream, epic, size, risk, priority, deps (numbers of features that must finish first), startDay/durDays (null = unscheduled), deadline, milestone, locked, done, headcount, teamType, assignees (team ids), rich-text fields (description, enables, outOfScope, notes, extDeps — plain text is fine when writing), custom column values, jiraKey, and stories.',
+    '- Features (state.items) have num (the user-facing #id), feature (title), workstream, epic, size, risk, priority, deps (numbers of features that must finish first), startDay/durDays (null = unscheduled), deadline, milestone, locked, done, headcount, teamType, assignees (team ids), rich-text fields (description, enables, outOfScope, notes, extDeps — plain text is fine when writing), custom column values, jiraKey, and stories, type (Feature / Bug / Task …; types and the per-level allowed list live in meta.itemTypes and meta.hierarchy, and each type\'s jira field is the Jira issue type used by sync).',
     '- Stories belong to a feature: id, title, done, size, priority, risk, description, ac (acceptance criteria — a built-in column shown on stories by default), optional own startDay/durDays, deadline, assignees, jiraKey.',
     '- Sizing schemes: feature sizes (t-shirt XS–XL with working days per size in meta.sizeDays, or story points), story sizes, risk (none / L-M-H …), priority (none, MoSCoW M/S/C/W, levels C/H/M/L, RICE). Values are validated against the active scheme; read the summary before setting them.',
     '- Team (state.team): people or seats with role, rate-card type, workstreams, capacity (heads at 40 h; 0.5 = half-time), hourly rate and cost, weekHours overrides. Capacity checks only run when meta.capacityEnabled.',

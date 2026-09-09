@@ -1250,6 +1250,104 @@ section('apps switch');
     'appEnabled: off app, forced Planning, and non-apps always reachable');
 }
 
+section('item types & hierarchy');
+{
+  var sT = mkState([
+    { num: 1, feature: 'A', epic: 'E1', stories: [{ id: 'sa', title: 'x' }, { id: 'sb', title: 'y', type: 'bug' }] },
+    { num: 2, feature: 'B', type: 'bug' },
+    { num: 3, feature: 'C', type: 'nope' }
+  ]);
+  eq(sT.meta.itemTypes.map(function (t) { return t.key; }), ['epic', 'feature', 'bug', 'task', 'story', 'subtask'], 'default types seeded');
+  eq(sT.meta.hierarchy.levels.map(function (l) { return l.key; }), ['epic', 'feature', 'story'], 'three fixed levels');
+  eq(sT.meta.hierarchy.levels[1].types, ['feature', 'bug', 'task'], 'feature level default types');
+  eq(sT.meta.hierarchy.anyTypeAnyLevel, false, 'switch off by default');
+  eq(sT.items[0].type, 'feature', 'missing item type -> level default');
+  eq(sT.items[1].type, 'bug', 'known item type kept');
+  eq(sT.items[2].type, 'feature', 'unknown item type -> level default');
+  eq(sT.items[0].stories[0].type, 'story', 'missing story type -> level default');
+  eq(sT.items[0].stories[1].type, 'bug', 'story type kept');
+  eq(sT.epicTypes, {}, 'epicTypes seeded empty');
+  eq(RM.typeOf(sT, 'E1', 'epic').key, 'epic', 'epic without a stored type resolves to epic');
+  eq(RM.levelLabel(sT, 'feature'), 'Feature', 'level label');
+  eq(RM.levelLabel(sT, 'story', true), 'Stories', 'plural label');
+  eq(RM.typesFor(sT, 'story').map(function (t) { return t.key; }), ['story', 'subtask', 'bug'], 'allowed types at story level');
+  eq(RM.defaultTypeFor(sT, 'epic'), 'epic', 'default type for epic level');
+  eq(RM.jiraTypeName(sT, 'story'), 'Sub-task', 'story type maps to Sub-task by default');
+  eq(RM.typeOf(sT, sT.items[1], 'feature').icon, 'bug', 'typeOf returns the record');
+
+  // a disallowed stored type survives normalize
+  var sT2 = mkState([{ num: 1, feature: 'A', type: 'subtask' }]);
+  eq(sT2.items[0].type, 'subtask', 'disallowed type kept on normalize');
+  // the switch opens every type at every level
+  sT2.meta.hierarchy.anyTypeAnyLevel = true;
+  eq(RM.typesFor(sT2, 'epic').length, 6, 'any type any level lists all types');
+
+  // legacy Jira names migrate into the type records once
+  var sT3 = mkState([{ num: 1, feature: 'A' }], { meta: Object.assign(JSON.parse(JSON.stringify(META)), { jira: { epicType: 'Initiative', featureType: 'Task', storyType: 'Subtask' } }) });
+  eq(RM.jiraTypeName(sT3, 'epic'), 'Initiative', 'legacy epicType migrates');
+  eq(RM.jiraTypeName(sT3, 'feature'), 'Task', 'legacy featureType migrates');
+  eq(RM.jiraTypeName(sT3, 'story'), 'Subtask', 'legacy storyType migrates');
+  sT3.meta.jira.featureType = 'Bug';
+  eq(RM.jiraTypeName(RM.normalizeState(sT3), 'feature'), 'Task', 'legacy names are read only when itemTypes is absent');
+
+  // custom labels and lists round-trip; empty level list falls back
+  var sT4 = mkState([{ num: 1, feature: 'A' }], { meta: Object.assign(JSON.parse(JSON.stringify(META)), {
+    itemTypes: [{ key: 'epic', label: 'Theme', icon: 'layers', jira: 'Epic' }, { key: 'feature', label: 'Feature', icon: 'rows-3', jira: 'Story' }, { key: 'story', label: 'Story', icon: 'list-tree', jira: 'Sub-task' }],
+    hierarchy: { levels: [{ key: 'feature', label: 'Capability', types: ['feature', 'ghost'] }, { key: 'story', label: 'Task', types: [] }], anyTypeAnyLevel: true } }) });
+  eq(sT4.meta.hierarchy.levels.map(function (l) { return l.label; }), ['Epic', 'Capability', 'Task'], 'missing level gets default label, order fixed');
+  eq(sT4.meta.hierarchy.levels[1].types, ['feature'], 'unknown type keys are dropped from a level');
+  eq(sT4.meta.hierarchy.levels[2].types, ['story'], 'empty level list falls back to defaults filtered to existing types');
+  eq(sT4.meta.hierarchy.anyTypeAnyLevel, true, 'switch round-trips');
+  eq(RM.levelLabel(sT4, 'story', true), 'Tasks', 'plural of a custom label');
+}
+
+section('item type mutations & validation');
+{
+  var sM = mkState([
+    { num: 1, feature: 'A', type: 'bug', epic: 'E', stories: [{ id: 's1', title: 'x', type: 'bug' }] }
+  ]);
+  var nk = RM.addItemType(sM, 'Spike', 'zap', 'Spike');
+  eq(nk, 'spike', 'addItemType slugs the label into a key');
+  eq(RM.addItemType(sM, 'Spike', 'zap', 'Spike'), 'spike-2', 'duplicate labels get a suffixed key');
+  ok(RM.setTypeAllowed(sM, 'feature', 'spike', true), 'allow a type at a level');
+  eq(RM.levelOf(sM, 'feature').types.slice(-1)[0], 'spike', 'allowed list grows');
+  ok(!RM.setTypeAllowed(sM, 'epic', 'epic', false), 'cannot remove the last type of a level');
+  ok(RM.setTypeAllowed(sM, 'feature', 'spike', false), 'disallow again');
+  RM.renameItemType(sM, 'spike', 'Research');
+  eq(RM.itemType(sM, 'spike').label, 'Research', 'rename keeps the key');
+  RM.setItemTypeJira(sM, 'spike', 'Research task');
+  eq(RM.jiraTypeName(sM, 'spike'), 'Research task', 'jira name edit');
+  RM.setItemTypeIcon(sM, 'spike', 'flask-conical');
+  eq(RM.itemType(sM, 'spike').icon, 'flask-conical', 'icon edit');
+  RM.setLevelLabel(sM, 'story', 'Task');
+  eq(RM.levelLabel(sM, 'story'), 'Task', 'level label edit');
+  ok(!RM.removeItemType(sM, 'epic'), 'cannot remove the only type of a level');
+  ok(RM.removeItemType(sM, 'bug'), 'remove a type');
+  eq(sM.items[0].type, 'feature', 'items of the removed type fall back to the level default');
+  eq(sM.items[0].stories[0].type, 'story', 'stories too');
+  eq(RM.levelOf(sM, 'story').types, ['story', 'subtask'], 'removed key leaves every level list');
+  ok(!RM.itemType(sM, 'bug'), 'record gone');
+
+  var sV2 = mkState([{ num: 1, feature: 'A', type: 'subtask', epic: 'E', stories: [{ id: 's1', title: 'x', type: 'task' }] }], { epicTypes: { E: 'feature' } });
+  var vv = RM.validate(sV2);
+  ok((vv.byItem[sV2.items[0].id] || []).some(function (f) { return f.code === 'TYPE_LEVEL' && /Subtask/.test(f.msg); }), 'item with a disallowed type warns');
+  ok(vv.global.some(function (f) { return f.code === 'TYPE_LEVEL' && /story/i.test(f.msg) && /Task/.test(f.msg); }), 'story with a disallowed type warns globally');
+  ok(vv.global.some(function (f) { return f.code === 'TYPE_LEVEL' && /Epic/.test(f.msg) && /Feature/.test(f.msg); }), 'epic with a disallowed type warns globally');
+  RM.setAnyTypeAnyLevel(sV2, true);
+  var vv2 = RM.validate(sV2);
+  ok(!(vv2.byItem[sV2.items[0].id] || []).some(function (f) { return f.code === 'TYPE_LEVEL'; }) && !vv2.global.some(function (f) { return f.code === 'TYPE_LEVEL'; }), 'switch on silences TYPE_LEVEL');
+
+  // TYPE_LEVEL must resolve missing/raw type fields (e.g. items pushed without
+  // a `type` after commit(), before the next normalizeState) via RM.typeOf,
+  // not compare the raw field directly.
+  var sV3 = mkState([{ num: 1, feature: 'A', epic: 'E', stories: [{ id: 's1', title: 'x' }] }], { epicTypes: { E: 'epic' } });
+  delete sV3.items[0].type;
+  delete sV3.items[0].stories[0].type;
+  var vv3 = RM.validate(sV3);
+  ok(!(vv3.byItem[sV3.items[0].id] || []).some(function (f) { return f.code === 'TYPE_LEVEL'; }), 'item pushed with no type resolves via RM.typeOf and warns nothing');
+  ok(!vv3.global.some(function (f) { return f.code === 'TYPE_LEVEL'; }), 'story pushed with no type resolves via RM.typeOf and warns nothing');
+}
+
   console.log('\n' + passed + ' passed, ' + failed + ' failed' + (skipped ? ', ' + skipped + ' skipped' : ''));
   process.exit(failed ? 1 : 0);
 }
@@ -1491,8 +1589,8 @@ var sJc = mkState([
   { num: 1, feature: 'Login page', epic: 'Login', workstream: 'Product', size: 'M',
     startDay: 0, durDays: 5, deadline: '2026-09-04', jiraKey: 'HW-12',
     description: '<p>Hi <b>there</b></p>', enables: 'Checkout', notes: '',
-    stories: [{ title: 's1', done: true }, { title: 's2', jiraKey: 'HW-13' }] },
-  { num: 2, feature: 'Search, "fast"', deps: [1], phaseId: 'p2' },
+    stories: [{ title: 's1', done: true }, { title: 's2', jiraKey: 'HW-13', type: 'bug' }] },
+  { num: 2, feature: 'Search, "fast"', deps: [1], phaseId: 'p2', type: 'bug' },
   { num: 3, feature: 'Orphan', deps: [2] }
 ], { epicJira: { Login: 'HW-1' } });
 eq(RMJira.fileName(sJc), 'T-jira.csv', 'jira csv filename');
@@ -1500,7 +1598,8 @@ var jr = RMJira.rows(sJc, { features: true, stories: false });
 eq(jr.length, 3, 'features only: one row per feature');
 var r1 = jr[0];
 eq(r1['Summary'], 'Login page', 'summary is the feature name');
-eq(r1['Issue Type'], 'Story', 'feature issue type defaults to Story');
+eq(r1['Issue Type'], 'Story', 'feature type Feature maps to Jira Story');
+eq(jr[1]['Issue Type'], 'Bug', 'a Bug feature maps to Jira Bug');
 eq(r1['Parent'], 'HW-1', 'parent is the epic jira key');
 eq(r1['Labels'], 'ws-product phase-alpha size-m', 'labels are slugged workstream, phase and size');
 eq(r1['Due Date'], '2026-09-04', 'due date is the deadline');
@@ -1519,12 +1618,13 @@ eq(r2['Blocked By'], 'HW-12', 'dependencies with keys list the key');
 eq(r2['Start Date'], '', 'unscheduled: blank dates');
 eq(jr[2]['Blocked By'], '', 'dependencies without keys are left out');
 
-var jrs = RMJira.rows(sJc, { features: true, stories: true, featureType: 'Task', storyType: 'Sub-task' });
+var jrs = RMJira.rows(sJc, { features: true, stories: true });
 eq(jrs.length, 5, 'features and stories: a row per story too');
-eq(jrs[0]['Issue Type'], 'Task', 'custom feature issue type');
+eq(jrs[0]['Issue Type'], 'Story', 'feature row type from the type record');
 ok(jrs[0]['Description'].indexOf('[x]') === -1, 'checklist omitted when stories are rows');
 eq(jrs[1]['Summary'], 's1', 'story row summary');
-eq(jrs[1]['Issue Type'], 'Sub-task', 'story issue type');
+eq(jrs[1]['Issue Type'], 'Sub-task', 'story issue type from the type record');
+eq(jrs[2]['Issue Type'], 'Bug', 'a Bug story maps to Jira Bug');
 eq(jrs[1]['Parent'], 'HW-12', 'story parents to the feature key');
 eq(jrs[1]['Labels'], 'feature-login-page ws-product phase-alpha', 'story labels name the feature');
 eq(jrs[2]['Jira Key'], 'HW-13', 'story jira key');

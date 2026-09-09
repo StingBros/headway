@@ -300,6 +300,7 @@
       push('scope', lbl + ' — Phase', phName(a, p.phaseId), phName(b, it.phaseId));
       push('scope', lbl + ' — Workstream', p.workstream, it.workstream);
       push('scope', lbl + ' — Epic', p.epic, it.epic);
+      push('scope', lbl + ' — Type', RM.typeOf(a, p, 'feature').label, RM.typeOf(b, it, 'feature').label);
       push('scope', lbl + ' — Size', p.size, it.size);
       push('scope', lbl + ' — ' + RM.riskColLabel(b), p.risk, it.risk);
       push('scope', lbl + ' — Priority', p.priority, it.priority);
@@ -325,6 +326,7 @@
         push('scope', sl + ' — Title', sp.title, st.title);
         push('scope', sl + ' — Description', txt(sp.description), txt(st.description));
         push('scope', sl + ' — Size', sp.size, st.size);
+        push('scope', sl + ' — Type', RM.typeOf(a, sp, 'story').label, RM.typeOf(b, st, 'story').label);
         push('timeline', sl + ' — Start', dDate(sp.startDay), dDate(st.startDay));
         push('timeline', sl + ' — Duration', dWeeks(sp.durDays), dWeeks(st.durDays));
         push('timeline', sl + ' — Deadline', sp.deadline, st.deadline);
@@ -405,6 +407,7 @@
     genericDiff('setup', 'Setup — ', a.meta, b.meta);
     genericDiff('budget', 'Rate card — ', (a.meta || {}).rateCard, (b.meta || {}).rateCard);
     genericDiff('setup', 'Workstream color — ', a.wsColors, b.wsColors);
+    genericDiff('setup', 'Epic type — ', a.epicTypes, b.epicTypes);
     push('setup', 'Roles (rate card)', (a.teamTypes || []).join(', '), (b.teamTypes || []).join(', '));
     // options — renames of the active option and creates/renames/closes of
     // parked ones land in the audit trail (switching bypasses history)
@@ -911,10 +914,13 @@
 
   // ---- detail level (Scoping + Planning): how deep the row grid goes.
   // feature: features, stories tucked away · story: every story row open
-  var DM_MODES = [
-    ['feature', 'Feature', 'rows-3'],
-    ['story', 'Story', 'list-tree']
-  ];
+  function lvl(kind, plural) { return RM.levelLabel(state, kind, plural); }
+  function dmModes() {
+    return [
+      ['feature', lvl('feature'), 'rows-3'],
+      ['story', lvl('story'), 'list-tree']
+    ];
+  }
   function setDetailMode(mode) {
     detailMode = mode;
     // choosing the Feature level tucks every per-item story expansion away
@@ -922,7 +928,6 @@
     saveLocal();
     render();
   }
-  var LEVEL_MODES = DM_MODES;
   // ONE level dropdown for every view: same markup (icon · label · caret),
   // same title, same place — the far left of the view's toolbar
   function levelBtnInner(modes, current) {
@@ -945,12 +950,12 @@
   function syncDetailBtn() {
     var b = $('#detailBtn');
     if (!b) return;
-    b.innerHTML = levelBtnInner(DM_MODES, detailMode);
-    b.title = levelBtnTitle(DM_MODES, detailMode);
+    b.innerHTML = levelBtnInner(dmModes(), detailMode);
+    b.title = levelBtnTitle(dmModes(), detailMode);
     if (window.lucide) lucide.createIcons();
   }
   $('#detailBtn').addEventListener('click', function () {
-    openLevelMenu($('#detailBtn'), DM_MODES, detailMode, setDetailMode);
+    openLevelMenu($('#detailBtn'), dmModes(), detailMode, setDetailMode);
   });
 
   // ------------------------------------------------------------ options
@@ -1251,7 +1256,10 @@
     return allScopeCols().map(function (c) { return scopeColDef(c[0]); })
       .filter(function (c) { return c && RM.scopeColShows(c, kind); });
   }
-  var SCOPE_SCOPE_LABELS = { both: 'Features and stories', feature: 'Features only', story: 'Stories only' };
+  function scopeScopeLabel(key) {
+    return key === 'both' ? lvl('feature', true) + ' and ' + lvl('story', true).toLowerCase() :
+      key === 'feature' ? lvl('feature', true) + ' only' : lvl('story', true) + ' only';
+  }
   // milestone marker shapes: lucide icon + panel glyph per style
   var MS_STYLE_ICONS = { diamond: 'gem', star: 'star', circle: 'circle' };
   var MS_STYLE_GLYPHS = { diamond: '◆', star: '★', circle: '●' };
@@ -1268,6 +1276,53 @@
       return { icon: MS_STYLE_ICONS[sname], label: msStyleLabel(sname) + ' marker',
         checked: RM.msStyleOf(it) === sname, fn: function () { setMsStyle(itemId, sname); } };
     });
+  }
+  function setItemType(itemId, key) {
+    commit('type', function (s) { var t = RM.itemById(s, itemId); if (t && RM.itemType(s, key)) t.type = key; });
+  }
+  function setStoryType(itemId, storyId, key) {
+    commit('story type', function (s) {
+      var t = RM.itemById(s, itemId); if (!t) return;
+      t.stories.forEach(function (st) { if (st.id === storyId && RM.itemType(s, key)) st.type = key; });
+    });
+  }
+  // delete-if-default / set-otherwise: shared by setEpicType and the epic
+  // edit modal's save handler
+  function applyEpicType(s, name, key) {
+    if (!RM.itemType(s, key) || key === RM.defaultTypeFor(s, 'epic')) delete s.epicTypes[name];
+    else s.epicTypes[name] = key;
+  }
+  function setEpicType(name, key) {
+    commit('epic type', function (s) { applyEpicType(s, name, key); });
+  }
+  // dropdown / submenu entries for a level's types; the current type is
+  // listed even when it is no longer allowed there
+  function typeMenuItems(kind, currentKey, onPick) {
+    var list = RM.typesFor(state, kind).slice();
+    var cur = RM.itemType(state, currentKey);
+    if (cur && !list.some(function (t) { return t.key === cur.key; })) list.push(cur);
+    var allowed = RM.typesFor(state, kind).map(function (t) { return t.key; });
+    return list.map(function (t) {
+      var off = allowed.indexOf(t.key) === -1;
+      return { icon: t.icon, label: esc(t.label) + (off ? ' (not allowed here)' : ''), checked: t.key === currentKey, fn: function () { onPick(t.key); } };
+    });
+  }
+  function typeChipHtml(act, kind, obj) {
+    var t = RM.typeOf(state, obj, kind);
+    return '<button class="p-typechip" data-act="' + act + '" title="Type"><i data-lucide="' + esc(t.icon) + '"></i> ' + esc(t.label) + '</button>';
+  }
+  function typeIconHtml(obj, kind) {
+    var t = RM.typeOf(state, obj, kind);
+    if (t.key === RM.defaultTypeFor(state, kind)) return '';
+    return '<span class="r-type" title="' + esc(t.label) + '"><i data-lucide="' + esc(t.icon) + '"></i></span>';
+  }
+  function typeIconMenu(anchor, key) {
+    var t = RM.itemType(state, key);
+    openDropdown(anchor, EPIC_ICONS.map(function (ic) {
+      return { icon: ic, label: ic, checked: !!t && t.icon === ic, fn: function () {
+        commit('type icon', function (s2) { RM.setItemTypeIcon(s2, key, ic); });
+      } };
+    }));
   }
 
   // panel sections: key -> collapsed override (persisted in UI_KEY);
@@ -1809,7 +1864,7 @@
     if (key === 'pri') {
       if (!RM.priorityEnabled(state, 'story')) return '';
       return '<span class="r-risk pri' + (st.priority ? ' has-risk' : '') + priTierClass(st.priority, 'story') + '" tabindex="0" role="button" ' + attr + '="st-pri" title="' +
-        esc('Story priority' + (st.priority ? '\nNow: ' + priorityValueLabel(st.priority, 'story') : '')) + '">' +
+        esc(lvl('story') + ' priority' + (st.priority ? '\nNow: ' + priorityValueLabel(st.priority, 'story') : '')) + '">' +
         (st.priority ? (RM.prioritySchemeOf(state, 'story') === 'levels' ? levelGlyph(st.priority) : esc(st.priority)) : blank) + '</span>';
     }
     if (key === 'risk') {
@@ -1966,9 +2021,10 @@
             ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-prstact'); }).join('') +
             '</div>';
         }).join('') +
-        '<button class="pr-st-add" data-prstadd="1"><i data-lucide="plus"></i>Add story</button></div>'
+        '<button class="pr-st-add" data-prstadd="1"><i data-lucide="plus"></i>' + esc('Add ' + lvl('story')) + '</button></div>'
       : '';
     return '<div class="sp-card pr-card" data-prcard="' + it.id + '" style="--ws-c:#' + wsColor + '">' +
+      typeIconHtml(it, 'feature') +
       '<input class="pr-title" data-prf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
       fields + stories +
       '<div class="pr-chips">' +
@@ -2061,6 +2117,7 @@
       '<div class="pr-stfeat" title="Feature"><span class="r-num">#' + it.num + '</span>' +
       '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' +
       '<span class="pr-stfeatname">' + esc(it.feature || '(untitled)') + '</span></div>' +
+      typeIconHtml(st, 'story') +
       '<input class="pr-title pr-st-title" data-prstf="title" placeholder="Story" value="' + esc(st.title || '') + '">' +
       '<div class="pr-chips">' + chips + '</div></div>';
   }
@@ -2192,7 +2249,7 @@
       : '';
     host.innerHTML = '<div class="sp-page">' +
       '<div class="pr-bar">' +
-      levelBtnHtml('data-prdd="level"', LEVEL_MODES, prioLevel) +
+      levelBtnHtml('data-prdd="level"', dmModes(), prioLevel) +
       '<span class="filter-wrap pr-filter"><i data-lucide="search" class="filter-ico" aria-hidden="true"></i>' +
       '<input id="prFilter" type="search" placeholder="Filter cards" aria-label="Filter cards" value="' + esc(filterText) + '">' +
       '<kbd class="kbd filter-kbd" aria-hidden="true">⌘F</kbd></span>' +
@@ -2289,7 +2346,7 @@
     if (dd) {
       var kind = dd.dataset.prdd;
       if (kind === 'level') {
-        openLevelMenu(dd, LEVEL_MODES, prioLevel, function (mode) {
+        openLevelMenu(dd, dmModes(), prioLevel, function (mode) {
           if (prioLevel !== mode) { prioLevel = mode; saveLocal(); render(); }
         });
       } else if (kind === 'group') {
@@ -2618,6 +2675,7 @@
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
       '<span class="r-num">#' + it.num + '</span>' +
       '<span class="r-dot' + (it.milestone ? ' msdot ' + RM.msStyleOf(it) : '') + '" style="background:' + color + '"></span>' +
+      typeIconHtml(it, 'feature') +
       '<input class="spv-title" data-spf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
       sprTag(it, num) +
       '<span class="spv-chip" tabindex="0" role="button" data-spact="epic" title="Epic">' +
@@ -2632,6 +2690,7 @@
     return '<div class="spv-row spv-st' + (isSel(it.id) && selStory === st.id ? ' sel' : '') + (st.done ? ' done' : '') +
       '" data-spid="' + it.id + '" data-spst="' + st.id + '" data-spsec="' + sprSecKey(num) + '">' +
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
+      typeIconHtml(st, 'story') +
       '<input class="spv-title" data-spf="story" placeholder="Story" value="' + esc(st.title || '') + '">' +
       (own ? sprTag(st, num) : (num == null ? '' : '<span class="spv-tag" title="No timeline of its own">with feature</span>')) +
       '<span class="spv-est">' + ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-spact'); }).join('') + '</span>' +
@@ -2657,7 +2716,7 @@
       (sec.dates ? '<span class="spv-secdates">' + esc(sec.dates) + '</span>' : '') +
       '<span class="pr-lanect">' + sec.count + '</span></div>' +
       '<div class="spv-rows">' + (body || '<div class="spv-empty">Nothing here' + (sprFilterOn() ? ' matches' : '') + '. Drop a row to move it into this sprint.</div>') + '</div>' +
-      (sprLevel === 'feature' ? '<button class="spv-add" data-spadd="' + sec.key + '"><i data-lucide="plus"></i>Add feature</button>' : '') +
+      (sprLevel === 'feature' ? '<button class="spv-add" data-spadd="' + sec.key + '"><i data-lucide="plus"></i>' + esc('Add ' + lvl('feature')) + '</button>' : '') +
       '</section>';
   }
   function renderSprintPage() {
@@ -2695,7 +2754,7 @@
     host.innerHTML = '<div class="spv">' +
       '<aside class="spv-side"><div class="spv-sidehd">Sprints</div>' + side + '</aside>' +
       '<div class="spv-main" id="spvMain"><div class="pr-bar">' +
-      levelBtnHtml('data-spdd="level"', LEVEL_MODES, sprLevel) +
+      levelBtnHtml('data-spdd="level"', dmModes(), sprLevel) +
       '<span class="filter-wrap pr-filter"><i data-lucide="search" class="filter-ico" aria-hidden="true"></i>' +
       '<input id="spFilter" type="search" placeholder="Filter rows" aria-label="Filter rows" value="' + esc(filterText) + '">' +
       '<kbd class="kbd filter-kbd" aria-hidden="true">⌘F</kbd></span>' +
@@ -2788,7 +2847,7 @@
     }
     var lv = e.target.closest('[data-spdd="level"]');
     if (lv) {
-      openLevelMenu(lv, LEVEL_MODES, sprLevel, function (mode) {
+      openLevelMenu(lv, dmModes(), sprLevel, function (mode) {
         if (sprLevel !== mode) { sprLevel = mode; saveLocal(); render(); }
       });
       return;
@@ -3431,7 +3490,7 @@
         }
         if (!colShowsOn(c[0], 'feature')) {
           cells.push('<div class="sc-cell sc-na" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) +
-            'px" title="Stories only"></div>');
+            'px" title="' + esc(scopeScopeLabel('story')) + '"></div>');
           return;
         }
         // every scope column holds rich text — edit it in place as such
@@ -3462,6 +3521,7 @@
       '<div class="r-main">' +
       (it.locked ? '<span class="r-lock"><i data-lucide="lock"></i></span>' : '') +
       (it.done ? '<span class="r-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
+      typeIconHtml(it, 'feature') +
       (view === 'scoping'
         // scoping: the title is a full-height editable cell in the tab ring,
         // top-aligned and wrapping like every other cell
@@ -3502,6 +3562,7 @@
           '" data-story="' + st.id + '" data-id="' + it.id + '">' +
           '<div class="row-left"><span class="st-pad"><span class="st-grip" title="Drag to reorder or move to another feature"><i data-lucide="grip-vertical"></i></span></span>' +
           (st.done ? '<span class="r-doneck st-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
+          typeIconHtml(st, 'story') +
           (view === 'scoping'
             // scoping: the story title edits in place like the feature titles
             ? '<div class="st-title st-name' + (st.done ? ' done' : '') + '" contenteditable="true" spellcheck="false" aria-label="Story title">' + esc(st.title) + '</div>'
@@ -3525,7 +3586,7 @@
                 if (!isFixedColKey(key)) {
                   if (!colShowsOn(key, 'story')) {
                     return '<div class="sc-cell sc-na" data-col="' + key + '" style="width:' + w +
-                      'px" title="Features only"></div>';
+                      'px" title="' + esc(scopeScopeLabel('feature')) + '"></div>';
                   }
                   var sval = RM.storyScopeValue(st, key);
                   return '<div class="sc-cell" data-col="' + key + '" style="width:' + w + 'px">' +
@@ -3584,7 +3645,7 @@
         '<div class="row story story-add" data-id="' + it.id + '">' +
         '<div class="row-left"><span class="st-pad"></span>' +
         '<i data-lucide="plus" class="st-add-ico"></i>' +
-        '<input class="st-add-input" data-act="st-add" placeholder="Add story…">' +
+        '<input class="st-add-input" data-act="st-add" placeholder="Add ' + esc(lvl('story').toLowerCase()) + '…">' +
         '</div><div class="row-lane"></div></div>');
     }
   }
@@ -3602,7 +3663,7 @@
         '<span class="band-name">' + esc(p.name) + '</span>' +
         '<span class="band-count">' + items.length + '</span>' +
         (p.bucket ? '<span class="band-bucket-tag">backlog</span>' : '') +
-        '<button class="band-add" data-act="phase-additem" title="Add a feature to this phase">+ feature</button>' +
+        '<button class="band-add" data-act="phase-additem" title="' + esc('Add a ' + lvl('feature').toLowerCase() + ' to this phase') + '">+ ' + esc(lvl('feature').toLowerCase()) + '</button>' +
         '<button class="band-edit" data-act="phase-edit" title="Edit phase">edit</button>' +
         '</div>' +
         '<div class="row-lane">' + bandLane + '</div>' +
@@ -3650,7 +3711,7 @@
           (group && group.epic != null ? ' data-epic="' + esc(group.epic) + '"' : '') +
           (group && group.workstream != null ? ' data-ws="' + esc(group.workstream) + '"' : '') +
           '>' +
-          '<div class="row-left" title="Add a feature to ' + esc(where) + '"><span class="addrow-lab"><i data-lucide="plus"></i> Add feature</span></div>' +
+          '<div class="row-left" title="Add a ' + esc(lvl('feature').toLowerCase()) + ' to ' + esc(where) + '"><span class="addrow-lab"><i data-lucide="plus"></i> ' + esc('Add ' + lvl('feature')) + '</span></div>' +
           '<div class="row-lane"></div></div>';
       }
       var wsKey = null;
@@ -4035,10 +4096,11 @@
       '<div id="panelRz"></div>' +
       '<div class="p-top"><span class="p-lead"><span class="p-num">#<input class="p-num-edit" data-f="num" value="' + it.num +
       '" style="width:' + (String(it.num).length + 1.6) + 'ch" title="Item #"></span>' +
+      typeChipHtml('itype', 'feature', it) +
       (it.milestone ? '<button class="p-mschip" data-act="msstyle" title="Milestone">' +
         MS_STYLE_GLYPHS[RM.msStyleOf(it)] + ' Milestone · ' + msStyleLabel(RM.msStyleOf(it)) + '</button>' : '') +
       '</span><button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
-      '<textarea class="p-name" data-f="feature" rows="1" placeholder="Feature name">' + esc(it.feature) + '</textarea>' +
+      '<textarea class="p-name" data-f="feature" rows="1" placeholder="' + esc(lvl('feature') + ' name') + '">' + esc(it.feature) + '</textarea>' +
 
       sec('fields', 'Fields', '', fieldEds) +
 
@@ -4091,9 +4153,9 @@
         '<div class="m-hint">Tip: hover a bar and drag its edge circles to another bar to link.</div>') +
 
       (it.milestone ? '' : // milestones carry no stories
-        sec('stories', 'Stories', '',
+        sec('stories', esc(lvl('story', true)), '',
           '<div class="p-stories">' + storyRows + '</div>' +
-          '<input data-f="storyadd" placeholder="+ add story…" style="width:100%;margin-top:6px">')) +
+          '<input data-f="storyadd" placeholder="' + esc('+ add ' + lvl('story').toLowerCase() + '…') + '" style="width:100%;margin-top:6px">')) +
 
       (vlist.length
         ? sec('checks', 'Checks', '',
@@ -4169,8 +4231,9 @@
       '<div class="p-top">' +
       '<button class="p-crumb" data-stf="up" title="Back to #' + it.num + '">' +
       '<i data-lucide="corner-left-up"></i>#' + it.num + ' ' + esc(shorten(it.feature || '(untitled)', 26)) + '</button>' +
+      typeChipHtml('stype', 'story', st) +
       '<button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
-      '<textarea class="p-name" data-stf="title" rows="1" placeholder="Story title">' + esc(st.title) + '</textarea>' +
+      '<textarea class="p-name" data-stf="title" rows="1" placeholder="' + esc(lvl('story') + ' title') + '">' + esc(st.title) + '</textarea>' +
       '<label class="p-check fixed" style="margin:6px 0 8px"><input type="checkbox" data-stf="done"' + (st.done ? ' checked' : '') + '> Done</label>' +
 
       '<div class="p-sec c open"><button class="p-sechead" tabindex="-1">' +
@@ -4241,7 +4304,7 @@
         if (m.sep) return '<div class="menu-sep"></div>';
         return '<button data-mi="' + i + '"' + (m.checked ? ' class="on"' : '') + '>' +
           (m.dot ? '<span class="dd-dot" style="background:' + m.dot + '"></span>' : '') +
-          (m.icon ? '<i data-lucide="' + m.icon + '"></i>' : '') +
+          (m.icon ? '<i data-lucide="' + esc(m.icon) + '"></i>' : '') +
           '<span>' + m.label + '</span>' +
           (m.actions ? '<span class="mi-acts">' + m.actions.map(function (a, j) {
             return '<span class="mi-act' + (a.on ? ' on' : '') + '" data-ma="' + i + ':' + j +
@@ -4317,7 +4380,8 @@
   // edit an epic's label + icon (applies to every item carrying it)
   var EPIC_ICONS = ['tag', 'star', 'flag', 'rocket', 'target', 'layers', 'database', 'shield',
     'zap', 'globe', 'users', 'wrench', 'chart-line', 'box', 'lightbulb', 'compass',
-    'cpu', 'plug', 'bot', 'flask-conical', 'map', 'workflow', 'network', 'building'];
+    'cpu', 'plug', 'bot', 'flask-conical', 'map', 'workflow', 'network', 'building',
+    'bug', 'check-square', 'list-tree', 'rows-3', 'corner-down-right'];
   function epicEditModal(epicName) {
     var setting = state.epicIcons[epicName] || null;
     var count = state.items.filter(function (x) { return x.epic === epicName; }).length;
@@ -4333,6 +4397,18 @@
       '<div class="m-sec"><label>Label</label><input id="epName" style="width:100%" value="' + esc(epicName) + '">' +
       '<div class="m-hint">Renames the epic on all ' + count + ' item(s) that carry it.</div></div>' +
       '<div class="m-sec"><label>Icon</label><div class="iswatches">' + icons + '</div></div>' +
+      '<div class="m-sec"><label>Type</label><select id="epType" style="width:100%">' +
+      (function () {
+        var curKey = RM.typeOf(state, epicName, 'epic').key;
+        var list = RM.typesFor(state, 'epic').slice();
+        if (!list.some(function (t) { return t.key === curKey; })) {
+          var cur = RM.itemType(state, curKey);
+          if (cur) list.push(cur);
+        }
+        return list.map(function (t) {
+          return '<option value="' + esc(t.key) + '"' + (t.key === curKey ? ' selected' : '') + '>' + esc(t.label) + '</option>';
+        }).join('');
+      })() + '</select></div>' +
       '<div class="m-sec"><label>Jira key</label><input id="epJira" style="width:100%" placeholder="e.g. HW-1" value="' + esc(state.epicJira[epicName] || '') + '">' +
       '<div class="m-hint">The Jira epic these features parent to in the Jira CSV export.</div></div>' +
       '</div>' +
@@ -4350,16 +4426,19 @@
         $('#epSave', host).onclick = function () {
           var newName = $('#epName', host).value.trim();
           var jira = RM.jiraKeyOf($('#epJira', host).value);
+          var typeKey = $('#epType', host).value;
           closeModal();
           commit('edit epic', function (s) {
             var name2 = newName || epicName;
             if (name2 !== epicName) {
               s.items.forEach(function (x) { if (x.epic === epicName) x.epic = name2; });
               if (s.epicIcons[epicName] != null) { s.epicIcons[name2] = s.epicIcons[epicName]; delete s.epicIcons[epicName]; }
+              if (s.epicTypes[epicName] != null) { s.epicTypes[name2] = s.epicTypes[epicName]; delete s.epicTypes[epicName]; }
               delete s.epicJira[epicName];
             }
             if (picked) s.epicIcons[name2] = picked;
             else delete s.epicIcons[name2];
+            applyEpicType(s, name2, typeKey);
             if (jira) s.epicJira[name2] = jira;
             else delete s.epicJira[name2];
           });
@@ -4550,12 +4629,20 @@
     if (!it) return;
     var msChip = e.target.closest('[data-act="msstyle"]');
     if (msChip) { openDropdown(msChip, msStyleItems(it.id, it)); return; }
+    var tyChip = e.target.closest('[data-act="itype"]');
+    if (tyChip) { openDropdown(tyChip, typeMenuItems('feature', it.type, function (k) { setItemType(it.id, k); })); return; }
     var secBtn = e.target.closest('[data-sectoggle]');
     if (secBtn) {
       var sk = secBtn.dataset.sectoggle;
       panelSec[sk] = secOpen(sk); // open → store collapsed=true, and vice versa
       saveLocal();
       renderPanel();
+      return;
+    }
+    var stChip = e.target.closest('[data-act="stype"]');
+    if (stChip && selStory) {
+      var stForType = storyById(it, selStory);
+      if (stForType) openDropdown(stChip, typeMenuItems('story', stForType.type, function (k) { setStoryType(it.id, selStory, k); }));
       return;
     }
     // story-panel controls
@@ -5451,7 +5538,7 @@
     if (rowEl.dataset.kind === 'band') {
       var phaseId = rowEl.dataset.phase;
       items = [
-        { icon: 'plus', label: 'Add feature here', fn: function () { addFeature(phaseId); } },
+        { icon: 'plus', label: esc('Add ' + lvl('feature').toLowerCase() + ' here'), fn: function () { addFeature(phaseId); } },
         { icon: 'plus', label: 'New phase…', fn: function () { phaseModal(null); } },
         { sep: true },
         { icon: 'pencil', label: 'Edit phase…', fn: function () { phaseModal(phaseId); } },
@@ -5481,6 +5568,9 @@
             if (st) { st.startDay = null; st.durDays = null; }
           });
         } } : null,
+        { icon: RM.typeOf(state, stm, 'story').icon, label: 'Type: ' + esc(RM.typeOf(state, stm, 'story').label) + '…', fn: function () {
+          openContextMenu(cx, cy, typeMenuItems('story', stm.type, function (k) { setStoryType(stmItemId, stmId, k); }));
+        } },
         { icon: 'trash-2', label: 'Delete story', fn: function () {
           commit('delete story', function (s) {
             var t = RM.itemById(s, stmItemId);
@@ -5497,7 +5587,7 @@
         return;
       }
       items = [
-        it.milestone ? null : { icon: 'plus', label: 'Add story', fn: function () {
+        it.milestone ? null : { icon: 'plus', label: esc('Add ' + lvl('story').toLowerCase()), fn: function () {
           if (detailMode !== 'story') { expanded[itemId] = true; saveLocal(); }
           render();
           requestAnimationFrame(function () {
@@ -5505,12 +5595,15 @@
             if (inp) inp.focus();
           });
         } },
-        { icon: 'plus', label: 'Insert feature above', fn: function () { addFeatureNear(itemId, 0); } },
-        { icon: 'plus', label: 'Insert feature below', fn: function () { addFeatureNear(itemId, 1); } },
+        { icon: 'plus', label: esc('Insert ' + lvl('feature').toLowerCase() + ' above'), fn: function () { addFeatureNear(itemId, 0); } },
+        { icon: 'plus', label: esc('Insert ' + lvl('feature').toLowerCase() + ' below'), fn: function () { addFeatureNear(itemId, 1); } },
         { icon: 'plus', label: 'New phase…', fn: function () { phaseModal(null); } },
         { sep: true },
         { icon: 'folder-input', label: 'Move to phase…', fn: function () { openContextMenu(cx, cy, movePhaseMenu(itemId)); } },
         { icon: 'tag', label: 'Set epic…', fn: function () { openContextMenu(cx, cy, setEpicMenu(itemId, false)); } },
+        { icon: RM.typeOf(state, it, 'feature').icon, label: 'Type: ' + esc(RM.typeOf(state, it, 'feature').label) + '…', fn: function () {
+          openContextMenu(cx, cy, typeMenuItems('feature', it.type, function (k) { setItemType(itemId, k); }));
+        } },
         state.meta.workstreamsEnabled
           ? { icon: 'layers', label: 'Set workstream…', fn: function () {
               openContextMenu(cx, cy, wsMenuItems(itemId, function () {
@@ -5532,7 +5625,7 @@
           commit('done', function (s) { var t = RM.itemById(s, itemId); t.done = !t.done; });
         } },
         { icon: it.milestone ? 'rectangle-horizontal' : 'gem',
-          label: it.milestone ? 'Convert to feature' : 'Convert to milestone',
+          label: it.milestone ? esc('Convert to ' + lvl('feature').toLowerCase()) : 'Convert to milestone',
           fn: function () { toggleMilestone(itemId); } }
       ].concat(it.milestone ? msStyleItems(itemId, it) : []).concat([
         { sep: true },
@@ -5548,7 +5641,7 @@
       if (m.sep) return '<div class="menu-sep"></div>';
       return '<button data-mi="' + i + '"' + (m.checked ? ' class="on"' : '') + '>' +
         (m.dot ? '<span class="dd-dot" style="background:' + m.dot + '"></span>' : '') +
-        (m.icon ? '<i data-lucide="' + m.icon + '"></i>' : '') +
+        (m.icon ? '<i data-lucide="' + esc(m.icon) + '"></i>' : '') +
         '<span>' + m.label + '</span>' +
         (m.checked ? '<i data-lucide="check" class="mi-check"></i>' : '') +
         '</button>';
@@ -5589,7 +5682,7 @@
     openContextMenu(e.clientX, e.clientY, [
       { icon: 'copy', label: 'Duplicate', fn: function () { duplicateItem(it.id); } },
       { icon: it.milestone ? 'rectangle-horizontal' : 'gem',
-        label: it.milestone ? 'Convert to feature' : 'Convert to milestone',
+        label: it.milestone ? esc('Convert to ' + lvl('feature').toLowerCase()) : 'Convert to milestone',
         fn: function () { toggleMilestone(it.id); } }
     ].concat(it.milestone ? msStyleItems(it.id, it) : []).concat([
       { sep: true },
@@ -5669,6 +5762,16 @@
             fn: function () { each('epic', function (s, t) { t.epic = ep; }); } });
         });
         openContextMenu(cx, cy, eItems);
+      } },
+      { icon: 'tag', label: 'Type…', fn: function () {
+        openContextMenu(cx, cy, typeMenuItems('feature', sel.length && sel.every(function (t) { return t.type === sel[0].type; }) ? sel[0].type : null, function (k) {
+          commit('type', function (s) {
+            ids.forEach(function (id) {
+              var t = RM.itemById(s, id);
+              if (t && RM.itemType(s, k)) t.type = k;
+            });
+          });
+        }));
       } },
       state.meta.workstreamsEnabled
         ? { icon: 'layers', label: 'Set workstream…', fn: function () {
@@ -5752,6 +5855,7 @@
         commit('delete epic', function (s) {
           s.items.forEach(function (x) { if (x.epic === epicName) x.epic = ''; });
           delete s.epicColors[epicName];
+          delete s.epicTypes[epicName];
         });
       }, true);
   }
@@ -6480,7 +6584,7 @@
     var curScope = (scopeColDef(key) || {}).scope || 'both';
     ['both', 'feature', 'story'].forEach(function (sc) {
       items2.push({ icon: sc === 'both' ? 'layers' : sc === 'feature' ? 'square' : 'list-todo',
-        label: SCOPE_SCOPE_LABELS[sc], checked: curScope === sc, fn: function () {
+        label: esc(scopeScopeLabel(sc)), checked: curScope === sc, fn: function () {
           commit('column scope', function (s) { RM.setScopeColScope(s, key, sc); });
         } });
     });
@@ -7454,7 +7558,7 @@
         { icon: 'undo-2', label: 'Undo', kbd: '⌘Z', fn: undo, disabled: !undoStack.length },
         { icon: 'redo-2', label: 'Redo', kbd: '⇧⌘Z', fn: redo, disabled: !redoStack.length },
         { sep: true },
-        { icon: 'plus', label: 'Add feature', fn: doAddFeature },
+        { icon: 'plus', label: esc('Add ' + lvl('feature').toLowerCase()), fn: doAddFeature },
         { icon: 'plus', label: 'Add phase…', fn: function () { phaseModal(null); } },
         { sep: true },
         { icon: 'zap', label: 'Auto-schedule…', fn: doAuto },
@@ -7478,13 +7582,14 @@
     }
     // view
     var snapItems = [];
-    [['feature', 'Features'], ['story', 'Stories']].forEach(function (k, ki) {
+    [['feature', lvl('feature', true)], ['story', lvl('story', true)]].forEach(function (k, ki) {
       if (ki) snapItems.push({ sep: true });
+      var raw = k[1], labelHtml = esc(raw);
       SNAP_MODES.forEach(function (mode) {
-        snapItems.push({ icon: 'magnet', label: k[1] + ' snap to ' + SNAP_LABELS[mode], checked: snapModeFor(k[0]) === mode, fn: function () {
+        snapItems.push({ icon: 'magnet', label: labelHtml + ' snap to ' + SNAP_LABELS[mode], checked: snapModeFor(k[0]) === mode, fn: function () {
           setSnapMode(k[0], mode);
           saveLocal(); renderTopbar();
-          toast(k[1] + ' snap: ' + SNAP_LABELS[mode]);
+          toast(raw + ' snap: ' + SNAP_LABELS[mode]);
         } });
       });
     });
@@ -8662,7 +8767,7 @@
       }).join('');
     }
     function sizingCardsFor(kind) {
-      var label = kind === 'story' ? 'Story size options' : 'Size options';
+      var label = kind === 'story' ? esc(lvl('story') + ' size options') : 'Size options';
       return RM.sizingEnabled(state, kind)
         ? '<section class="su-card"><h2>' + label + '</h2>' +
           '<table class="hol-table"><thead><tr><th>Label</th><th>Working days</th><th></th></tr></thead>' +
@@ -8781,6 +8886,34 @@
         '</div>';
     }).join('');
 
+    var hier = m.hierarchy, anyLvl = RM.anyTypeAnyLevel(state);
+    var levelRows = hier.levels.map(function (lv) {
+      var chips = anyLvl ? '' : RM.itemTypes(state).map(function (t) {
+        var on = lv.types.indexOf(t.key) !== -1;
+        return '<button class="su-hchip' + (on ? ' on' : '') + '" data-suhtype="' + esc(lv.key + ':' + t.key) + '" title="' + (on ? 'Allowed' : 'Not allowed') + ' at this level">' +
+          '<i data-lucide="' + esc(t.icon) + '"></i>' + esc(t.label) + '</button>';
+      }).join('');
+      return '<div class="su-hlevel"><input data-suhlabel="' + lv.key + '" value="' + esc(lv.label) + '" aria-label="Level label">' +
+        '<div class="su-hchips">' + chips + '</div></div>';
+    }).join('');
+    var typeRows2 = RM.itemTypes(state).map(function (t) {
+      return '<tr><td><button class="su-hicon" data-suhticon="' + esc(t.key) + '" title="Icon"><i data-lucide="' + esc(t.icon) + '"></i></button></td>' +
+        '<td><input data-suhtlabel="' + esc(t.key) + '" value="' + esc(t.label) + '" aria-label="Type label"></td>' +
+        '<td><input data-suhtjira="' + esc(t.key) + '" value="' + esc(t.jira) + '" placeholder="Jira issue type" aria-label="Jira issue type"></td>' +
+        '<td class="hol-x"><button data-suhtrm="' + esc(t.key) + '" title="Remove type"><i data-lucide="x"></i></button></td></tr>';
+    }).join('');
+    var hierCard =
+      '<section class="su-card"><h2>Hierarchy</h2>' +
+      '<div class="m-hint">Three levels, top to bottom. Name each level and pick which types it accepts; the first allowed type is the default for new items.</div>' +
+      '<div class="su-hlevels">' + levelRows + '</div>' +
+      (anyLvl ? '<div class="m-hint">Every type is allowed at every level.</div>' : '') +
+      '<label class="p-check" style="margin-top:10px"><input type="checkbox" id="suHierAny"' + (anyLvl ? ' checked' : '') + '> Allow any type at any level</label>' +
+      '<h3 class="su-sub">Types</h3>' +
+      '<table class="hol-table su-htypes"><thead><tr><th></th><th>Label</th><th>Jira issue type</th><th></th></tr></thead><tbody>' + typeRows2 + '</tbody></table>' +
+      '<button id="suHierAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add type</button>' +
+      '<div class="m-hint">Behavior follows the level, not the type: a Bug at the ' + esc(RM.levelLabel(state, 'feature')) + ' level is a bar on the timeline like any other. The Jira name is what sync and the CSV export use.</div>' +
+      '</section>';
+
     // one card set per vertical tab
     var tabBodies = {
       timeline:
@@ -8834,7 +8967,8 @@
         '</section>' +
         '<section class="su-card"><h2>Epics</h2>' +
         '<div class="su-rows">' + (epicRows || '<div class="m-hint">none yet — set an epic on any item to create one</div>') + '</div>' +
-        '</section>',
+        '</section>' +
+        hierCard,
       team:
         '<section class="su-card"><h2>Roles &amp; rate card</h2>' +
         '<div class="su-rc-head"><span></span><span>Cost/h</span><span>Rate/h</span><span></span></div>' +
@@ -8878,7 +9012,7 @@
             (fixed ? '' : '<select data-sucolscope="' + esc(c[0]) + '" title="Which rows show this column">' +
               ['both', 'feature', 'story'].map(function (sc) {
                 return '<option value="' + sc + '"' + (((scopeColDef(c[0]) || {}).scope || 'both') === sc ? ' selected' : '') + '>' +
-                  SCOPE_SCOPE_LABELS[sc] + '</option>';
+                  esc(scopeScopeLabel(sc)) + '</option>';
               }).join('') + '</select>') +
             (fixed ? '' : '<button data-sucolrm="' + esc(c[0]) + '" class="danger" title="Remove column"><i data-lucide="x"></i></button>') +
             '</div>';
@@ -8891,10 +9025,10 @@
           '</section>';
       })(),
       sizing:
-        '<section class="su-card"><h2>Feature sizing</h2>' +
+        '<section class="su-card"><h2>' + esc(lvl('feature') + ' sizing') + '</h2>' +
         '<div class="su-schemes">' + schemeRows + '</div>' +
         '</section>' + sizingCards +
-        '<section class="su-card"><h2>Story sizing</h2>' +
+        '<section class="su-card"><h2>' + esc(lvl('story') + ' sizing') + '</h2>' +
         '<div class="su-schemes">' + storySchemeRows + '</div>' +
         '<div class="m-hint">Stories estimate on their own scale — story points by default.</div>' +
         '</section>' + storySizingCards +
@@ -8902,11 +9036,11 @@
         '<div class="su-schemes">' + riskRows + '</div>' +
         '<div class="m-hint">Risk measures uncertainty, for features and stories alike. Most projects track nothing here — pick a scheme only if your team actually reviews it.</div>' +
         '</section>' +
-        '<section class="su-card"><h2>Feature priority</h2>' +
+        '<section class="su-card"><h2>' + esc(lvl('feature') + ' priority') + '</h2>' +
         '<div class="su-schemes">' + priRows + '</div>' +
         '<div class="m-hint">Priority ranks importance — separate from risk.</div>' +
         '</section>' +
-        '<section class="su-card"><h2>Story priority</h2>' +
+        '<section class="su-card"><h2>' + esc(lvl('story') + ' priority') + '</h2>' +
         '<div class="su-schemes">' + storyPriRows + '</div>' +
         '<div class="m-hint">Stories rank on their own ladder — Critical / High / Medium / Low by default. RICE scores features only.</div>' +
         '</section>',
@@ -9011,6 +9145,10 @@
       toast('Workstreams ' + (wsOn ? 'enabled' : 'disabled'));
       return;
     }
+    if (t.dataset.suhlabel) { var hk2 = t.dataset.suhlabel, hv = t.value; commit('level label', function (s2) { RM.setLevelLabel(s2, hk2, hv); }); return; }
+    if (t.dataset.suhtlabel) { var tk2 = t.dataset.suhtlabel, tlv2 = t.value; commit('rename type', function (s2) { RM.renameItemType(s2, tk2, tlv2); }); return; }
+    if (t.dataset.suhtjira) { var tk3 = t.dataset.suhtjira, jv = t.value; commit('type jira name', function (s2) { RM.setItemTypeJira(s2, tk3, jv); }); return; }
+    if (t.id === 'suHierAny') { var anyOn = t.checked; commit('any type at any level', function (s2) { RM.setAnyTypeAnyLevel(s2, anyOn); }); return; }
     if (t.dataset.suapp) {
       var appKey = t.dataset.suapp, appOn = t.checked;
       var appName = (RM.APPS.filter(function (a) { return a[0] === appKey; })[0] || [])[1] || appKey;
@@ -9219,6 +9357,26 @@
     }
     if (t.dataset.suwsedit) { wsEditModal(t.dataset.suwsedit); return; }
     if (t.dataset.sudefws != null) { defaultWsModal(); return; }
+    if (t.dataset.suhtype) {
+      var parts = t.dataset.suhtype.split(':'), hk = parts[0], tk = parts[1];
+      var wasOn = t.classList.contains('on');
+      var okT = true;
+      commit(wasOn ? 'disallow type' : 'allow type', function (s2) { okT = RM.setTypeAllowed(s2, hk, tk, !wasOn); });
+      if (!okT) toast('A level needs at least one type');
+      return;
+    }
+    if (t.dataset.suhtrm) {
+      var rmTypeKey = t.dataset.suhtrm, okR = true;
+      commit('remove type', function (s2) { okR = RM.removeItemType(s2, rmTypeKey); });
+      if (!okR) toast('That type is the only one allowed at a level');
+      return;
+    }
+    if (t.dataset.suhticon) { typeIconMenu(t, t.dataset.suhticon); return; }
+    if (t.id === 'suHierAdd') {
+      commit('add type', function (s2) { RM.addItemType(s2, 'New type', 'tag', ''); });
+      requestAnimationFrame(function () { var all = $$('#setupView input[data-suhtlabel]'); var inp = all[all.length - 1]; if (inp) { inp.focus(); inp.select(); } });
+      return;
+    }
     if (t.dataset.suepedit) { epicEditModal(t.dataset.suepedit); return; }
     if (t.dataset.suepdel) { deleteEpicConfirm(t.dataset.suepdel); return; }
     if (t.dataset.suphedit) { phaseModal(t.dataset.suphedit); return; }
@@ -10768,11 +10926,8 @@
     return '<div class="m-sec"><label>Rows</label><div class="p-row">' +
       '<label class="p-check"><input type="checkbox" id="jxFeatures"' + ck(pref.features != null ? pref.features : d.features) + '> Features</label>' +
       '<label class="p-check"><input type="checkbox" id="jxStories"' + ck(pref.stories != null ? pref.stories : d.stories) + '> Stories</label>' +
-      '</div><div class="m-hint">Without story rows, a feature’s stories become a checklist in its description.</div></div>' +
-      '<div class="m-sec"><label>Issue types</label><div class="p-grid2">' +
-      '<div><label class="p-lab">Features</label><input id="jxFeatureType" style="width:100%" value="' + esc(pref.featureType || d.featureType) + '"></div>' +
-      '<div><label class="p-lab">Stories</label><input id="jxStoryType" style="width:100%" value="' + esc(pref.storyType || d.storyType) + '"></div>' +
-      '</div><div class="m-hint">Sub-task rows need a parent: give each feature its Jira key first, or use a normal type.</div></div>' +
+      '</div><div class="m-hint">Without story rows, a feature\'s stories become a checklist in its description.</div>' +
+      '<div class="m-hint">Issue types follow each item\'s type (Setup → Hierarchy).</div></div>' +
       '<div class="m-sec"><label>In Jira</label><div class="m-hint">' +
       'Work navigator → ⋯ → Import issues from CSV (needs the Create work items and Make bulk changes permissions). ' +
       'Choose the date format <b>yyyy-MM-dd</b>. Parent and Blocked By carry the Jira keys entered in Headway; ' +
@@ -10783,8 +10938,6 @@
     var opts = {
       features: $('#jxFeatures', host).checked,
       stories: $('#jxStories', host).checked,
-      featureType: $('#jxFeatureType', host).value.trim(),
-      storyType: $('#jxStoryType', host).value.trim()
     };
     if (!opts.features && !opts.stories) { toast('Pick features, stories or both'); return false; }
     return opts;
@@ -10912,6 +11065,8 @@
     releaseNotesFor: releaseNotesFor,
     maybeShowReleaseNotes: maybeShowReleaseNotes,
     openReleaseNotes: openReleaseNotes,
-    setExportSink: function (fn) { exportSink = typeof fn === 'function' ? fn : null; }
+    setExportSink: function (fn) { exportSink = typeof fn === 'function' ? fn : null; },
+    setItemType: setItemType,
+    selectItem: select
   };
 })();

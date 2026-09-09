@@ -916,7 +916,7 @@ ok(doc.querySelectorAll('#rows .row.eband').length > 3, 'epic group bands render
   // feature into that epic, right after the group's last row
   const subAdds = doc.querySelectorAll('#rows .row.addrow.sub[data-epic]');
   ok(subAdds.length === doc.querySelectorAll('#rows .row.eband').length, 'every epic group ends with an Add feature row');
-  ok([...doc.querySelectorAll('#rows .addrow-lab')].every(l => /Add feature/.test(l.textContent)), 'add rows say "Add feature"');
+  ok([...doc.querySelectorAll('#rows .addrow-lab')].every(l => /Add Feature/.test(l.textContent)), 'add rows say "Add Feature"');
   const gAdd = [...subAdds].find(r => r.dataset.epic);
   const gEpic = gAdd.dataset.epic, gPhase = gAdd.dataset.phase;
   const nBefore = state().items.length;
@@ -1179,6 +1179,64 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
   click(doc.querySelector('#setupView [data-suepedit]'));
   ok(!doc.querySelector('#modalHost').hidden, 'epic edit modal opens from Setup');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- hierarchy card in Setup
+{
+  click(doc.querySelector('#btnSetup'));
+  suTab('workstreams');
+  const card = [...doc.querySelectorAll('#setupView .su-card h2')].find(h => h.textContent === 'Hierarchy');
+  ok(!!card, 'Hierarchy card renders in the Workstreams tab');
+  const bugChip = doc.querySelector('button[data-suhtype="feature:bug"]');
+  ok(bugChip && bugChip.classList.contains('on'), 'Bug is allowed at the Feature level by default');
+  click(bugChip);
+  ok(state().meta.hierarchy.levels[1].types.indexOf('bug') === -1, 'clicking a chip disallows the type');
+  click(doc.querySelector('button[data-suhtype="feature:bug"]'));
+  ok(state().meta.hierarchy.levels[1].types.indexOf('bug') !== -1, 'clicking again re-allows it');
+  const lbl = doc.querySelector('input[data-suhlabel="story"]');
+  lbl.value = 'Task'; lbl.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.hierarchy.levels[2].label === 'Task', 'level label edit commits');
+  // the focus-the-new-row call lands inside a requestAnimationFrame; run it
+  // synchronously here so the assertion below doesn't need to wait a real frame
+  {
+    const realRaf = window.requestAnimationFrame;
+    window.requestAnimationFrame = (cb) => cb();
+    click(doc.querySelector('#suHierAdd'));
+    window.requestAnimationFrame = realRaf;
+  }
+  ok(state().meta.itemTypes.some(t => t.label === 'New type'), 'Add type appends a record');
+  const hierAddLabels = [...doc.querySelectorAll('#setupView input[data-suhtlabel]')];
+  const lastHierAddLabel = hierAddLabels[hierAddLabels.length - 1];
+  ok(doc.activeElement === lastHierAddLabel,
+    'Add type focuses the newly added type\'s label input, not the first (Epic) one');
+  const any = doc.querySelector('#suHierAny');
+  any.checked = true; any.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.hierarchy.anyTypeAnyLevel === true && !doc.querySelector('button[data-suhtype]'), 'the switch hides the chips');
+  any.checked = false; any.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- level labels drive prominent UI strings
+{
+  click(doc.querySelector('#btnSetup'));
+  suTab('workstreams');
+  const sl = doc.querySelector('input[data-suhlabel="story"]');
+  sl.value = 'Task'; sl.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const fl = doc.querySelector('input[data-suhlabel="feature"]');
+  fl.value = 'Capability'; fl.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('.tab[data-view="planning"]') || doc.querySelector('[data-view="planning"]'));
+  ok([...doc.querySelectorAll('.addrow-lab')].some(el => /Add Capability/.test(el.textContent)), 'Add-row wording follows the level label');
+  // reset the labels back to their defaults through Setup, since the inputs
+  // do not survive the view switch
+  click(doc.querySelector('#btnSetup'));
+  suTab('workstreams');
+  const fl2 = doc.querySelector('input[data-suhlabel="feature"]');
+  fl2.value = 'Feature'; fl2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const sl2 = doc.querySelector('input[data-suhlabel="story"]');
+  sl2.value = 'Story'; sl2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.hierarchy.levels[1].label === 'Feature' && state().meta.hierarchy.levels[2].label === 'Story',
+    'level labels reset back to their defaults');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
@@ -3007,12 +3065,9 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     'choosing Jira CSV swaps the timeline options for the Jira options');
   ok(!!doc.querySelector('#modalHost #jxFeatures') && !!doc.querySelector('#modalHost #jxStories'),
     'dialog offers feature and story rows');
-  ok(!!doc.querySelector('#modalHost #jxFeatureType') && !!doc.querySelector('#modalHost #jxStoryType'),
-    'dialog offers issue type names');
   ok(/yyyy-MM-dd/.test(doc.querySelector('#modalHost #exJira').textContent), 'dialog names the wizard date format');
   ok(typeof window.RM_JIRA === 'object' && typeof window.RM_JIRA.csv === 'function', 'Jira export module is loaded');
   doc.querySelector('#modalHost #jxStories').checked = true;
-  doc.querySelector('#modalHost #jxFeatureType').value = 'Task';
   let exported = null;
   window.__headway.setExportSink((r) => { exported = r; });
   click(doc.querySelector('#modalHost #exGo'));
@@ -3020,11 +3075,11 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(exported && /-jira\.csv$/.test(exported.name) && exported.blob && exported.blob.size > 100,
     'Export hands a CSV blob to the save path');
   const ui = JSON.parse(window.localStorage.getItem('headway-ui-v1'));
-  ok(ui.exportPrefs.fmt === 'jira' && ui.jiraPrefs && ui.jiraPrefs.stories === true && ui.jiraPrefs.featureType === 'Task',
+  ok(ui.exportPrefs.fmt === 'jira' && ui.jiraPrefs && ui.jiraPrefs.stories === true,
     'jira export settings persist in the ui snapshot');
   window.eval("document.querySelector('#btnExport').click()");
   ok(doc.querySelector('#modalHost #exFmtJira').checked && !doc.querySelector('#modalHost #exJira').hidden &&
-    doc.querySelector('#modalHost #jxStories').checked && doc.querySelector('#modalHost #jxFeatureType').value === 'Task',
+    doc.querySelector('#modalHost #jxStories').checked,
     'reopening restores the Jira format and its settings');
   window.eval("document.querySelector('#modalHost [data-m=x]').click()");
   window.__headway.setExportSink(null);
@@ -3397,6 +3452,61 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   }
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
+
+  // type pickers, row icons, epic type
+  {
+    // pick a currently-rendered row's item — not state().items[0], which
+    // may sit in a phase collapsed by default in the fixture
+    const firstRow = doc.querySelector('#rows .row.item[data-id]');
+    const first = state().items.find(i => i.id === firstRow.dataset.id);
+    window.__headway.selectItem ? window.__headway.selectItem(first.id) : click(firstRow);
+    const chip = doc.querySelector('#panel [data-act="itype"]');
+    ok(chip && /Feature/.test(chip.textContent), 'panel shows the type chip');
+    click(chip);
+    const bug = [...doc.querySelectorAll('.menu-list [data-mi]')].find(el => /^Bug$/.test(el.textContent.trim()));
+    ok(!!bug, 'type dropdown lists Bug');
+    click(bug);
+    ok(state().items.find(i => i.id === first.id).type === 'bug', 'picking Bug sets the item type');
+    ok(!!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-type'), 'a non-default type shows its icon on the row');
+    window.__headway.setItemType(first.id, 'feature');
+    ok(!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-type'), 'the default type shows no icon');
+
+    // a type label containing markup renders as text, not HTML, in the
+    // panel dropdown (typeMenuItems must esc() the label)
+    window.HeadwayApp.ai.commit('rename type', (s) => {
+      const bugType = s.meta.itemTypes.find(t => t.key === 'bug');
+      bugType.label = '<b>Bug</b>';
+    });
+    const chip2 = doc.querySelector('#panel [data-act="itype"]');
+    click(chip2);
+    const bugAfterRename = [...doc.querySelectorAll('.menu-list [data-mi]')].find(el => el.textContent.trim().indexOf('<b>Bug</b>') !== -1);
+    ok(!!bugAfterRename && bugAfterRename.innerHTML.indexOf('&lt;b&gt;') !== -1,
+      'a type label with markup renders as escaped text in the dropdown');
+    window.HeadwayApp.ai.commit('rename type', (s) => {
+      const bugType = s.meta.itemTypes.find(t => t.key === 'bug');
+      bugType.label = 'Bug';
+    });
+
+    // a type icon containing attribute-breaking markup renders as a single
+    // escaped data-lucide attribute, not injected markup (menu renderers
+    // must esc() m.icon)
+    window.HeadwayApp.ai.commit('rename type icon', (s) => {
+      const bugType = s.meta.itemTypes.find(t => t.key === 'bug');
+      bugType.icon = 'tag" data-x="y';
+    });
+    const chip3 = doc.querySelector('#panel [data-act="itype"]');
+    click(chip3);
+    const bugIconRow = [...doc.querySelectorAll('.menu-list [data-mi]')].find(el => /^Bug$/.test(el.textContent.trim()));
+    ok(!!bugIconRow, 'type dropdown still lists Bug after icon change');
+    const bugIcon = bugIconRow.querySelector('i');
+    ok(!!bugIcon && bugIcon.getAttribute('data-lucide') === 'tag" data-x="y',
+      'the icon renders with the full unbroken-out string as data-lucide');
+    ok(!bugIcon.hasAttribute('data-x'), 'no stray data-x attribute was injected from the icon value');
+    window.HeadwayApp.ai.commit('rename type icon', (s) => {
+      const bugType = s.meta.itemTypes.find(t => t.key === 'bug');
+      bugType.icon = 'bug';
+    });
+  }
 }
 
 ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'commits autosave to localStorage');

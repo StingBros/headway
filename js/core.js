@@ -253,6 +253,178 @@
   RM.msStyleOf = function (it) {
     return RM.MS_STYLES.indexOf(it && it.msStyle) > 0 ? it.msStyle : 'diamond';
   };
+  // ---- item types & hierarchy. Three fixed storage levels (epic tag →
+  // item → story); each level lists the types it accepts. A type is a
+  // label + icon + Jira issue type name; behavior always follows the level.
+  RM.LEVEL_KEYS = ['epic', 'feature', 'story'];
+  RM.DEFAULT_ITEM_TYPES = [
+    { key: 'epic', label: 'Epic', icon: 'layers', jira: 'Epic' },
+    { key: 'feature', label: 'Feature', icon: 'rows-3', jira: 'Story' },
+    { key: 'bug', label: 'Bug', icon: 'bug', jira: 'Bug' },
+    { key: 'task', label: 'Task', icon: 'check-square', jira: 'Task' },
+    { key: 'story', label: 'Story', icon: 'list-tree', jira: 'Sub-task' },
+    { key: 'subtask', label: 'Subtask', icon: 'corner-down-right', jira: 'Sub-task' }
+  ];
+  RM.DEFAULT_HIERARCHY_LEVELS = [
+    { key: 'epic', label: 'Epic', types: ['epic'] },
+    { key: 'feature', label: 'Feature', types: ['feature', 'bug', 'task'] },
+    { key: 'story', label: 'Story', types: ['story', 'subtask', 'bug'] }
+  ];
+  RM.itemTypes = function (state) {
+    var m = state && state.meta;
+    return (m && Array.isArray(m.itemTypes) && m.itemTypes.length) ? m.itemTypes : RM.DEFAULT_ITEM_TYPES;
+  };
+  RM.itemType = function (state, key) {
+    var list = RM.itemTypes(state);
+    for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i];
+    return null;
+  };
+  RM.levelOf = function (state, kind) {
+    var h = state && state.meta && state.meta.hierarchy;
+    var levels = (h && Array.isArray(h.levels) && h.levels.length) ? h.levels : RM.DEFAULT_HIERARCHY_LEVELS;
+    kind = kind || 'feature';
+    for (var i = 0; i < levels.length; i++) if (levels[i].key === kind) return levels[i];
+    return RM.DEFAULT_HIERARCHY_LEVELS[RM.LEVEL_KEYS.indexOf(kind) === -1 ? 1 : RM.LEVEL_KEYS.indexOf(kind)];
+  };
+  RM.levelLabel = function (state, kind, plural) {
+    var lbl = RM.levelOf(state, kind).label || kind;
+    if (!plural) return lbl;
+    if (/s$/i.test(lbl)) return lbl;
+    if (/y$/i.test(lbl)) return lbl.slice(0, -1) + 'ies';
+    return lbl + 's';
+  };
+  RM.anyTypeAnyLevel = function (state) {
+    var h = state && state.meta && state.meta.hierarchy;
+    return !!(h && h.anyTypeAnyLevel);
+  };
+  RM.typesFor = function (state, kind) {
+    var all = RM.itemTypes(state);
+    if (RM.anyTypeAnyLevel(state)) return all.slice();
+    var keys = RM.levelOf(state, kind).types || [];
+    return keys.map(function (k) { return RM.itemType(state, k); }).filter(Boolean);
+  };
+  RM.defaultTypeFor = function (state, kind) {
+    var lv = RM.levelOf(state, kind).types || [];
+    var first = lv.length ? RM.itemType(state, lv[0]) : null;
+    if (first) return first.key;
+    var dflt = RM.DEFAULT_HIERARCHY_LEVELS[RM.LEVEL_KEYS.indexOf(kind)] || RM.DEFAULT_HIERARCHY_LEVELS[1];
+    return RM.itemType(state, dflt.types[0]) ? dflt.types[0] : RM.itemTypes(state)[0].key;
+  };
+  // the type record of an item, story, or (kind 'epic') an epic NAME
+  RM.typeOf = function (state, obj, kind) {
+    kind = kind || 'feature';
+    var key = kind === 'epic'
+      ? (state && state.epicTypes ? state.epicTypes[obj] : null)
+      : (obj && obj.type);
+    return RM.itemType(state, key) || RM.itemType(state, RM.defaultTypeFor(state, kind)) || RM.itemTypes(state)[0];
+  };
+  RM.jiraTypeName = function (state, typeKey) {
+    var t = RM.itemType(state, typeKey);
+    return t ? (t.jira || t.label) : String(typeKey || '');
+  };
+  // normalize meta.itemTypes / meta.hierarchy in place (called from
+  // normalizeState before items are mapped; safe to call again any time)
+  RM.normalizeTypes = function (state) {
+    var m = state.meta;
+    var legacy = m.jira && typeof m.jira === 'object' ? m.jira : null;
+    var hadTypes = Array.isArray(m.itemTypes) && m.itemTypes.length > 0;
+    var seenKey = {};
+    var types = (hadTypes ? m.itemTypes : RM.DEFAULT_ITEM_TYPES).map(function (t) {
+      if (!t || typeof t !== 'object') return null;
+      var key = String(t.key || '').trim();
+      if (!key || seenKey[key]) return null;
+      seenKey[key] = true;
+      return { key: key, label: String(t.label || key), icon: String(t.icon || 'tag'), jira: String(t.jira || '') };
+    }).filter(Boolean);
+    if (!types.length) types = RM.DEFAULT_ITEM_TYPES.map(function (t) { return { key: t.key, label: t.label, icon: t.icon, jira: t.jira }; });
+    if (!hadTypes && legacy) {
+      // one-time migration of the old three Jira type names
+      var mig = { epic: legacy.epicType, feature: legacy.featureType, story: legacy.storyType };
+      types.forEach(function (t) { if (mig[t.key]) t.jira = String(mig[t.key]); });
+    }
+    m.itemTypes = types;
+    var h = m.hierarchy && typeof m.hierarchy === 'object' ? m.hierarchy : {};
+    var given = {};
+    (Array.isArray(h.levels) ? h.levels : []).forEach(function (l) { if (l && l.key) given[l.key] = l; });
+    m.hierarchy = {
+      levels: RM.DEFAULT_HIERARCHY_LEVELS.map(function (d) {
+        var g = given[d.key] || {};
+        var list = (Array.isArray(g.types) ? g.types : []).filter(function (k) { return !!seenKey[k]; });
+        if (!list.length) list = d.types.filter(function (k) { return !!seenKey[k]; });
+        if (!list.length) list = [types[0].key];
+        return { key: d.key, label: String(g.label || d.label), types: list };
+      }),
+      anyTypeAnyLevel: !!h.anyTypeAnyLevel
+    };
+    var et = {};
+    if (state.epicTypes && typeof state.epicTypes === 'object') {
+      Object.keys(state.epicTypes).forEach(function (name) { if (seenKey[state.epicTypes[name]]) et[name] = state.epicTypes[name]; });
+    }
+    state.epicTypes = et;
+  };
+  function typeSlug(label) {
+    return String(label || 'type').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'type';
+  }
+  RM.addItemType = function (state, label, icon, jira) {
+    RM.normalizeTypes(state);
+    var base = typeSlug(label), key = base, n = 2;
+    while (RM.itemType(state, key)) key = base + '-' + (n++);
+    state.meta.itemTypes.push({ key: key, label: String(label || 'New type'), icon: String(icon || 'tag'), jira: String(jira || '') });
+    return key;
+  };
+  RM.renameItemType = function (state, key, label) {
+    var t = RM.itemType(state, key);
+    if (t && String(label || '').trim()) t.label = String(label).trim();
+  };
+  RM.setItemTypeIcon = function (state, key, icon) {
+    var t = RM.itemType(state, key);
+    if (t) t.icon = String(icon || 'tag');
+  };
+  RM.setItemTypeJira = function (state, key, jira) {
+    var t = RM.itemType(state, key);
+    if (t) t.jira = String(jira || '').trim();
+  };
+  RM.setLevelLabel = function (state, kind, label) {
+    RM.normalizeTypes(state);
+    var lv = RM.levelOf(state, kind);
+    if (String(label || '').trim()) lv.label = String(label).trim();
+  };
+  RM.setAnyTypeAnyLevel = function (state, on) {
+    RM.normalizeTypes(state);
+    state.meta.hierarchy.anyTypeAnyLevel = !!on;
+  };
+  // allow / disallow a type at a level; refuses to empty a level
+  RM.setTypeAllowed = function (state, kind, key, on) {
+    RM.normalizeTypes(state);
+    if (!RM.itemType(state, key)) return false;
+    var lv = RM.levelOf(state, kind);
+    var i = lv.types.indexOf(key);
+    if (on) { if (i === -1) lv.types.push(key); return true; }
+    if (i === -1) return true;
+    if (lv.types.length === 1) return false;
+    lv.types.splice(i, 1);
+    return true;
+  };
+  // remove a type: refused while it is the only type of some level;
+  // otherwise items, stories and epics of that type fall back to their
+  // level default and the key leaves every level list
+  RM.removeItemType = function (state, key) {
+    RM.normalizeTypes(state);
+    if (!RM.itemType(state, key)) return false;
+    var levels = state.meta.hierarchy.levels;
+    if (levels.some(function (l) { return l.types.length === 1 && l.types[0] === key; })) return false;
+    levels.forEach(function (l) { l.types = l.types.filter(function (k) { return k !== key; }); });
+    state.meta.itemTypes = state.meta.itemTypes.filter(function (t) { return t.key !== key; });
+    var fF = RM.defaultTypeFor(state, 'feature'), fS = RM.defaultTypeFor(state, 'story'), fE = RM.defaultTypeFor(state, 'epic');
+    (state.items || []).forEach(function (it) {
+      if (it.type === key) it.type = fF;
+      (it.stories || []).forEach(function (s) { if (s.type === key) s.type = fS; });
+    });
+    Object.keys(state.epicTypes || {}).forEach(function (name) {
+      if (state.epicTypes[name] === key) { if (fE === 'epic') delete state.epicTypes[name]; else state.epicTypes[name] = fE; }
+    });
+    return true;
+  };
   RM.SCOPE_FIXED_KEYS = ['assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream', 'epic'];
   RM.SCOPE_DEFAULT_ORDER = ['description', 'ac', 'epic', 'assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream'];
 
@@ -1201,6 +1373,7 @@
     state.phases.forEach(function (p) { phaseIds[p.id] = true; });
     var fallbackPhase = state.phases[0].id;
 
+    RM.normalizeTypes(state);
     var riskOrder = RM.RISK_SCHEMES[m.riskScheme].order || RM.RISK_ORDER;
     var prioOrder = RM.PRIORITY_SCHEMES[m.priorityScheme].order || [];
     var storyPrioOrder = RM.PRIORITY_SCHEMES[m.storyPriorityScheme].order || [];
@@ -1243,6 +1416,10 @@
         teamType: it.teamType != null && it.teamType !== '' ? String(it.teamType) : '',
         // milestones are fixed dates: zero-duration diamonds on the timeline
         milestone: !!it.milestone,
+        // item type (Feature / Bug / …): a key into meta.itemTypes. Unknown
+        // keys fall back to the level default; a known-but-disallowed key
+        // is kept (validation warns) so turning the switch off is lossless
+        type: RM.itemType(state, it.type) ? it.type : RM.defaultTypeFor(state, 'feature'),
         // milestone marker shape; absent = diamond (kept on bars so a
         // feature converted back and forth remembers its choice)
         msStyle: RM.MS_STYLES.indexOf(it.msStyle) > 0 ? it.msStyle : undefined,
@@ -1281,6 +1458,7 @@
           var sched = s.startDay != null && isFinite(s.startDay) && s.durDays > 0;
           return {
             id: s.id || RM.uid('s'), title: s.title || '', done: !!s.done,
+            type: RM.itemType(state, s.type) ? s.type : RM.defaultTypeFor(state, 'story'),
             jiraKey: RM.jiraKeyOf(s.jiraKey),
             size: s.size || null,
             priority: s.priority && storyPrioOrder.indexOf(String(s.priority).toUpperCase()) !== -1
@@ -1946,6 +2124,21 @@
       if (it.deps.indexOf(it.num) !== -1) add(it, 'warn', 'SELF_DEP', 'Depends on itself (ignored)');
       if (!it.feature.trim()) add(it, 'warn', 'NO_TITLE', 'Feature has no title');
 
+      if (!RM.anyTypeAnyLevel(state)) {
+        var okTypes = RM.levelOf(state, 'feature').types;
+        if (okTypes.indexOf(RM.typeOf(state, it, 'feature').key) === -1) {
+          add(it, 'warn', 'TYPE_LEVEL', RM.levelLabel(state, 'feature') + ' #' + it.num + ' is a ' + RM.typeOf(state, it, 'feature').label +
+            ', which is not allowed at the ' + RM.levelLabel(state, 'feature') + ' level');
+        }
+        var okStory = RM.levelOf(state, 'story').types;
+        (it.stories || []).forEach(function (st) {
+          if (okStory.indexOf(RM.typeOf(state, st, 'story').key) === -1) {
+            global.push({ level: 'warn', code: 'TYPE_LEVEL', msg: RM.levelLabel(state, 'story') + ' "' + (st.title || '(untitled)') + '" under #' + it.num +
+              ' is a ' + RM.typeOf(state, st, 'story').label + ', which is not allowed at the ' + RM.levelLabel(state, 'story') + ' level' });
+          }
+        });
+      }
+
       var scheduled = it.startDay != null && it.durDays != null;
       var phase = phaseById[it.phaseId];
       if (scheduled) {
@@ -1965,6 +2158,16 @@
       }
 
     });
+
+    if (!RM.anyTypeAnyLevel(state)) {
+      var okEpic = RM.levelOf(state, 'epic').types;
+      Object.keys(state.epicTypes || {}).forEach(function (name) {
+        if (okEpic.indexOf(RM.typeOf(state, name, 'epic').key) === -1) {
+          global.push({ level: 'warn', code: 'TYPE_LEVEL', msg: RM.levelLabel(state, 'epic') + ' "' + name + '" is a ' + RM.typeOf(state, name, 'epic').label +
+            ', which is not allowed at the ' + RM.levelLabel(state, 'epic') + ' level' });
+        }
+      });
+    }
 
     var cap = RM.capacity(state);
     cap.weeks.forEach(function (cell, w) {

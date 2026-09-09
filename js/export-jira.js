@@ -9,7 +9,7 @@
  *  - rows(state, opts) -> [{column: value}] (node-testable)
  *  - csv(state, opts)  -> CSV string (BOM, CRLF, RFC-4180 quoting)
  *  - fileName(state)   -> "<title>-jira.csv"
- * opts: features (bool), stories (bool), featureType, storyType.
+ * opts: features (bool), stories (bool). Issue types come from each row's type (Setup → Hierarchy).
  */
 (function (root) {
   'use strict';
@@ -19,7 +19,7 @@
 
   JR.COLUMNS = ['Summary', 'Issue Type', 'Description', 'Parent', 'Labels',
     'Priority', 'Due Date', 'Start Date', 'End Date', 'Blocked By', 'Jira Key'];
-  JR.DEFAULTS = { features: true, stories: false, featureType: 'Story', storyType: 'Sub-task' };
+  JR.DEFAULTS = { features: true, stories: false };
 
   function slug(s) {
     return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -60,7 +60,7 @@
         }).join('\n');
         out.push({
           'Summary': it.feature,
-          'Issue Type': o.featureType,
+          'Issue Type': RM.jiraTypeName(state, RM.typeOf(state, it, 'feature').key),
           'Description': joinSections([
             RM.htmlToText(it.description),
             checklist ? 'Stories:\n' + checklist : '',
@@ -84,7 +84,7 @@
           var ssched = s.startDay != null && s.durDays > 0;
           out.push({
             'Summary': s.title,
-            'Issue Type': o.storyType,
+            'Issue Type': RM.jiraTypeName(state, RM.typeOf(state, s, 'story').key),
             'Description': joinSections([
               RM.htmlToText(s.description),
               section('Acceptance criteria', s.ac)
