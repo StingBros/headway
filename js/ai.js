@@ -35,6 +35,10 @@
   // { '<model id>': { reasoning: bool } }; null until fetched
   AI.modelInfo = null;
   AI.modelInfoBase = '';
+  // the gateway's model list, fetched once per gateway URL (drawer open or
+  // Setup → Load); null until fetched
+  AI.modelCache = null;
+  AI.modelCacheBase = '';
   // 'bedrock/global.us.claude-opus-5' -> 'claude-opus-5' for labels only:
   // the last path segment, minus leading provider / region / vendor tokens
   AI.shortModel = function (id) {
@@ -55,6 +59,14 @@
   };
   AI.effortAllowed = function (s) {
     return !!(s && s.effort) && AI.effortsFor(s).some(function (e) { return e[0] === s.effort; });
+  };
+  // the effort to run with after a model change: the current pick when the
+  // model offers it, else Medium, else the first level it does offer; a
+  // model with no effort support keeps the stored value (the selector hides)
+  AI.pickEffort = function (s) {
+    var eff = AI.effortsFor(s);
+    if (!eff.length || eff.some(function (e) { return e[0] === s.effort; })) return s.effort;
+    return eff.some(function (e) { return e[0] === 'medium'; }) ? 'medium' : eff[0][0];
   };
   AI.CLAUDE_MODELS = [['sonnet', 'Sonnet'], ['opus', 'Opus'], ['fable', 'Fable'], ['haiku', 'Haiku']];
   AI.DEFAULTS = {
@@ -1032,6 +1044,29 @@
       if (drawer) rebuildHeader();
     });
   };
+  // the model list for the drawer's selector: fetched when nothing is cached
+  // for this gateway; resolves to the ids, or null when not applicable or
+  // the gateway failed (a toast says so and the typed model stays)
+  AI.ensureModels = function (s) {
+    if (!s || s.provider !== 'litellm' || !s.baseUrl) return Promise.resolve(null);
+    if (AI.modelCache && AI.modelCacheBase === s.baseUrl) return Promise.resolve(AI.modelCache);
+    return openai.models(s).then(function (ids) {
+      AI.modelCache = ids;
+      AI.modelCacheBase = s.baseUrl;
+      if (drawer) rebuildHeader();
+      return ids;
+    }, function (err) {
+      var a = app();
+      if (a && a.toast) a.toast('Could not list models: ' + err.message, 'err');
+      return null;
+    });
+  };
+  // per-model facts for the effort selector: refetch when the map has not
+  // heard of this model (a model added to the gateway since the last load)
+  AI.ensureModelInfo = function (s) {
+    var force = !!(AI.modelInfo && s.model && !AI.modelInfo[s.model]);
+    return AI.refreshModelInfo(force);
+  };
 
   // ------------------------------------------------------------ claude -p
   var claude = AI.claude = {};
@@ -1411,6 +1446,7 @@
       openai.models(s).then(function (ids) {
         $('#aiModelList').innerHTML = ids.map(function (id) { return '<option value="' + esc(id) + '">'; }).join('');
         AI.modelCache = ids;
+        AI.modelCacheBase = s.baseUrl;
         AI.refreshModelInfo(true);
         btn.disabled = false; btn.textContent = 'Load';
         app().toast(ids.length + ' model' + (ids.length === 1 ? '' : 's') + ' available — pick one in the Model field');
@@ -1624,10 +1660,16 @@
       var s = AI.loadSettings();
       if (s.provider === 'claude') s.claudeModel = e.target.value; else s.model = e.target.value;
       // the effort list follows the model: keep a still-valid pick, else fall back
-      var eff = AI.effortsFor(s);
-      if (eff.length && !eff.some(function (x) { return x[0] === s.effort; })) s.effort = eff[Math.min(1, eff.length - 1)][0];
+      s.effort = AI.pickEffort(s);
       AI.saveSettings(s);
       rebuildHeader();
+      if (s.provider !== 'litellm') return;
+      AI.ensureModelInfo(s).then(function () {
+        var s2 = AI.loadSettings();
+        var e2 = AI.pickEffort(s2);
+        if (e2 !== s2.effort) { s2.effort = e2; AI.saveSettings(s2); }
+        rebuildHeader();
+      });
     });
     ta.addEventListener('input', function () { autosize(ta); });
     ta.addEventListener('keydown', function (e) {
@@ -1691,6 +1733,7 @@
     root.document.body.classList.add('ai-open');
     renderMessages();
     AI.refreshModelInfo();
+    AI.ensureModels(AI.loadSettings());
     var ta = drawer.querySelector('#aiInput');
     if (ta) ta.focus();
   };
