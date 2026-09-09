@@ -4016,11 +4016,18 @@ let taggedForXlsx = null;
     inp.value = v;
     inp.dispatchEvent(new window.KeyboardEvent('keydown', { key: k || 'Enter', bubbles: true, cancelable: true }));
   };
-  typeTag('alpha');
+  // the focus-restore call lands inside a requestAnimationFrame; run it
+  // synchronously here so the assertion below doesn't need to wait a real frame
+  {
+    const realRaf = window.requestAnimationFrame;
+    window.requestAnimationFrame = (cb) => cb();
+    typeTag('alpha');
+    window.requestAnimationFrame = realRaf;
+  }
   const itemTags = id => state().items.find(i => i.id === id).tags;
   ok(String(itemTags(tagged.id)) === 'alpha', 'Enter in the tag input stores the tag (' + itemTags(tagged.id) + ')');
   ok(!!doc.querySelector('#panel .tag-chip [data-tagrm="alpha"]'), 'the tag renders as a removable chip');
-  ok(doc.querySelector('#panel .p-tag-in') === doc.activeElement || true, 'the input survives the re-render');
+  ok(doc.querySelector('#panel .p-tag-in') === doc.activeElement, 'the input survives the re-render');
   // a comma commits too, and duplicates collapse
   typeTag('gamma', ',');
   ok(String(itemTags(tagged.id)) === 'alpha,gamma', 'a comma commits the tag as well');

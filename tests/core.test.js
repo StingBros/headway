@@ -80,6 +80,16 @@ eq(RM.sizeForDays(s0, 45), 'XL', '45 days ≈ XL');
 // legacy size map migrates to the week scale
 var sLeg = RM.normalizeState({ meta: { sizeDays: { XS: 2, S: 3, M: 5, L: 10, XL: 20 } }, phases: [{ id: 'p' }], items: [] });
 eq(sLeg.meta.sizeDays.L, 20, 'legacy default size map migrated');
+// null/empty day values are healed back to the scheme default; 0 stays valid
+var sSzHeal = RM.normalizeState({
+  meta: { sizeDays: { XS: 2, S: null, M: 0, L: '' } }, phases: [{ id: 'p' }], items: []
+});
+eq(sSzHeal.meta.sizeDays.S, RM.DEFAULT_SIZE_DAYS.S, 'null S repaired to scheme default');
+eq(sSzHeal.meta.sizeDays.M, 0, 'M stays 0');
+eq(sSzHeal.meta.sizeDays.L, RM.DEFAULT_SIZE_DAYS.L, 'empty-string L repaired to scheme default');
+// the sizeOrder fallback filters storyOnly sizes for the feature scale, same as setSizeScheme
+var sSzOrderFib = RM.normalizeState({ meta: { sizeScheme: 'fibonacci' }, phases: [{ id: 'p' }], items: [] });
+eq(sSzOrderFib.meta.sizeOrder.join(','), '0.5,1,2,3,5,8,13', 'feature sizeOrder fallback drops the story-only 0');
 
 // ------------------------------------------------------------- normalize
 section('normalizeState');

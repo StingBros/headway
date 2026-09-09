@@ -1356,12 +1356,16 @@
         return true;
       });
     } else {
-      m.sizeOrder = (RM.SIZE_SCHEMES[m.sizeScheme].sizes || RM.SIZE_ORDER).slice();
+      var featureSkip = RM.SIZE_SCHEMES[m.sizeScheme].storyOnly || [];
+      m.sizeOrder = (RM.SIZE_SCHEMES[m.sizeScheme].sizes || RM.SIZE_ORDER)
+        .filter(function (l) { return featureSkip.indexOf(l) === -1; })
+        .slice();
     }
     addSmallFibSteps(m, sizeKeys('feature'), 'feature');
     var schemeDays = RM.SIZE_SCHEMES[m.sizeScheme].days || {};
     m.sizeOrder.forEach(function (l) {
-      if (!isFinite(+m.sizeDays[l]) || +m.sizeDays[l] < 0) {
+      var v = m.sizeDays[l];
+      if (v == null || v === '' || !isFinite(+v) || +v < 0) {
         m.sizeDays[l] = schemeDays[l] != null ? schemeDays[l] : 5;
       }
     });
@@ -1395,7 +1399,8 @@
     addSmallFibSteps(m, sizeKeys('story'), 'story');
     var storySchemeDays = RM.SIZE_SCHEMES[m.storySizeScheme].days || {};
     m.storySizeOrder.forEach(function (l) {
-      if (!isFinite(+m.storySizeDays[l]) || +m.storySizeDays[l] < 0) {
+      var sv = m.storySizeDays[l];
+      if (sv == null || sv === '' || !isFinite(+sv) || +sv < 0) {
         m.storySizeDays[l] = storySchemeDays[l] != null ? storySchemeDays[l] : 5;
       }
     });

@@ -100,7 +100,7 @@
       // columns right after 'Dependency Risk/Size', so it appends here)
       tags: futureCol + 6
     };
-    var lastCol = extraCols.status;
+    var lastCol = extraCols.tags;
 
     var ws = wb.addWorksheet('Roadmap', {
       views: [{ state: 'frozen', xSplit: 4, ySplit: 3 }]
