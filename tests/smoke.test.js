@@ -3715,3 +3715,21 @@ window.RMExcel.exportWorkbook(state()).then((buf) => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(1);
 });
+
+// desktop: reload from disk only while auto-save is on
+{
+  ok(typeof window.HeadwayApp.autoSaveOn === 'function', 'HeadwayApp exposes autoSaveOn()');
+  const was = window.HeadwayApp.autoSaveOn();
+  click(doc.querySelector('.menu-btn[data-menu="file"]'));
+  const tog = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Auto.?save/i.test(b.textContent));
+  if (tog) {
+    click(tog);
+    ok(window.HeadwayApp.autoSaveOn() === !was, 'autoSaveOn() follows the File menu toggle');
+    click(doc.querySelector('.menu-btn[data-menu="file"]'));
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Auto.?save/i.test(b.textContent)));
+    ok(window.HeadwayApp.autoSaveOn() === was, 'toggling back restores it');
+  } else ok(true, 'auto-save toggle is desktop-only in this build');
+  const desk = fs.readFileSync(path.join(ROOT, 'js/desktop.js'), 'utf8');
+  ok(/autoSaveOn\(\)/.test(desk) && /if \(!hit \|\| reloading \|\| !app\(\)\.autoSaveOn\(\)\) return;/.test(desk),
+    'the disk watcher skips reloads while auto-save is off');
+}

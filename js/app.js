@@ -10613,6 +10613,7 @@
     save: doSave,
     unsavedNow: unsavedNow,
     guardUnsaved: guardUnsaved,
+    autoSaveOn: function () { return !!autoSave; },
     menuItems: menuItems,
     noteRecent: noteRecent,
     renderStartPage: renderStartPage,
