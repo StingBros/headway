@@ -1862,7 +1862,8 @@
   function setStorySize(itemId, stId, sz) {
     withStory('story size', itemId, stId, function (st2, s) {
       st2.size = sz;
-      if (sz && st2.startDay != null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, RM.sizeDays(s, sz, 'story'));
+      // a 0-point size is zero effort but still one day on the grid
+      if (sz && st2.startDay != null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, Math.max(1, RM.sizeDays(s, sz, 'story')));
     });
   }
   function setStoryRisk(itemId, stId, rv) {
@@ -5391,7 +5392,7 @@
               var sd2 = RM.dateToDay(s.meta, RM.parseISO(iso));
               if (sd2 == null) return;
               st2.startDay = Math.max(0, sd2);
-              if (st2.durDays == null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, RM.storyEffortDays(s, st2));
+              if (st2.durDays == null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, Math.max(1, RM.storyEffortDays(s, st2)));
             });
           }, { allowClear: true, clearLabel: 'Unschedule' });
       } else if (act.dataset.act === 'st-dl') {
@@ -9005,7 +9006,7 @@
       return RM.sizeOrderOf(state, kind).map(function (s2) {
         return '<tr>' +
           '<td><input data-suszlabel="' + esc(s2) + '"' + kAttr + ' value="' + esc(s2) + '" aria-label="Option label"></td>' +
-          '<td><input type="number" min="0.5" step="0.5" data-susz="' + esc(s2) + '"' + kAttr + ' value="' + days[s2] + '" aria-label="Working days"></td>' +
+          '<td><input type="number" min="0" step="0.5" data-susz="' + esc(s2) + '"' + kAttr + ' value="' + days[s2] + '" aria-label="Working days"></td>' +
           '<td class="hol-x"><button data-suszrm="' + esc(s2) + '"' + kAttr + ' title="Remove option"><i data-lucide="x"></i></button></td>' +
           '</tr>';
       }).join('');
@@ -9516,7 +9517,10 @@
     }
     if (t.dataset.susz) {
       var sz = t.dataset.susz, szKeys = RM.sizeKeys(t.dataset.kind || 'feature');
-      var v = Math.max(0.5, parseFloat(t.value) || (state.meta[szKeys.days] || {})[sz] || 5);
+      var cur = (state.meta[szKeys.days] || {})[sz];
+      var pv = parseFloat(t.value);
+      // 0 is a real day value (a 0-point story); anything below it is not
+      var v = isFinite(pv) && pv >= 0 ? pv : (cur != null ? cur : 5);
       commit('size days', function (s2) {
         s2.meta[szKeys.days][sz] = v;
         s2.meta[szKeys.scheme] = 'custom';
