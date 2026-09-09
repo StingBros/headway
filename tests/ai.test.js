@@ -413,10 +413,48 @@ function done() {
     eq(AI.effortAllowed({ provider: 'litellm', model: 'plain', effort: 'high' }), false, 'effort is not sent to a model that lacks it');
     eq(AI.effortAllowed({ provider: 'litellm', model: 'bedrock/x', effort: 'max' }), false, 'max is not sent when the gateway only knows low/medium/high');
     eq(AI.effortAllowed({ provider: 'litellm', model: 'bedrock/x', effort: 'high' }), true, 'a listed level is sent');
+    eq(AI.pickEffort({ provider: 'litellm', model: 'bedrock/x', effort: 'high' }), 'high', 'pickEffort keeps a level the model offers');
+    eq(AI.pickEffort({ provider: 'litellm', model: 'bedrock/x', effort: 'max' }), 'medium', 'pickEffort falls back to medium when the pick is not offered');
+    eq(AI.pickEffort({ provider: 'litellm', model: 'plain', effort: 'max' }), 'max', 'a model without effort keeps the stored value (selector hidden)');
+    AI.GATEWAY_EFFORTS_SAVE = AI.GATEWAY_EFFORTS; AI.GATEWAY_EFFORTS = [['low', 'Low']];
+    eq(AI.pickEffort({ provider: 'litellm', model: 'bedrock/x', effort: 'max' }), 'low', 'without medium the first offered level wins');
+    AI.GATEWAY_EFFORTS = AI.GATEWAY_EFFORTS_SAVE; delete AI.GATEWAY_EFFORTS_SAVE;
     AI.modelInfo = null;
     ok(!/aiEffortSeg|>Effort</.test(AI.settingsHtml()), 'the settings page no longer carries an effort control');
   }
 
+  console.log('— model list on open');
+  var calls = [];
+  AI.fetchImpl = function (url) {
+    calls.push(url);
+    if (/\/v1\/models$/.test(url)) return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve({ data: [{ id: 'zeta' }, { id: 'alpha' }] }); } });
+    return Promise.resolve({ ok: false, status: 404, text: function () { return Promise.resolve(''); } });
+  };
+  AI.modelCache = null; AI.modelCacheBase = '';
+  var gw = { provider: 'litellm', baseUrl: 'https://gw.test', apiKey: 'k', model: 'alpha', effort: 'medium' };
+  AI.ensureModels(gw).then(function (ids) {
+    eq(ids, ['alpha', 'zeta'], 'ensureModels fetches and sorts the gateway models');
+    eq([AI.modelCache, AI.modelCacheBase], [['alpha', 'zeta'], 'https://gw.test'], 'the list is cached per gateway');
+    eq(calls.filter(function (u) { return /models$/.test(u); }).length, 1, 'one models request');
+    return AI.ensureModels(gw);
+  }).then(function () {
+    eq(calls.filter(function (u) { return /models$/.test(u); }).length, 1, 'a second open reuses the cache');
+    return AI.ensureModels({ provider: 'litellm', baseUrl: 'https://other.test', apiKey: 'k' });
+  }).then(function () {
+    eq(calls.filter(function (u) { return /models$/.test(u); }).length, 2, 'a different gateway fetches again');
+    return AI.ensureModels({ provider: 'claude' });
+  }).then(function (r) {
+    eq(r, null, 'the Claude provider never lists gateway models');
+    AI.fetchImpl = function () { return Promise.resolve({ ok: false, status: 500, text: function () { return Promise.resolve('boom'); } }); };
+    return AI.ensureModels({ provider: 'litellm', baseUrl: 'https://down.test', apiKey: 'k' });
+  }).then(function (r) {
+    eq(r, null, 'a failing gateway resolves null instead of throwing');
+    AI.fetchImpl = null; AI.modelCache = null; AI.modelCacheBase = '';
+    finish();
+  }, function (err) { failed++; console.error('  ✗ ensureModels threw: ' + err.message); AI.fetchImpl = null; finish(); });
+}
+
+function finish() {
   console.log('— desktop transport');
   {
     // The Tauri http plugin's reqwest trusts only bundled Mozilla roots unless
