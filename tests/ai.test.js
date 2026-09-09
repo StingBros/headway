@@ -126,15 +126,16 @@ console.log('— tools');
     { feature: 'Gamma', workstream: 'Data', size: 'S', start: '2026-08-03', durDays: 10, deps: [1], stories: [{ title: 'S-a' }, 'S-b'], description: 'Line one\n\nLine two' },
     { feature: 'Launch', milestone: true, start: '2026-09-07' }
   ] }, A);
-  eq(added.created.map(function (c) { return c.num; }), [3, 4], 'new features get the next numbers');
-  var g = RM.itemByNum(st, 3);
+  // #3 is taken by the existing story (features and stories share one pool)
+  eq(added.created.map(function (c) { return c.num; }), [4, 5], 'new features get the next numbers');
+  var g = RM.itemByNum(st, 4);
   eq(g.phaseId, 'p2', 'phase resolved by name');
   eq(g.startDay, 5, 'ISO start became a working-day index');
   eq(g.durDays, 10, 'duration kept');
   eq(g.stories.map(function (x) { return x.title; }), ['S-a', 'S-b'], 'stories created from objects and strings');
   ok(g.stories[0].id, 'stories get ids');
   eq(g.description, '<p>Line one</p><p>Line two</p>', 'plain text description became paragraphs');
-  var ms = RM.itemByNum(st, 4);
+  var ms = RM.itemByNum(st, 5);
   ok(ms.milestone && ms.durDays === 0 && ms.startDay === 30, 'milestone: zero duration on its date');
   ok(/add 2 features/.test(A.labels[A.labels.length - 1]), 'history label for the add');
   throws(function () { AI.runTool('add_items', { phase: 'Nope', items: [{ feature: 'x' }] }, A); }, /no phase/, 'unknown phase rejected');
@@ -237,7 +238,8 @@ console.log('— targeted apply');
   ok(st.items[0] === alphaObj, 'adding does not rewrite existing items');
 
   AI.runTool('update_items', { updates: [{ num: 2, delete: true }] }, A);
-  eq(st.items.map(function (i) { return i.num; }).join(','), '1,3', 'deleting removes just that feature');
+  // Gamma took #4 — #3 belongs to Alpha's story (shared number pool)
+  eq(st.items.map(function (i) { return i.num; }).join(','), '1,4', 'deleting removes just that feature');
   ok(st.items[0] === alphaObj, 'deleting does not rewrite the others');
 
   AI.runTool('update_project', { ops: [{ op: 'set', path: 'meta/vision', value: 'Ship it' }] }, A);

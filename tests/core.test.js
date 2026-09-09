@@ -1433,6 +1433,59 @@ section('item type mutations & validation');
   ok(!vv3.global.some(function (f) { return f.code === 'TYPE_LEVEL'; }), 'story pushed with no type resolves via RM.typeOf and warns nothing');
 }
 
+section('story numbers');
+{
+  var sN = mkState([
+    { id: 'f1', num: 1, phaseId: 'p1', feature: 'One', stories: [{ id: 'a', title: 'A' }, { id: 'b', title: 'B', num: 7 }] },
+    { id: 'f2', num: 3, phaseId: 'p1', feature: 'Two', stories: [{ id: 'c', title: 'C', num: 3 }] }
+  ]);
+  eq(sN.items[0].stories.map(function (s) { return s.num; }), [4, 7], 'stories without a number get the next free ones after the features');
+  eq(sN.items[1].stories[0].num, 8, 'a story number that collides with a feature is reassigned');
+  eq(RM.nextNum(sN), 9, 'nextNum spans features and stories');
+  eq(RM.storyByNum(sN, 7).st.id, 'b', 'storyByNum finds a story');
+  eq(RM.storyByNum(sN, 1), null, 'a feature number is not a story');
+  eq(RM.byNum(sN, 1).kind, 'feature', 'byNum: feature');
+  eq(RM.byNum(sN, 8).kind + ':' + RM.byNum(sN, 8).st.id, 'story:c', 'byNum: story');
+  eq(RM.byNum(sN, 99), null, 'byNum: nothing');
+  eq(RM.renumberItem(sN, 'f2', 7), 9, 'renumbering a feature onto a story number falls back to the next free one');
+  sN.items[1].stories[0].deps = [7];
+  eq(RM.renumberStory(sN, 'f1', 'b', 20), 20, 'renumberStory takes a free number');
+  eq(sN.items[1].stories[0].deps, [20], 'story deps follow the renumbered story');
+  eq(RM.renumberStory(sN, 'f1', 'a', 20), 21, 'a taken number falls back to nextNum');
+}
+section('story deps');
+{
+  var sSD = mkState([
+    { id: 'f1', num: 1, phaseId: 'p1', feature: 'One', startDay: 0, durDays: 5,
+      stories: [{ id: 'a', title: 'A', num: 10 }, { id: 'b', title: 'B', num: 11, deps: [10, '10', 11, 99, 1] }] },
+    { id: 'f2', num: 2, phaseId: 'p1', feature: 'Two', startDay: 10, durDays: 5,
+      stories: [{ id: 'c', title: 'C', num: 12, deps: [11], startDay: 2, durDays: 3 }] }
+  ]);
+  eq(sSD.items[0].stories[1].deps, [10, 99, 1], 'normalize keeps numeric unique deps, drops self, keeps unknown');
+  var rb = RM.resolveStoryDeps(sSD, sSD.items[0].stories[1]);
+  eq(rb.deps.map(function (r) { return r.st.id; }), ['a'], 'resolveStoryDeps returns refs');
+  eq(rb.unknown, [99, 1], 'unknown numbers — including a feature number — are reported');
+  eq(RM.storyLabel(sSD, RM.storyRef(sSD, 'c')), '#12 · C', 'label is the story number and title');
+  eq(RM.storyWindow(sSD, sSD.items[0], sSD.items[0].stories[0]), { startDay: 0, endDay: 5 }, 'a story without a timeline takes the feature bar');
+  eq(RM.storyWindow(sSD, sSD.items[1], sSD.items[1].stories[0]), { startDay: 2, endDay: 5 }, 'a story with a timeline uses it');
+  eq(RM.storyDepEdges(sSD).map(function (e) { return e[0].st.id + '>' + e[1].st.id; }), ['a>b', 'b>c'], 'every explicit edge, dep first');
+  eq(RM.storyDependents(sSD, sSD.items[0].stories[1]).map(function (r) { return r.st.id; }), ['c'], 'dependents list this story');
+  var vSD = RM.validate(sSD);
+  ok(vSD.global.some(function (g) { return g.code === 'STORY_DEP_ORDER' && g.storyId === 'c' && /#12 "C" starts before #11 "B"/.test(g.msg); }), 'STORY_DEP_ORDER names both ends by number');
+  ok(vSD.global.filter(function (g) { return g.code === 'STORY_UNKNOWN_DEP' && g.storyId === 'b'; }).length === 2, 'each unknown dep warns');
+  ok(vSD.global.some(function (g) { return g.code === 'STORY_UNKNOWN_DEP' && /#1 is a feature/.test(g.msg); }), 'a feature number says so');
+  var sCyc = mkState([{ id: 'f', num: 1, phaseId: 'p1', feature: 'F', stories: [{ id: 'x', title: 'X', num: 2, deps: [3] }, { id: 'y', title: 'Y', num: 3, deps: [2] }, { id: 'z', title: 'Z', num: 4, deps: [2] }] }]);
+  eq(RM.storyCycleMembers(sCyc), { x: true, y: true }, 'cycle members (z hangs off the cycle, not in it)');
+  ok(RM.validate(sCyc).global.filter(function (g) { return g.code === 'STORY_CYCLE'; }).length === 2, 'both cycle members get STORY_CYCLE');
+  var sUn = mkState([{ id: 'f', num: 1, phaseId: 'p1', feature: 'F', stories: [{ id: 'p', title: 'P', num: 5 }] },
+    { id: 'g', num: 2, phaseId: 'p1', feature: 'G', startDay: 0, durDays: 5, stories: [{ id: 'q', title: 'Q', num: 6, deps: [5], startDay: 3, durDays: 2 }] }]);
+  ok(RM.validate(sUn).global.some(function (g) { return g.code === 'STORY_DEP_UNSCHEDULED' && g.storyId === 'q'; }), 'a scheduled story depending on an unscheduled one gets the info');
+  var sDone = mkState([{ id: 'f', num: 1, phaseId: 'p1', feature: 'F', startDay: 0, durDays: 5, stories: [{ id: 'd', title: 'D', num: 2, done: true }, { id: 'e', title: 'E', num: 3, deps: [2], startDay: 1, durDays: 1 }] }]);
+  ok(!RM.validate(sDone).global.some(function (g) { return g.code === 'STORY_DEP_ORDER'; }), 'a done dependency never violates order');
+  var mapped = [{ id: 'n1', title: 'A', num: 30, deps: [21, 5] }, { id: 'n2', title: 'B', num: 31, deps: [] }];
+  RM.remapStoryDeps(mapped, { 20: 30, 21: 31 });
+  eq(mapped[0].deps, [31, 5], 'remapStoryDeps rewrites numbers inside the copy and keeps outside ones');
+}
   console.log('\n' + passed + ' passed, ' + failed + ' failed' + (skipped ? ', ' + skipped + ' skipped' : ''));
   process.exit(failed ? 1 : 0);
 }

@@ -1569,6 +1569,20 @@
           var sched = s.startDay != null && isFinite(s.startDay) && s.durDays != null && isFinite(s.durDays) && s.durDays >= 0;
           return {
             id: s.id || RM.uid('s'), title: s.title || '', done: !!s.done,
+            // stories are numbered from the same pool as features; a missing
+            // or colliding number is assigned by the unique-num pass below
+            num: s.num != null && isFinite(s.num) ? Math.round(s.num) : null,
+            // story -> story dependencies by story number (same pool as
+            // features); unknown numbers stay so validation can point at them
+            deps: (function () {
+              var seen = {}, out = [];
+              (Array.isArray(s.deps) ? s.deps : []).forEach(function (d) {
+                var n = parseInt(d, 10);
+                if (!isFinite(n) || n < 1 || seen[n]) return;
+                seen[n] = true; out.push(n);
+              });
+              return out;
+            })(),
             type: RM.itemType(state, s.type) ? s.type : RM.defaultTypeFor(state, 'story'),
             jiraKey: RM.jiraKeyOf(s.jiraKey),
             size: s.size || null,
@@ -1620,6 +1634,20 @@
       } else {
         seen[it.num] = 'used';
       }
+    });
+    // stories draw from the same pool, in document order after the features
+    state.items.forEach(function (it) {
+      it.stories.forEach(function (st) {
+        if (st.num == null || seen[st.num]) { maxNum += 1; st.num = maxNum; }
+        seen[st.num] = 'used';
+        maxNum = Math.max(maxNum, st.num);
+      });
+    });
+    // a story never depends on itself (its number may have just been assigned)
+    state.items.forEach(function (it) {
+      it.stories.forEach(function (st) {
+        st.deps = st.deps.filter(function (n) { return n !== st.num; });
+      });
     });
 
     state.epicColors = state.epicColors || {}; // legacy — display now keys off workstream
@@ -1817,9 +1845,38 @@
     return null;
   };
 
+  // Stories are numbered from the same pool as features, so a number resolves
+  // to at most one of the two.
+  RM.storyByNum = function (state, num) {
+    for (var i = 0; i < state.items.length; i++) {
+      var sts = state.items[i].stories || [];
+      for (var j = 0; j < sts.length; j++) if (sts[j].num === num) return { it: state.items[i], st: sts[j] };
+    }
+    return null;
+  };
+
+  RM.byNum = function (state, num) {
+    var it = RM.itemByNum(state, num);
+    if (it) return { kind: 'feature', it: it };
+    var ref = RM.storyByNum(state, num);
+    return ref ? { kind: 'story', it: ref.it, st: ref.st } : null;
+  };
+
+  // { it, st } for a story id (ids are unique across the document).
+  RM.storyRef = function (state, stId) {
+    for (var i = 0; i < state.items.length; i++) {
+      var sts = state.items[i].stories || [];
+      for (var j = 0; j < sts.length; j++) if (sts[j].id === stId) return { it: state.items[i], st: sts[j] };
+    }
+    return null;
+  };
+
   RM.nextNum = function (state) {
     var mx = 0;
-    state.items.forEach(function (it) { if (it.num > mx) mx = it.num; });
+    state.items.forEach(function (it) {
+      if (it.num > mx) mx = it.num;
+      (it.stories || []).forEach(function (st) { if (st.num > mx) mx = st.num; });
+    });
     return mx + 1;
   };
 
@@ -1959,17 +2016,14 @@
     return edges;
   };
 
-  // Set of item ids participating in at least one dependency cycle.
-  RM.cycleMembers = function (state) {
-    var adj = {};
-    state.items.forEach(function (it) { adj[it.id] = []; });
-    RM.depEdges(state).forEach(function (e) { adj[e[0].id].push(e[1].id); });
-
-    // Tarjan SCC, iterative.
+  // Tarjan SCC, iterative: given a list of node ids and an adjacency map
+  // (id -> [id]), return the set of ids that sit in a cycle (self-loops
+  // included). Shared by the feature and story dependency graphs.
+  function sccCycles(ids, adj) {
     var index = 0, stack = [], onStack = {}, idx = {}, low = {}, cyclic = {};
-    state.items.forEach(function (root0) {
-      if (idx[root0.id] != null) return;
-      var work = [[root0.id, 0]];
+    ids.forEach(function (root0) {
+      if (idx[root0] != null) return;
+      var work = [[root0, 0]];
       while (work.length) {
         var top = work[work.length - 1];
         var v = top[0];
@@ -1978,7 +2032,7 @@
           stack.push(v); onStack[v] = true;
         }
         var advanced = false;
-        var neighbors = adj[v];
+        var neighbors = adj[v] || [];
         while (top[1] < neighbors.length) {
           var w = neighbors[top[1]];
           top[1] += 1;
@@ -1994,7 +2048,7 @@
           else {
             // self-loop
             var self = comp[0];
-            if (adj[self].indexOf(self) !== -1) cyclic[self] = true;
+            if ((adj[self] || []).indexOf(self) !== -1) cyclic[self] = true;
           }
         }
         work.pop();
@@ -2004,7 +2058,90 @@
         }
       }
     });
-    return cyclic;
+    // rebuild in document order — callers (and diffs) read the set as a list
+    var out = {};
+    ids.forEach(function (id) { if (cyclic[id]) out[id] = true; });
+    return out;
+  }
+
+  // Set of item ids participating in at least one dependency cycle.
+  RM.cycleMembers = function (state) {
+    var adj = {};
+    var ids = [];
+    state.items.forEach(function (it) { adj[it.id] = []; ids.push(it.id); });
+    RM.depEdges(state).forEach(function (e) { adj[e[0].id].push(e[1].id); });
+    return sccCycles(ids, adj);
+  };
+
+  // ------------------------------------------------------ story dependencies
+  // Stories depend on other stories by number; feature <-> story links are out
+  // of scope, so a number that resolves to a feature counts as unknown.
+
+  // '#14 · Story title' for a { it, st } ref.
+  RM.storyLabel = function (state, ref) {
+    if (!ref || !ref.st) return '';
+    return '#' + ref.st.num + ' · ' + (ref.st.title || '(untitled)');
+  };
+
+  // The days a story occupies: its own little timeline when it has one, else
+  // the feature's bar, else null (nothing scheduled).
+  RM.storyWindow = function (state, it, st) {
+    if (!st) return null;
+    if (st.startDay != null && st.durDays != null) {
+      return { startDay: st.startDay, endDay: st.startDay + Math.max(1, st.durDays) };
+    }
+    if (it && it.startDay != null && it.durDays != null) {
+      return { startDay: it.startDay, endDay: it.startDay + RM.itemSpan(it) };
+    }
+    return null;
+  };
+
+  // Concrete dependency refs from a story's numbered deps.
+  RM.resolveStoryDeps = function (state, st) {
+    var out = { deps: [], unknown: [] };
+    (st.deps || []).forEach(function (num) {
+      var ref = RM.storyByNum(state, num);
+      // mirrors RM.resolveDeps: a self-reference is ignored, not "unknown"
+      if (!ref) out.unknown.push(num);
+      else if (ref.st.id !== st.id) out.deps.push(ref);
+    });
+    return out;
+  };
+
+  // All concrete story edges as [depRef, ref] pairs, in document order.
+  RM.storyDepEdges = function (state) {
+    var edges = [];
+    state.items.forEach(function (it) {
+      (it.stories || []).forEach(function (st) {
+        RM.resolveStoryDeps(state, st).deps.forEach(function (dep) {
+          edges.push([dep, { it: it, st: st }]);
+        });
+      });
+    });
+    return edges;
+  };
+
+  // Stories that list this story as a dependency.
+  RM.storyDependents = function (state, st) {
+    var out = [];
+    if (!st || st.num == null) return out;
+    state.items.forEach(function (it) {
+      (it.stories || []).forEach(function (other) {
+        if (other.id !== st.id && (other.deps || []).indexOf(st.num) !== -1) out.push({ it: it, st: other });
+      });
+    });
+    return out;
+  };
+
+  // Set of story ids participating in at least one story-dependency cycle.
+  RM.storyCycleMembers = function (state) {
+    var adj = {};
+    var ids = [];
+    state.items.forEach(function (it) {
+      (it.stories || []).forEach(function (st) { adj[st.id] = []; ids.push(st.id); });
+    });
+    RM.storyDepEdges(state).forEach(function (e) { adj[e[0].st.id].push(e[1].st.id); });
+    return sccCycles(ids, adj);
   };
 
   // ------------------------------------------------------------ capacity
@@ -2223,6 +2360,7 @@
     });
 
     var cyclic = RM.cycleMembers(state);
+    var storyCyc = RM.storyCycleMembers(state);
     var phaseById = {};
     state.phases.forEach(function (p) { phaseById[p.id] = p; });
     var horizon = RM.numDays(state.meta);
@@ -2269,6 +2407,46 @@
         add(it, 'info', 'UNSCHEDULED', 'In an active phase but not on the timeline');
       }
 
+      // story dependencies — stories have no byItem bucket, so these are
+      // global rows carrying storyId/itemId for the consumers that care
+      (it.stories || []).forEach(function (st) {
+        var sl = '#' + st.num + ' "' + (st.title || '(untitled)') + '"';
+        var lv = RM.levelLabel(state, 'story');
+        var rs = RM.resolveStoryDeps(state, st);
+        rs.unknown.forEach(function (n) {
+          var isFeat = !!RM.itemByNum(state, n);
+          global.push({
+            level: 'warn', code: 'STORY_UNKNOWN_DEP', storyId: st.id, itemId: it.id,
+            msg: lv + ' ' + sl + ' depends on #' + n + (isFeat
+              ? ', but #' + n + ' is a feature, not a ' + lv.toLowerCase()
+              : ', which does not exist')
+          });
+        });
+        if (storyCyc[st.id]) {
+          global.push({
+            level: 'error', code: 'STORY_CYCLE', storyId: st.id, itemId: it.id,
+            msg: lv + ' ' + sl + ' is part of a dependency cycle'
+          });
+        }
+        var win = RM.storyWindow(state, it, st);
+        if (!win) return;
+        rs.deps.forEach(function (dep) {
+          if (dep.st.done) return;
+          var dl = '#' + dep.st.num + ' "' + (dep.st.title || '(untitled)') + '"';
+          var dw = RM.storyWindow(state, dep.it, dep.st);
+          if (!dw) {
+            global.push({
+              level: 'info', code: 'STORY_DEP_UNSCHEDULED', storyId: st.id, itemId: it.id,
+              msg: lv + ' ' + sl + ' depends on ' + dl + ', which is not scheduled'
+            });
+          } else if (win.startDay < dw.endDay) {
+            global.push({
+              level: 'warn', code: 'STORY_DEP_ORDER', storyId: st.id, itemId: it.id,
+              msg: lv + ' ' + sl + ' starts before ' + dl + ' finishes'
+            });
+          }
+        });
+      });
     });
 
     if (!RM.anyTypeAnyLevel(state)) {
@@ -2571,7 +2749,11 @@
     var old = it.num;
     var n = parseInt(wanted, 10);
     var taken = {};
-    state.items.forEach(function (x) { if (x.id !== itemId) taken[x.num] = true; });
+    state.items.forEach(function (x) {
+      if (x.id !== itemId) taken[x.num] = true;
+      // stories share the number pool
+      (x.stories || []).forEach(function (st) { taken[st.num] = true; });
+    });
     if (!isFinite(n) || n < 1 || taken[n]) n = RM.nextNum(state);
     if (n === old) return n;
     it.num = n;
@@ -2579,6 +2761,38 @@
       x.deps = x.deps.map(function (d) { return d === old ? n : d; });
     });
     return n;
+  };
+
+  // Renumber a story, same rules as RM.renumberItem. Story dependency
+  // references across the document follow the rename.
+  RM.renumberStory = function (state, itemId, stId, wanted) {
+    var it = RM.itemById(state, itemId);
+    var st = it && (it.stories || []).filter(function (s) { return s.id === stId; })[0];
+    if (!st) return null;
+    var old = st.num;
+    var n = parseInt(wanted, 10);
+    var taken = {};
+    state.items.forEach(function (x) {
+      taken[x.num] = true;
+      (x.stories || []).forEach(function (s) { if (s.id !== stId) taken[s.num] = true; });
+    });
+    if (!isFinite(n) || n < 1 || taken[n]) n = RM.nextNum(state);
+    if (n === old) return n;
+    st.num = n;
+    state.items.forEach(function (x) {
+      (x.stories || []).forEach(function (s) {
+        s.deps = (s.deps || []).map(function (d) { return d === old ? n : d; });
+      });
+    });
+    return n;
+  };
+
+  // Rewrite story deps inside a freshly copied set of stories (old -> new
+  // number); numbers outside the copy keep pointing where they pointed.
+  RM.remapStoryDeps = function (stories, numMap) {
+    (stories || []).forEach(function (st) {
+      st.deps = (st.deps || []).map(function (d) { return numMap[d] != null ? numMap[d] : d; });
+    });
   };
 
   // Ripple move: cascade the dragged item's end-change through its dependents
