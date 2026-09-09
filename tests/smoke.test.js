@@ -2129,8 +2129,10 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
       'an active phase filter lights up and names the phase');
     // the sidebar mirrors the section header (a plain row count, or a story-point total)
     const uCt = doc.querySelector('#sprintView .spv-sbtn[data-spside="u"] .pr-lanect').textContent.trim();
-    ok(uCt === doc.querySelector('#sprintView .spv-sec[data-spsec="u"] .spv-sechd .pr-lanect').textContent.trim() &&
-      (/ pt$/.test(uCt) || Number(uCt) === doc.querySelectorAll('#sprintView .spv-sec[data-spsec="u"] .spv-row').length),
+    const uHd = doc.querySelector('#sprintView .spv-sec[data-spsec="u"] .spv-sechd .pr-lanect').textContent.trim();
+    ok(uCt === uHd && (/^\d+$/.test(uCt)
+      ? Number(uCt) === doc.querySelectorAll('#sprintView .spv-sec[data-spsec="u"] .spv-row').length
+      : / pt$/.test(uCt)),
       'sidebar counts follow the filtered rows');
     click(fphBtn); pick(/All phases/);
     ok(rowsOf().length === before && !doc.querySelector('#sprintView [data-spdd="fphase"]').classList.contains('pr-on'),
@@ -3729,6 +3731,13 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   // the other three menus offer it too
   ctx(doc.querySelector('#panel'));
   ok(menu().some(b => /Duplicate story/.test(b.textContent)), 'the panel story menu offers Duplicate story');
+  // separator placement matches the other story menus: Duplicate sits directly above Delete
+  {
+    const kids = [...doc.querySelectorAll('#popover .menu-list > *')];
+    const di = kids.findIndex(n => /Duplicate story/.test(n.textContent));
+    ok(di !== -1 && kids[di + 1] && kids[di + 1].tagName === 'BUTTON' && /Delete story/.test(kids[di + 1].textContent),
+      'the panel story menu puts Delete story directly under Duplicate story, with no separator between');
+  }
   click(doc.querySelector('#viewTabs [data-view="prio"]'));
   click(doc.querySelector('#prioView [data-prdd="level"]'));
   click(menu().find(b => /Story/.test(b.textContent)));
@@ -3813,14 +3822,15 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
       while (f.stories.length < 3) f.stories.push({ id: window.RM.uid('s'), title: 'pt story', done: false });
       f.stories.slice(0, 3).forEach((st) => { st.size = ''; st.startDay = null; st.durDays = null; });
     });
-    ok(/^\d+ pt$/.test(hd().textContent.trim()), 'a numeric story scheme totals the sprint in points');
-    const base = Number(hd().textContent.replace(' pt', ''));
-    ok(side().textContent.trim() === hd().textContent.trim(), 'the sidebar entry shows the same total');
+    ok(hd().textContent.trim() === String(doc.querySelectorAll('#sprintView .spv-sec[data-spsec="' + secKey + '"] .spv-row').length),
+      'a section whose stories are all unsized keeps the plain row count, not "0 pt"');
+    ok(side().textContent.trim() === hd().textContent.trim(), 'the sidebar entry shows the same count');
     window.HeadwayApp.ai.commit('story points', (s) => {
       const f = window.RM.itemById(s, fid);
       f.stories[0].size = '3'; f.stories[1].size = '5'; f.stories[2].size = '';
     });
-    ok(Number(hd().textContent.replace(' pt', '')) === base + 8 && side().textContent.trim() === hd().textContent.trim(),
+    ok(/^\d+ pt$/.test(hd().textContent.trim()), 'a numeric story scheme totals the sprint in points once a story is sized');
+    ok(Number(hd().textContent.replace(' pt', '')) === 8 && side().textContent.trim() === hd().textContent.trim(),
       'sizing two stories 3 and 5 adds 8 points to the sprint total (an unsized story adds none)');
     window.HeadwayApp.ai.commit('tshirt stories', (s) => { window.RM.setSizeScheme(s, 'tshirt', 'story'); });
     ok(hd().textContent.trim() === String(doc.querySelectorAll('#sprintView .spv-sec[data-spsec="' + secKey + '"] .spv-row').length),
@@ -3958,7 +3968,7 @@ ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'co
   click(doc.querySelector('#sprintView [data-spdd="level"]'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Story/.test(b.textContent)));
   const btns = [...doc.querySelectorAll('#sprintView .spv-sbtn')].filter(b => b.dataset.spside !== 'u');
-  const emptyEnd = b => b && b.querySelector('.pr-lanect').textContent.trim() === '0' && !b.classList.contains('today');
+  const emptyEnd = b => b && parseInt(b.querySelector('.pr-lanect').textContent.trim(), 10) === 0 && !b.classList.contains('today');
   ok(btns.length === 0 || (!emptyEnd(btns[0]) && !emptyEnd(btns[btns.length - 1])),
     'story level trims empty sprints at both ends');
   click(doc.querySelector('#sprintView [data-spdd="level"]'));

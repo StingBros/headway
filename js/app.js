@@ -1733,21 +1733,6 @@
       return it.startDay != null && sprFirstNum(it) === num && matchesFilter(it);
     });
   }
-  // stories ride along: their own schedule decides sprint membership when
-  // set, otherwise they follow their feature
-  function storiesInSprint(num, items) {
-    var inIds = {};
-    items.forEach(function (it) { inIds[it.id] = true; });
-    var out = [];
-    state.items.forEach(function (it) {
-      if (!matchesFilter(it)) return;
-      (it.stories || []).forEach(function (st) {
-        var own = st.startDay != null && st.durDays != null;
-        if (own ? sprFirstNum(st) === num : inIds[it.id]) out.push({ it: it, st: st });
-      });
-    });
-    return out;
-  }
   // Reporting counts differently from Sprinting: a bar shows everything that
   // is *in flight* during the sprint, so a three-sprint feature lands in all
   // three bars. Sprinting lists a row once, in the sprint it starts in.
@@ -2748,6 +2733,20 @@
     var n = st && st.size ? Number(st.size) : NaN;
     return isNaN(n) ? 0 : n;
   }
+  function sprStorySized(st) {
+    return !!(st && st.size) && !isNaN(Number(st.size));
+  }
+  // a points total only means something once a story is sized: until then the
+  // header keeps the plain row count rather than reading a hollow "0 pt"
+  function sprPointsTotal(ptFeats) {
+    var sum = 0, any = false;
+    ptFeats.forEach(function (f) {
+      f.stories.forEach(function (st) {
+        if (sprStorySized(st)) { any = true; sum += sprStoryPts(st); }
+      });
+    });
+    return any ? sum : null;
+  }
   function sprSections() {
     var meta = state.meta;
     var pointsOn = sprPointsOn();
@@ -2772,9 +2771,7 @@
       var w0 = n == null ? 0 : Math.max(0, RM.sprintRange(meta, n).w0);
       var d0 = n == null ? 0 : RM.sprintStartDay(meta, n);
       var wps = RM.sprintInfo(meta).wps;
-      var points = pointsOn ? ptFeats.reduce(function (a, f) {
-        return a + f.stories.reduce(function (b, st) { return b + sprStoryPts(st); }, 0);
-      }, 0) : null;
+      var points = pointsOn ? sprPointsTotal(ptFeats) : null;
       return {
         num: n, key: sprSecKey(n), points: points,
         title: n == null ? 'Unscheduled' : (RM.sprintsEnabled(meta) ? 'Sprint ' + n : 'Week of ' + RM.fmtShort(RM.weekStartDate(meta, w0))),
@@ -5875,7 +5872,6 @@
       var stMoreId = selStory;
       openContextMenu(e.clientX, e.clientY, [
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(it.id, stMoreId); } },
-        { sep: true },
         { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
           commit('delete story', function (s) {
             var t = RM.itemById(s, it.id);
