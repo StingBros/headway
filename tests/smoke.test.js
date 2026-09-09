@@ -3361,6 +3361,26 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
+// ---------------------------------------------------------------- Prioritizing swimlanes: the catch-all lane sits last
+{
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  const pick = (re) => click([...doc.querySelectorAll('#popover .menu-list button')].find(b => re.test(b.textContent)));
+  const lanes = () => [...doc.querySelectorAll('#prioView .pr-lanename')].map(e => e.textContent.trim());
+  click(doc.querySelector('#prioView [data-prdd="group"]')); pick(/Epics/);
+  ok(lanes().length > 1 && lanes()[lanes().length - 1] === 'No epic' && lanes()[0] !== 'No epic', 'grouped by epic, "No epic" is the last lane (' + lanes().join(' | ') + ')');
+  if (state().meta.workstreamsEnabled) {
+    click(doc.querySelector('#prioView [data-prdd="group"]')); pick(/Workstreams/);
+    const dflt = window.RM.defaultWsName(state());
+    ok(lanes().length > 1 && lanes()[lanes().length - 1] === dflt && lanes()[0] !== dflt, 'grouped by workstream, the default workstream is the last lane (' + lanes().join(' | ') + ')');
+  }
+  click(doc.querySelector('#prioView [data-prdd="level"]')); pick(/Stor/);
+  click(doc.querySelector('#prioView [data-prdd="group"]')); pick(/Epics/);
+  ok(lanes().length < 2 || lanes()[lanes().length - 1] === 'No epic', 'story level: "No epic" is last too');
+  click(doc.querySelector('#prioView [data-prdd="level"]')); pick(/Feature/);
+  click(doc.querySelector('#prioView [data-prdd="group"]')); pick(/None/);
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
 // ---------------------------------------------------------------- story panel estimate buttons
 // Size / Priority / Risk in the story panel are buttons with data-stf AND
 // data-v; the generic data-stf handler must not swallow them.

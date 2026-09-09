@@ -17,6 +17,7 @@ Format: short sections, bullets, one bold title per notable change —
 - AI assistant: Markdown tables in replies render as tables.
 - Prioritizing: the board is full width; **Columns → Unset column** hides or shows the catch-all column; clicking a card opens the detail panel on it and clicking the same card again puts the panel away.
 - Sprinting: the main content area is capped at a readable width.
+- Prioritizing swimlanes: the catch-all lanes (the default workstream, "No epic") sit last.
 
 ## 1.0.12 — 2026-09-09
 

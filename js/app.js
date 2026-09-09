@@ -2311,10 +2311,10 @@
       rows = cols.map(function (c) { return prStoryColHtml(c, allPairs); }).join('');
     } else if (storyMode) {
       var stLanes = prioGroup === 'ws'
-        ? [{ key: '', name: RM.defaultWsName(state), dot: RM.defaultWsColor(state) }]
-            .concat(allWorkstreams().map(function (w) { return { key: w, name: w, dot: RM.colorForWs(state, w) }; }))
-        : [{ key: '', name: 'No epic' }]
-            .concat(allEpics().map(function (ep) { return { key: ep, name: ep, icon: RM.iconForEpic(state, ep) || 'tag' }; }));
+        ? allWorkstreams().map(function (w) { return { key: w, name: w, dot: RM.colorForWs(state, w) }; })
+            .concat([{ key: '', name: RM.defaultWsName(state), dot: RM.defaultWsColor(state) }]) // the catch-all lane sits last
+        : allEpics().map(function (ep) { return { key: ep, name: ep, icon: RM.iconForEpic(state, ep) || 'tag' }; })
+            .concat([{ key: '', name: 'No epic' }]);
       stLanes = stLanes.filter(function (ln) { return allPairs.some(function (x) { return prLaneKey(x.it) === ln.key; }); });
       rows = stLanes.map(function (ln) {
         var lanePairs = allPairs.filter(function (x) { return prLaneKey(x.it) === ln.key; });
@@ -2330,10 +2330,10 @@
       rows = cols.map(function (c) { return prColHtml(c, state.items); }).join('');
     } else {
       var lanes = prioGroup === 'ws'
-        ? [{ key: '', name: RM.defaultWsName(state), dot: RM.defaultWsColor(state) }]
-            .concat(allWorkstreams().map(function (w) { return { key: w, name: w, dot: RM.colorForWs(state, w) }; }))
-        : [{ key: '', name: 'No epic' }]
-            .concat(allEpics().map(function (ep) { return { key: ep, name: ep, icon: RM.iconForEpic(state, ep) || 'tag' }; }));
+        ? allWorkstreams().map(function (w) { return { key: w, name: w, dot: RM.colorForWs(state, w) }; })
+            .concat([{ key: '', name: RM.defaultWsName(state), dot: RM.defaultWsColor(state) }]) // the catch-all lane sits last
+        : allEpics().map(function (ep) { return { key: ep, name: ep, icon: RM.iconForEpic(state, ep) || 'tag' }; })
+            .concat([{ key: '', name: 'No epic' }]);
       lanes = lanes.filter(function (ln) {
         return state.items.some(function (it) { return prLaneKey(it) === ln.key && prMatches(it); });
       });
