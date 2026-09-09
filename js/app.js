@@ -2096,6 +2096,13 @@
     scopeCols().forEach(function (c) { if (colShowsOn(c[0], 'feature')) by[c[0]] = c; });
     return prioFields.map(function (k) { return by[k]; }).filter(Boolean);
   }
+  // a card title is plain text (double-click or Rename… edits it in place);
+  // an empty one shows a quiet placeholder so there is still something to hit
+  function prTitleHtml(txt, f, cls) {
+    var s = txt || '';
+    return '<span class="' + cls + (s ? '' : ' pr-ph') + '" data-' + (f === 'story' ? 'prstf="title"' : 'prf="feature"') +
+      ' title="Double-click to rename">' + esc(s || (f === 'story' ? 'Story' : 'Name')) + '</span>';
+  }
   function prCardHtml(it) {
     var fields = prCardFields().map(function (c) {
       // no label — a quiet "No description"-style hint fills the empty field
@@ -2109,7 +2116,7 @@
       ? '<div class="pr-stories">' + (it.stories || []).map(function (st) {
           return '<div class="pr-story" data-prst="' + st.id + '">' +
             '<i data-lucide="corner-down-right" class="pr-st-ico"></i>' +
-            '<input class="pr-st-title" data-prstf="title" placeholder="Story" value="' + esc(st.title) + '">' +
+            prTitleHtml(st.title, 'story', 'pr-st-title') +
             ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-prstact'); }).join('') +
             '</div>';
         }).join('') +
@@ -2119,7 +2126,7 @@
       : '';
     return '<div class="sp-card pr-card" data-prcard="' + it.id + '" style="--ws-c:#' + wsColor + '">' +
       '<div class="pr-head">' + typeGlyphHtml(it, 'feature') +
-      '<input class="pr-title" data-prf="feature" placeholder="Name" value="' + esc(it.feature) + '"></div>' +
+      prTitleHtml(it.feature, 'feature', 'pr-title') + '</div>' +
       fields + stories +
       '<div class="pr-chips">' +
       (prChipOn('size') // the column field's chip is redundant; hidden chips come from the Fields menu
@@ -2215,7 +2222,7 @@
       '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' +
       '<span class="pr-stfeatname">' + esc(it.feature || '(untitled)') + '</span></div>' +
       '<div class="pr-head">' + typeGlyphHtml(st, 'story', it) +
-      '<input class="pr-title pr-st-title" data-prstf="title" placeholder="Story" value="' + esc(st.title || '') + '"></div>' +
+      prTitleHtml(st.title, 'story', 'pr-title pr-st-title') + '</div>' +
       '<div class="pr-chips">' + chips + '</div></div>';
   }
   function prStoryColHtml(col, pairs, laneAttr) {
@@ -2387,27 +2394,48 @@
       }
     }, 120);
   });
-  $('#prioView').addEventListener('change', function (e) {
-    var t = e.target;
-    if (t.dataset.prf === 'feature') {
-      var card = t.closest('[data-prcard]');
-      if (!card) return;
-      var id = card.dataset.prcard, val = t.value;
-      commit('rename', function (s) {
-        var x = RM.itemById(s, id);
-        if (x) x.feature = val;
-      });
-      return;
+  // double-click a card title (or Rename… in the card menu) to edit it in
+  // place. The host is re-queried by id: selecting a card re-renders the
+  // board, so the element the click started on may already be gone.
+  function prStartRename(cardId, stId, inRow) {
+    var host = $(inRow
+      ? '#prioView [data-prcard="' + cardId + '"] .pr-story[data-prst="' + stId + '"]'
+      : stId ? '#prioView .pr-stcard[data-prst="' + stId + '"]'
+        : '#prioView .pr-card[data-prcard="' + cardId + '"]:not(.pr-stcard)');
+    if (!host) return;
+    var span = host.querySelector(inRow ? '.pr-st-title' : '.pr-head .pr-title');
+    if (!span || span.tagName === 'INPUT') return;
+    var blank = span.classList.contains('pr-ph');
+    startInlineEdit(span, function (val) {
+      if (stId) {
+        commit('rename story', function (s) {
+          var st = storyById(RM.itemById(s, cardId) || {}, stId);
+          if (st) st.title = val;
+        });
+      } else {
+        commit('rename', function (s) {
+          var x = RM.itemById(s, cardId);
+          if (x) x.feature = val;
+        });
+      }
+    });
+    var inp = host.querySelector('input.st-add-input');
+    if (inp) {
+      if (stId) inp.dataset.prstf = 'title'; else inp.dataset.prf = 'feature';
+      inp.className = 'st-add-input ' + (inRow ? 'pr-st-title' : stId ? 'pr-title pr-st-title' : 'pr-title');
+      if (blank) inp.value = '';
+      inp.select();
     }
-    if (t.dataset.prstf === 'title') {
-      var stRow = t.closest('[data-prst]'), stCard = t.closest('[data-prcard]');
-      if (!stRow || !stCard) return;
-      var stId0 = stRow.dataset.prst, cardId0 = stCard.dataset.prcard, tv = t.value;
-      commit('rename story', function (s) {
-        var st2 = storyById(RM.itemById(s, cardId0) || {}, stId0);
-        if (st2) st2.title = tv;
-      });
-    }
+  }
+  $('#prioView').addEventListener('dblclick', function (e) {
+    var t = e.target.closest('.pr-title,.pr-st-title');
+    if (!t || t.tagName === 'INPUT') return;
+    var card = t.closest('[data-prcard]');
+    if (!card) return;
+    e.preventDefault();
+    var stRow = t.closest('.pr-story');
+    if (stRow) prStartRename(card.dataset.prcard, stRow.dataset.prst, true);
+    else prStartRename(card.dataset.prcard, card.dataset.prst || null, false);
   });
   // card scope fields are the same rich editors as the scoping grid: the
   // floating B/I/list toolbar rides along while one has focus
@@ -2441,7 +2469,6 @@
       render();
       return;
     }
-    if (e.key === 'Enter' && t.dataset && (t.dataset.prf === 'feature' || t.dataset.prstf === 'title')) t.blur();
   });
   $('#prioView').addEventListener('click', function (e) {
     if (dragConsumedClick) { dragConsumedClick = false; return; } // the click that trails a card drag
@@ -2541,8 +2568,7 @@
         var x = RM.itemById(s, addId);
         if (x) x.stories.push({ id: newSt, title: '', done: false });
       });
-      var ni = $('#prioView [data-prst="' + newSt + '"] input');
-      if (ni) ni.focus();
+      prStartRename(addId, newSt, true); // the new line's title opens for typing
       return;
     }
     var chip = e.target.closest('[data-pract]');
@@ -2595,9 +2621,27 @@
     var itX = RM.itemById(state, cid);
     if (!itX) return;
     var cx = e.clientX, cy = e.clientY;
+    var stRowX = e.target.closest('.pr-story'); // a story line on a feature card
+    if (stRowX) {
+      var stRowId = stRowX.dataset.prst;
+      openContextMenu(cx, cy, [
+        { icon: 'pencil', label: 'Rename…', fn: function () { prStartRename(cid, stRowId, true); } },
+        { sep: true },
+        storyInsertEntries(cid, stRowId)[0], storyInsertEntries(cid, stRowId)[1],
+        { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(cid, stRowId); } },
+        { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
+          commit('delete story', function (s) {
+            var t = RM.itemById(s, cid);
+            if (t) t.stories = (t.stories || []).filter(function (st) { return st.id !== stRowId; });
+          });
+        } }
+      ]);
+      return;
+    }
     if (card.dataset.prst) { // a story card: jump to its feature, or delete the story
       var stIdX = card.dataset.prst;
       openContextMenu(cx, cy, [
+        { icon: 'pencil', label: 'Rename…', fn: function () { prStartRename(cid, stIdX, false); } },
         { icon: 'rows-3', label: 'Go to feature', fn: function () { select(cid, true); } },
         { sep: true },
         storyInsertEntries(cid, stIdX)[0], storyInsertEntries(cid, stIdX)[1],
@@ -2612,6 +2656,8 @@
       return;
     }
     openContextMenu(cx, cy, [
+      { icon: 'pencil', label: 'Rename…', fn: function () { prStartRename(cid, null, false); } },
+      { sep: true },
       { icon: 'folder-input', label: 'Move to phase…', fn: function () { openContextMenu(cx, cy, movePhaseMenu(cid)); } },
       { icon: 'tag', label: 'Set epic…', fn: function () { openContextMenu(cx, cy, setEpicMenu(cid, false)); } },
       state.meta.workstreamsEnabled
@@ -3535,6 +3581,21 @@
     if (e.target.closest && e.target.closest('.r-warn[data-act="warn"]')) hoverTip.hidden = true;
   });
 
+  // outside Scoping a left-pane title is plain text: double-click (or
+  // Rename… in the row menu) turns it into an input. The tooltip still
+  // carries the description, behind the hint.
+  function plNameHtml(it) {
+    var s = it.feature || '';
+    var tip = 'Double-click to rename' + (s ? '\n' + s : '') +
+      (it.description ? '\n' + RM.htmlToText(it.description) : '');
+    return '<span class="r-name r-name-txt' + (s ? '' : ' r-ph') + '" data-rowname title="' + esc(tip) + '">' +
+      esc(s || '(untitled)') + '</span>';
+  }
+  function plStoryNameHtml(st) {
+    var s = st.title || '';
+    return '<span class="st-title st-title-txt' + (st.done ? ' done' : '') + (s ? '' : ' r-ph') +
+      '" data-act="st-open" title="Open story · double-click to rename">' + esc(s || 'Story') + '</span>';
+  }
   function itemRowsHtml(html, it, cyclic) {
     var meta = state.meta;
     var color = '#' + RM.colorForItem(state, it);
@@ -3740,7 +3801,7 @@
         // scoping: the title is a full-height editable cell in the tab ring,
         // top-aligned and wrapping like every other cell
         ? '<div class="r-name sc-name" contenteditable="true" spellcheck="false" aria-label="Feature title">' + esc(it.feature) + '</div>'
-        : '<input class="r-name" data-rowname spellcheck="false" value="' + esc(it.feature) + '" placeholder="(untitled)" title="' + esc(it.feature + (it.description ? '\n' + RM.htmlToText(it.description) : '')) + '">') +
+        : plNameHtml(it)) +
       (it.epic && !groupEpic ? '<span class="r-epic" title="' + esc(it.epic) + '">' +
         (RM.iconForEpic(state, it.epic) ? '<i data-lucide="' + RM.iconForEpic(state, it.epic) + '"></i>' : '') +
         esc(it.epic) + '</span>' : '') +
@@ -3780,7 +3841,7 @@
           (view === 'scoping'
             // scoping: the story title edits in place like the feature titles
             ? '<div class="st-title st-name' + (st.done ? ' done' : '') + '" contenteditable="true" spellcheck="false" aria-label="Story title">' + esc(st.title) + '</div>'
-            : '<span class="st-title' + (st.done ? ' done' : '') + '" data-act="st-open" title="Open story">' + esc(st.title) + '</span>') +
+            : plStoryNameHtml(st)) +
           (view === 'scoping' ? '' : plColsVisible().map(function (k) {
             if (k === 'asg') {
               return '<span class="r-asg" tabindex="0" role="button" data-act="st-asg" title="Story assignees">' +
@@ -5860,6 +5921,7 @@
       var stm = stmIt && storyById(stmIt, stmId);
       if (!stm) return;
       items = [
+        view === 'scoping' ? null : plRenameEntry(stmItemId, stmId),
         stm.startDay != null ? { icon: 'calendar-off', label: 'Remove timeline', fn: function () {
           commit('story timeline', function (s) {
             var st = storyById(RM.itemById(s, stmItemId), stmId);
@@ -5888,6 +5950,8 @@
         return;
       }
       items = [
+        view === 'scoping' ? null : plRenameEntry(itemId, null),
+        view === 'scoping' ? null : { sep: true },
         it.milestone ? null : { icon: 'plus', label: esc('Add ' + lvl('story').toLowerCase()), fn: function () { addStoryNear(itemId, null, 0); } },
         { icon: 'plus', label: esc('Insert ' + lvl('feature').toLowerCase() + ' above'), fn: function () { addFeatureNear(itemId, 0); } },
         { icon: 'plus', label: esc('Insert ' + lvl('feature').toLowerCase() + ' below'), fn: function () { addFeatureNear(itemId, 1); } },
@@ -6221,8 +6285,11 @@
     });
     var row = rowsEl.querySelector('.row[data-id="' + newId + '"]');
     if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
-    var inp = row && row.querySelector('input.r-name,.sc-name');
+    // Scoping types straight into the title cell; elsewhere the title is text
+    // until the inline editor opens on it
+    var inp = row && row.querySelector('.sc-name');
     if (inp) inp.focus();
+    else plStartRename(newId, null);
   }
 
   function duplicateItem(itemId) {
@@ -6256,9 +6323,12 @@
       selStory = newId;
     });
     var ed = $('#panel textarea[data-stf="title"]') ||
-      document.querySelector('.pr-story[data-prst="' + newId + '"] input[data-prstf="title"]') ||
-      document.querySelector('.row.story[data-story="' + newId + '"] input');
-    if (ed && ed.focus) ed.focus();
+      rowsEl.querySelector('.row.story[data-story="' + newId + '"] .st-name');
+    if (ed && ed.focus) { ed.focus(); return; }
+    // no panel to type in: open the inline editor on the new story's title
+    if ($('#prioView .pr-story[data-prst="' + newId + '"]')) prStartRename(itemId, newId, true);
+    else if ($('#prioView .pr-stcard[data-prst="' + newId + '"]')) prStartRename(itemId, newId, false);
+    else plStartRename(itemId, newId);
   }
   function storyInsertEntries(itemId, stId) {
     return [
@@ -6433,9 +6503,54 @@
   rowsEl.addEventListener('pointerdown', function () { hidePlaceGhost(); hideOffTag(); });
 
   function justPlaced(key) { return placedKey === key && Date.now() - placedAt < 500; }
+  // double-click a left-pane title (or Rename… in the row menu) to edit it in
+  // place. The row is re-queried by id: the click that came first selected it
+  // and re-rendered the pane, so the clicked node may already be detached.
+  function plStartRename(itemId, stId) {
+    var rowEl = rowsEl.querySelector(stId
+      ? '.row.story[data-story="' + stId + '"]'
+      : '.row.item[data-id="' + itemId + '"]');
+    if (!rowEl) return;
+    var span = rowEl.querySelector(stId ? '.st-title-txt' : '.r-name-txt');
+    if (!span || span.tagName === 'INPUT') return;
+    var blank = span.classList.contains('r-ph');
+    startInlineEdit(span, function (val) {
+      if (stId) {
+        commit('rename story', function (s) {
+          var st = storyById(RM.itemById(s, itemId) || {}, stId);
+          if (st) st.title = val;
+        });
+      } else {
+        commit('rename', function (s) {
+          var x = RM.itemById(s, itemId);
+          if (x) x.feature = val;
+        });
+      }
+    });
+    var inp = rowEl.querySelector('input.st-add-input');
+    if (inp) {
+      if (!stId) inp.dataset.rowname = '';
+      inp.className = 'st-add-input ' + (stId ? 'st-title' : 'r-name');
+      if (blank) inp.value = '';
+      inp.select();
+    }
+  }
+  // the Rename… entry a titled row's menu opens with
+  function plRenameEntry(itemId, stId) {
+    return { icon: 'pencil', label: 'Rename…', fn: function () { plStartRename(itemId, stId); } };
+  }
   rowsEl.addEventListener('dblclick', function (e) {
     // double-click in a text field selects a word — never steal its focus
     if (e.target.closest('input,textarea,[contenteditable="true"]')) return;
+    var titleEl = e.target.closest('.r-name-txt,.st-title-txt');
+    if (titleEl) {
+      var tRow = titleEl.closest('.row');
+      if (tRow) {
+        e.preventDefault();
+        plStartRename(tRow.dataset.id, tRow.dataset.story || null);
+        return;
+      }
+    }
     var stRowEl = e.target.closest('.row.story[data-story]');
     if (stRowEl) {
       if (view === 'planning' && e.target.closest('.row-lane') && !e.target.closest('[data-stbar]') &&
@@ -6631,16 +6746,6 @@
     if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('st-name')) {
       e.preventDefault();
       e.target.blur();
-    }
-  });
-
-  // inline row-title rename
-  rowsEl.addEventListener('change', function (e) {
-    if (e.target.dataset && e.target.dataset.rowname != null) {
-      var rowEl2 = e.target.closest('.row');
-      var rid = rowEl2 && rowEl2.dataset.id;
-      var nv = e.target.value;
-      if (rid) commit('rename', function (s2) { RM.itemById(s2, rid).feature = nv; });
     }
   });
 
@@ -8128,10 +8233,15 @@
     select(newId, true);
     focusRowTitle(newId);
   }
-  // put the caret in a row's title in the left pane (Planning input or
-  // Scoping cell); the panel's name field is the fallback
+  // put the caret in a row's title in the left pane (Scoping cell, or the
+  // inline editor on a Planning row); the panel's name field is the fallback
   function focusRowTitle(itemId) {
-    var nameEl = rowsEl.querySelector('.row[data-id="' + itemId + '"] .r-name');
+    var nameEl = rowsEl.querySelector('.row[data-id="' + itemId + '"] .sc-name');
+    if (!nameEl && view === 'planning' &&
+      rowsEl.querySelector('.row.item[data-id="' + itemId + '"] .r-name-txt')) {
+      plStartRename(itemId, null);
+      return;
+    }
     if (nameEl) {
       nameEl.focus();
       if (nameEl.isContentEditable && window.getSelection) {
