@@ -154,7 +154,7 @@ console.log('— tools');
   ok(a1.stories[0].done && a1.stories[0].startDay === 1 && a1.stories[0].durDays === 2, 'story fields merged');
   eq(A.labels[A.labels.length - 1], 'tweak', 'custom label used');
   throws(function () { AI.runTool('update_items', { updates: [{ num: 2, fields: { start: '2030-01-01' } }] }, A); }, /inside the timeline/, 'dates outside the timeline rejected');
-  throws(function () { AI.runTool('update_items', { updates: [{ num: 77, fields: {} }] }, A); }, /no feature #77/, 'unknown feature rejected');
+  throws(function () { AI.runTool('update_items', { updates: [{ num: 77, fields: {} }] }, A); }, /no feature or story #77/, 'unknown feature rejected');
   AI.runTool('update_items', { updates: [{ num: 4, delete: true }] }, A);
   ok(!RM.itemByNum(st, 4), 'delete removes a feature');
 
@@ -188,6 +188,30 @@ console.log('— tools');
   var prefs = AI.runTool('get_preferences', {}, A);
   ok(prefs.ui.view === 'scoping' && prefs.preferenceKeys.theme, 'get_preferences returns ui + keys');
   throws(function () { AI.runTool('nope', {}, A); }, /unknown tool/, 'unknown tool rejected');
+}
+
+console.log('— story numbers and deps');
+{
+  // stories carry their own numbers from the shared pool; give the fixture two
+  // well away from the feature numbers so the assertions read clearly
+  var st = freshState();
+  st.items[0].stories[0].num = 10;
+  st.items[1].stories.push({ id: 's2', title: 'Story two', num: 11 });
+  st = RM.normalizeState(st);
+  var A = fakeApp(st);
+  AI.runTool('update_items', { updates: [{ num: 11, fields: { deps: [10, 99] } }] }, A);
+  eq(RM.storyRef(st, 's2').st.deps, [10, 99], 'a story number targets the story; deps are numbers');
+  eq(AI.runTool('get_project', { part: 'items', nums: [2] }, A).items[0].stories[0].deps, [10, 99], 'get_project items reports story deps');
+  ok(AI.summary(st).items.some(function (l) { return l.storyNums && l.storyNums.indexOf(10) !== -1; }), 'the summary lists story numbers');
+  AI.runTool('update_items', { updates: [{ num: 1, fields: { addStories: [{ title: 'New one' }] } }] }, A);
+  ok(RM.itemById(st, 'a').stories.slice(-1)[0].num === RM.nextNum(st) - 1, 'a story added by the AI gets a number at once');
+  AI.runTool('add_items', { items: [{ feature: 'Delta', stories: [{ title: 'D-a' }] }] }, A);
+  var delta = st.items[st.items.length - 1];
+  ok(delta.stories[0].num > 0 && RM.storyByNum(st, delta.stories[0].num).st === delta.stories[0], 'add_items numbers the stories it creates');
+  eq(RM.storyRef(st, 's2').st.num, 11, 'the story number itself is untouched by the edits');
+  ok(/story number/i.test(AI.toolByName('update_items').description), 'the update tool documents story numbers');
+  ok(/story number/i.test(AI.GUIDE), 'the guide documents story numbers');
+  throws(function () { AI.runTool('update_items', { updates: [{ num: 77, fields: {} }] }, A); }, /no feature or story #77/, 'an unknown number names both kinds');
 }
 
 console.log('— item types');
