@@ -12,7 +12,7 @@ state = {
   meta:   { title, timelineStart (Mon ISO date), numWeeks, endDate,  // endDate (last working day) wins on load
             holidays: [ISO dates],                               // individual days, drawn as day-level segments
             sprintAnchor (Mon ISO), sprintAnchorNum,             // e.g. S1 starts Sep 7
-            scopeCols: [ { key, label? } ],                      // scoping columns: built-ins + custom ('c…' keys)
+            scopeCols: [ { key, label?, scope? } ],              // scoping columns: built-ins + custom ('c…' keys); scope 'feature' | 'story' | 'both' (absent = both; 'ac' defaults to story)
             sizeDays: { XS:2, S:5, M:10, L:20, XL:40 } }        // working days per t-shirt size (week scale)
   phases: [ { id, name, description, bucket, collapsed,          // bucket = backlog shelf (Next/Future)
               startDay, endDay } ]                               // optional pinned window (null = auto from items)
@@ -25,7 +25,8 @@ state = {
               startDay, durDays,      // working-day index / span; null = unscheduled
               riskDays,               // always 0 — risk no longer pads the schedule
               locked, done,
-              stories: [ { id, title, done, startDay, durDays } ] } ] // story timeline optional (both null = none)
+              jiraKey,                // "HW-12" typed in after a Jira CSV import; null = none
+              stories: [ { id, title, done, startDay, durDays, jiraKey } ] } ] // story timeline optional (both null = none)
   team:   [ { id, name, type, workstream?, capacity,             // "roles"; capacity = heads at 40 h (0.5 = half)
               rate, cost,                                        // hourly bill rate / hourly cost (budgeting; 0 = unset)
               weekHours: { isoMonday: hours } } ]                // default 40 h/week; 0 = off
@@ -33,6 +34,7 @@ state = {
   wsColors:  { workstream: paletteKey | 6-hex }                  // COLOR follows the workstream (OS = blue;
                                                                   //  well-known ones get seeded defaults)
   epicIcons: { epicName: lucideIconName }                        // epics carry an ICON, shown on rows
+  epicJira:  { epicName: jiraKey }                               // the Jira epic features parent to on export
   epicColors: { … }                                              // legacy, no longer drives display
 }
 ```
@@ -52,6 +54,11 @@ rows by start day after moves/resizes.
 
 ## Views
 
+- **Apps** (Setup → Project → Apps, right after Timeline): per-document switch for the header
+  tabs — `meta.apps` `{scoping, prio, planning, sprints, budget, reports}`, all on by default,
+  Planning forced on (`RM.APPS`, `RM.appEnabled`). An app that is off has its tab hidden at
+  render, the view falls back to Planning if it was current (or restored from a file / the UI
+  snapshot), and the AI's `navigate` refuses it. Data behind a hidden app is untouched.
 - **Setup** — project configuration page (replaces the old Settings dialog): timeline start/end,
   sprint numbering, workstreams, phases and team types (each add/edit/delete plus drag-to-reorder
   via row grips; workstream order persists in state.wsOrder and drives every dropdown), sizing
@@ -59,6 +66,66 @@ rows by start day after moves/resizes.
   document (deletions stick). Edit menu → Setup and the resources "manage" button land here.
 - **Planning** — the timeline. Sprint header shows dates first (sprint numbers secondary).
   Drag empty lane space to pan; ⌘/ctrl-scroll zooms around the cursor.
+- **Sprinting** — sprint by sprint (`renderSprintPage`, `#sprintView`): a sidebar of sections
+  (every sprint of the timeline, then Unscheduled last; today's sprint carries a dot; the entry
+  under the scroll top is lit) beside ONE scrolling page of sections, each a list of rows. Rows are
+  features (`itemsInSprint`: any item overlapping the sprint, tagged `from S2` / `to S5` when it
+  spills either way) or stories (Features / Stories toggle, `sprLevel` in the UI snapshot): stories
+  with their own timeline sit where it falls, the rest ride "with feature". Rows drag (kind `sprow`)
+  onto a sidebar entry or a section (start = that sprint's first day, span kept, stories shifted —
+  `RM.moveItemToSprint` / `RM.moveStoryToSprint`) or before another row (`RM.reorderItem`, adopting
+  its phase like a Planning row drop); the order IS `state.items`, so it shows everywhere. A same-
+  section reorder never touches the start; a cross-sprint drop re-sorts by start when auto-order is
+  on, like a bar drag. Rows carry an inline title, epic and size chips, dates and phase; the context
+  menu offers move / epic / workstream / unschedule / delete; every section ends with Add feature.
+  The toolbar filters rows like the Prioritizing board (`sprMatches`): the shared ⌘F text plus
+  Phase / Epic / Workstream dropdowns (`sprFPhase` / `sprFEpic` / `sprFWs`, transient, independent
+  of the Prioritizing picks; Phase hides with a single phase). Sidebar and section counts follow.
+- **Detail panel** (`renderPanel` / `renderStoryPanel`): `.p-top` (number, milestone chip, collapse) is
+  `position: sticky` with `top: -16px` — the sticky rectangle is inset by the panel's padding, so 0
+  would pin it 16px down and over the title. Fields come from `panelScopeCols(kind)`: text columns in
+  `meta.scopeColOrder` (the Scoping tab's order) filtered by `RM.scopeColShows(col, kind)`; excluded
+  columns render `.sc-na` cells in the grid. Section order: Fields, Details, Size & schedule, People,
+  Dependencies, Stories, Checks, Integrations (Jira key); stories: Rolls up to, Fields,
+  People (assignees only), Timeline, Integrations. A document-level Enter handler blurs any
+  single-line input in `#panel`/`#rows`/`#resPanel` (and the `.p-name` textarea) and re-fires `change`
+  when blur left a dirty value uncommitted. `.wz-bar` shows only under `.wz:focus-within`.
+- **Opening is not an edit**: `loadWorkbookBuffer` goes through `adoptState`, not `replaceState` —
+  no version-history entry, `docSaved = true`, `sessionEdited = false`, undo/redo cleared (an undo
+  across an open would autosave the previous document into the new file). Only real commits
+  (`commit` / `replaceState`) record history, mark the doc unsaved and arm autosave.
+- **Disk reload keeps the screen**: when the watched file changes on disk (`js/desktop.js`
+  calls `loadBuffer(bytes, name, true)`), only the DATA is replaced. The file's embedded UI
+  prefs are ignored, the view stays, the selection (item, story, multi-select) survives where
+  the ids still exist, board/sprint/panel scroll offsets are kept, modals and dropdowns stay
+  open, and the panel field that had focus gets it back (`reloadingDoc`). No `enterEditor`,
+  no `goToday`.
+- **Panes**: `leftCollapsed` (UI snapshot) sets `--left-w` to 0 and stamps `body.left-collapsed`
+  (`.hdr-left`, `.row-left` and `.rleft` display none). Like the right panel, only a floating reopen
+  button remains: `#leftPeek` (top-left) mirrors `#panelPeek` (top-right), both absolute in `#main`
+  where the collapse buttons sat. `[` / `]` toggle left / right in the app keydown handler, after the
+  `inField` bail-out.
+- **Milestone markers**: `item.msStyle` ∈ `RM.MS_STYLES` (`diamond` default, absent; `star`; `circle`),
+  kept on bars too so a round-trip conversion remembers it. Rendered via `.bar.ms.ms-<style>`
+  (`--ms-star` clip-path polygon, circle = border-radius), `.r-dot.msdot.<style>`, the placement
+  ghost, PNG canvas paths, PPTX `star5` / `ellipse`, Excel `◆ ★ ●`. Picked from `msStyleItems` (context
+  menus) or the panel chip (`data-act="msstyle"`).
+- **Prioritizing** — kanban of the phases (`renderPrioPage`). Its filter bar: search input with
+  icon + ⌘F, epic and workstream filters that, when active, wear the epic's icon / the workstream's
+  color dot and a blue outline (`pr-on`), then Columns / Group / Sort / Fields. **Feature level**
+  columns are the phases by default; the Columns dropdown (`prioFeatCol`, persisted) swaps them
+  for a feature field's ladder — Priority (not under RICE, which is computed), Size or Risk (not
+  `auto`) — plus Unset; `prFeatVal` files off-ladder values under Unset, the column field's chip
+  leaves the cards, Add hides (a new feature needs a phase), and a drop sets that field with the
+  same side effects as its chip (size re-stretches the span, risk clears the buffer) in one
+  commit with any swimlane change. **Story level** turns the
+  board into story cards (`prStoryCardHtml`, `.pr-stcard`: feature number + epic icon + name as a
+  quiet label above the editable title) in columns of ONE story field — Priority, Size or Risk,
+  the Columns dropdown (`prioStoryCol`, persisted) — the field's ladder in scheme order plus
+  Unset; values the ladder does not know file under Unset. Dragging a card sets that field on
+  the story (`prCardDragEnd` with `drag.st`); the column field's own chip leaves the card. Group
+  lanes stories by their feature's workstream / epic; Sort and the filters apply per story (text
+  matches the story title or the feature's own fields). Fields and Add are feature-only and hide.
 - **Budgeting** — planning's own board, resources only: same timeline header (phase lane +
   dates/sprints), frozen left pane, one scroll surface, no cards or rounded borders. One
   row per role: workstream color dot + name, then LEFT-aligned spelled-out columns —
@@ -84,11 +151,6 @@ rows by start day after moves/resizes.
 
 ## Interactions
 
-- **Timeline-only preview**: an expand button in the phase lane's left cell (Planning only;
-  the lane renders even with no phase spans so the button is always reachable) hides the
-  topbar, frozen left pane, edit panel and resources panel — just the planning area remains.
-  A floating minimize button top-right (or Esc) restores everything; the mode is transient
-  (never persisted) and leaves automatically on a view switch.
 - **Header phase lane** (Planning only): above the sprint dates, one span per phase — the
   range auto-derives from its items (min start → max end) unless the phase carries pinned
   dates, which win side-by-side (set them in the phase modal, or drag the span: body moves,
@@ -126,9 +188,15 @@ rows by start day after moves/resizes.
   `holdPos` flag keeps auto-order from moving it until it gets a start date), Unschedule
   (scheduled items only), Lock/Unlock and Mark/Unmark as done. Drag the grip / number area to reorder or move
   between phases; a blank
-  click-to-add row closes every phase (and the resources panel adds people the same way); near-edge
-  auto-scroll during drags. Story chevron sits left of the ID. Chips: size · risk · total weeks ·
+  click-to-add "Add feature" row closes every phase AND every workstream / epic group when grouping
+  is on (a group's row files the feature into that group, right after its last row; Insert feature
+  above/below inherits the anchor's epic and workstream); the resources panel adds people the same
+  way; near-edge auto-scroll during drags. Story chevron sits left of the ID. Chips: size · risk · total weeks ·
   headcount, aligned under header labels.
+- **Priority colors**: every priority value sits in one of four tiers (`RM.priorityTier`,
+  `RM.PRIORITY_TIERS`): Must/Critical bright red, Should/High orange, Could/Medium green,
+  Won’t/Low gray (`--pri-*` in CSS, `RM.PRIORITY_RAMP` for bars under "color by priority").
+  Chips (`.r-risk.pri.pt-*`), the panel's segmented picker and dropdown dots all use them.
 - **Workstreams, epics & grouping**: color follows the workstream (editable via any workstream
   dropdown's pencil or right-clicking a workstream band — rename + palette/custom color; known
   names seed defaults, OS = blue). Epics carry an icon instead (16-icon picker in the epic
@@ -220,11 +288,68 @@ alert hover; the panel keeps only the actionable controls (start date, weeks, si
   default). Bars come from solid fills; the pale run at either bar edge (detected by
   lightness) becomes the trailing risk buffer.
 
+## Jira CSV export (`js/export-jira.js`)
+
+Targets Jira Cloud's **user-level** importer (work navigator → ⋯ → Import issues from CSV),
+which needs only the Create work items + Make bulk changes permissions — not the admin-only
+External System Import. That importer has no Issue Id / Parent Id columns, so one file cannot
+create a parent and its children together: `Parent` and `Blocked By` carry the Jira keys typed
+into Headway (`item.jiraKey`, `story.jiraKey`, `state.epicJira[epic]`) and stay blank until
+then. Columns: Summary, Issue Type, Description (plain text: description, a story checklist
+when stories aren't rows, then Enables / Out of scope / External dependencies / Notes),
+Parent, Labels (`ws-…`, `phase-…`, `size-…`; story rows add `feature-…`), Priority, Due Date
+(deadline), Start/End Date (ISO, from the schedule), Blocked By, Jira Key (lets the wizard map
+the row as an update). It is the third format in the Export dialog (right of PowerPoint); choosing it swaps the timeline options for feature and/or story rows and the issue type names
+(defaults Story / Sub-task); its settings persist in the UI snapshot (`jiraPrefs`).
+
+## AI assistant (`js/ai.js`)
+
+`window.HeadwayAI`, module-shaped like `js/jira.js`: pure pieces (node-tested in
+`tests/ai.test.js`) plus browser glue. App hooks live on `HeadwayApp.ai` (reads are clones;
+`commit(label, mutate)` flips `aiActor` so history stamps "<name> · AI"; `setPref`, `setView`,
+`selectNum`, `ui()`, `validation()`).
+
+- **Providers** (personal, `localStorage` `headway-ai-v1`): `litellm` — OpenAI-compatible
+  `POST {base}/v1/chat/completions`, streamed SSE, native `tools`, `reasoning_effort` (retried
+  without it on a 400 that names it), reasoning via `reasoning_content` / `thinking_blocks`
+  (blocks are replayed on assistant turns so Anthropic tool-use stays valid), models from
+  `GET /v1/models`, per-model facts from LiteLLM's `GET /model_group/info` (`AI.modelInfo`,
+  fetched once per gateway when the drawer opens or models are loaded): a model that reports
+  `reasoning_effort` / `supports_reasoning` offers Low / Medium / High, one that doesn't offers
+  no effort at all and none is sent (`AI.effortsFor` / `AI.effortAllowed`); an unknown model
+  keeps every level. Transport is Tauri's http plugin on desktop, `fetch` otherwise. `claude` —
+  desktop only: `HeadwayDesktop.claude.spawn` runs `claude -p --input-format stream-json
+  --output-format stream-json --include-partial-messages --tools "" --strict-mcp-config
+  --system-prompt … --model … --effort …` once per conversation, user turns are written as
+  stream-json lines, `stream_event` deltas stream text/thinking, `result` ends the turn; Stop
+  kills the process and the next turn `--resume`s the session id. Function calling is a text
+  protocol there: the system prompt lists the tool schemas and the model writes
+  ```` ```headway-tool ```` fenced `{name, args}` JSON; results go back as the next user turn.
+- **Tools** (`AI.TOOLS`, `AI.runTool`): `get_project` (summary / items by num / meta / phases /
+  team / validation / history), `get_preferences`, `add_items`, `update_items` (ISO `start` /
+  `end` conveniences, `addStories`, `delete`), `update_project` (path ops `set` / `delete` /
+  `push` over any part of the state — `items/#12/feature`, `phases/@id/name`, `team/-`,
+  `wsColors/Data`; then `RM.normalizeState`), `set_preference`, `navigate`, `sync_jira` (dry-run preview or apply through `js/jira.js`: plan → apply → commit keys, Done flags and the sync stamp). Tools may return promises; calls run in order. Writes return
+  validation counts + errors so the model can react. `AI.MAX_ROUNDS` bounds tool loops.
+- **System prompt** (`AI.GUIDE` + `AI.systemPrompt(ctx)`): what Headway is, the views, the
+  model, working rules (read before write, ISO dates inside the timeline, ask when ambiguous),
+  plus today / user / view / open-document line.
+- **Drawer** (`#aiDrawer`, last child of `#main`, `--ai-w` width, `headway-ai-ui-v1`): header
+  with model + effort selects (model labels shortened by `AI.shortModel`:
+  `bedrock/global.us.claude-opus-5` reads `claude-opus-5`, the full id in the tooltip; the
+  effort select follows the model and hides when the model has none; effort lives only here,
+  not in Setup), new chat, settings, close; messages re-render on a rAF-coalesced
+  `emit`; assistant blocks = collapsible thinking (`.ai-think`), `AI.md` markdown (escaped;
+  `#12` becomes `.ai-ref` that selects the item), tool cards (`.ai-tool`, `.write` / `.fail`),
+  errors; composer with attachments (`AI.readFile`: images / PDF as base64, text inline, size
+  caps). `#btnAI.busy` spins; `.ai-dot` marks a reply that landed while closed. The
+  conversation persists in `headway-ai-chat-v1` (file names only).
+
 ## Files
 
 `index.html` · `css/app.css` · `js/core.js` (pure logic, node-testable) · `js/excel.js` ·
 `js/app.js` (UI) · `js/vendor/exceljs.min.js` · `js/vendor/lucide.min.js` ·
-`tests/core.test.js` · `tests/smoke.test.js` (jsdom) · `tests/seed.fixture.js` (the old
+`js/jira.js` · `js/ai.js` · `tests/core.test.js` · `tests/jira.test.js` · `tests/ai.test.js` · `tests/smoke.test.js` (jsdom) · `tests/seed.fixture.js` (the old
 workbook parse, now a TEST FIXTURE only — the app itself boots completely empty; there is
 no embedded seed and no seed-restore menu).
 

@@ -46,24 +46,28 @@
   var validation;            // RM.validate cache
   var undoStack = [], redoStack = [];
   var selectedId = null;
+  var reloadingDoc = false;  // true while a disk reload re-renders (focus is put back afterwards)
   var expanded = {};         // itemId -> true (stories open)
   var weekPx = 28;
   var view = 'planning';     // planning (timeline) | scoping (spreadsheet)
   var depsMode = 'on';       // on: selected item's explicit deps + violations + critical path | none
   var showCrit = true;       // orange critical-path highlight (bars + arrows)
   var showCap = true;        // weekly capacity row in the planning header
-  var presentMode = false;   // timeline-only preview (hides topbar + left pane); transient
   var repCollapsed = true;   // bottom Reports drawer starts tucked away
   var leftWBudget = 806;     // frozen left-pane width, budgeting view
   var repMode = 'workstream'; // reports grouping: workstream | phase | phase-ws
   var panelW = 372;          // right edit-panel width (resizable)
   var panelOpen = true;      // right panel is persistent on Planning; collapsible
+  var leftCollapsed = false; // frozen left pane folded to a slim strip ([ toggles)
   var leftWPlan = 538;       // frozen left-pane width, planning view
   var leftWScope = 538;      // …and scoping view (independently resizable)
   var groupWs = false;       // sub-group rows by workstream inside each phase
   var groupEpic = false;     // …and/or by epic (nested under workstream)
   var exportPrefs = null;    // last-used Export dialog settings (fmt, split, …)
-  var snapDays = 5;          // drag/resize snap: 1 (day) | 5 (week) | 10 (2 weeks)
+  var jiraPrefs = null;      // last-used Export Jira CSV dialog settings
+  var SNAP_MODES = ['day', 'week', 'sprint'];
+  var snapFeat = 'week';     // feature drag/place snap: 'day' | 'week' | 'sprint'
+  var snapStory = 'sprint';  // …and the story snap, chosen separately
   var detailMode = 'feature'; // Scoping/Planning row detail: phase | feature | story
   var buColW = {};           // budgeting column width overrides (key -> px)
   var buColOrder = null;     // budgeting column order (array of keys; null = default)
@@ -73,7 +77,9 @@
   var autoOrder = true;      // after move/resize, reorder rows by start day (stable)
   var setupTab = 'timeline';   // active vertical tab in the Setup view
   var filterText = '';       // planning/scoping row filter (⌘F); transient
+  var multiSel = null;       // multi-selection: item ids (null = single-select mode; selectedId stays the anchor)
   var docSaved = false;      // doc matches its last save/open (Save button shows ✓)
+  var sessionEdited = false; // an actual edit happened this session (guards never nag a doc that was only opened)
   var autoSave = true;       // desktop: write to the open file after each change
   var resPanelH = 150;       // resources panel height (px)
   var resCollapsed = false;  // resources section collapsed
@@ -154,7 +160,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapDays: snapDays, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, sprintSel: sprintSel, sprintMode: sprintMode, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, docKind: docKind, bundleDir: bundleDir, activePlanId: activePlanId };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy, docKind: docKind, bundleDir: bundleDir, activePlanId: activePlanId };
   }
   // the snapshot an .xlsx carries: a workbook must never re-link a folder
   function exportUiSnapshot() {
@@ -162,15 +168,31 @@
     delete ui.docKind; delete ui.bundleDir; delete ui.activePlanId;
     return ui;
   }
-  var sprintSel = 'cur';    // Sprinting view: 'cur' | 'all' | a sprint number
-  var sprintMode = 'board'; // Sprinting view: 'board' (kanban) | 'grid'
+  var COLOR_MODES =[['workstream', 'Workstream'], ['epic', 'Epic'], ['assignee', 'Assignee'], ['priority', 'Priority']];
+  var colorBy = 'workstream'; // what bar colors follow: 'workstream' | 'epic' | 'assignee' | 'priority'
+  function setColorBy(mode) {
+    colorBy = RM.COLOR_MODES.indexOf(mode) !== -1 ? mode : 'workstream';
+    RM.setColorMode(colorBy);
+  }
+  var prioGroup = 'none';   // Prioritizing view swimlanes: 'none' | 'ws' | 'epic'
+  var sprLevel = 'feature'; // Sprinting view rows: 'feature' | 'story'
+  var prioLevel = 'feature'; // Prioritizing cards: 'feature' | 'story' (a board of story cards)
+  var prioStoryCol = 'priority'; // Story-level columns: 'priority' | 'size' | 'risk'
+  var prioFeatCol = 'phase';     // Feature-level columns: 'phase' | 'priority' | 'size' | 'risk'
+  var prioFields = [];      // scope-column keys shown on prioritizing cards (compact by default)
+  var prioSort = 'priority'; // Prioritizing order: 'priority' | 'doc' | 'title' | 'size'
+  var prioFEpic = null;     // Prioritizing epic filter: null = all, '' = no epic, else the epic
+  var prioFWs = null;       // Prioritizing workstream filter: null = all, '' = default, else the stream
+  var sprFPhase = null;     // Sprinting phase filter: null = all, else a phase id
+  var sprFEpic = null;      // Sprinting epic filter: null = all, '' = no epic, else the epic
+  var sprFWs = null;        // Sprinting workstream filter: null = all, '' = default, else the stream
   var uiExpandedLoaded = false; // boot skips the auto-expand default when true
 
   function applyUi(ui) {
     if (!ui) return;
     weekPx = ui.weekPx || 28;
-    view = ['scoping', 'setup', 'budget', 'reports', 'history', 'sprints'].indexOf(ui.view) !== -1 ? ui.view : 'planning';
-    detailMode = ['phase', 'feature', 'story'].indexOf(ui.detailMode) !== -1 ? ui.detailMode : 'feature';
+    view = ['scoping', 'setup', 'budget', 'reports', 'history', 'prio', 'sprints'].indexOf(ui.view) !== -1 ? ui.view : 'planning';
+    detailMode = ui.detailMode === 'story' ? 'story' : 'feature';
     buColW = ui.buColW && typeof ui.buColW === 'object' ? ui.buColW : {};
     buColOrder = Array.isArray(ui.buColOrder) ? ui.buColOrder : null;
     buColHide = ui.buColHide && typeof ui.buColHide === 'object' ? ui.buColHide : {};
@@ -180,8 +202,12 @@
     groupWs = ui.groupWs != null ? !!ui.groupWs : ui.groupBy === 'ws';
     groupEpic = ui.groupEpic != null ? !!ui.groupEpic : (ui.groupBy === 'epic' || !!ui.groupByEpic);
     exportPrefs = ui.exportPrefs && typeof ui.exportPrefs === 'object' ? ui.exportPrefs : null;
+    jiraPrefs = ui.jiraPrefs && typeof ui.jiraPrefs === 'object' ? ui.jiraPrefs : null;
     resCollapsed = !!ui.resCollapsed;
-    snapDays = [1, 5, 10].indexOf(ui.snapDays) !== -1 ? ui.snapDays : 5;
+    // pre-1.1 snapshots stored one numeric snap (1 / 5 / 10 days) for everything
+    var legacySnap = ui.snapDays === 1 ? 'day' : ui.snapDays === 10 ? 'sprint' : null;
+    snapFeat = SNAP_MODES.indexOf(ui.snapFeat) !== -1 ? ui.snapFeat : (legacySnap || 'week');
+    snapStory = SNAP_MODES.indexOf(ui.snapStory) !== -1 ? ui.snapStory : 'sprint';
     scopeColW = ui.scopeColW && typeof ui.scopeColW === 'object' ? ui.scopeColW : {};
     autoOrder = ui.autoOrder !== false; // default true
     showCrit = ui.showCrit !== false;   // default true
@@ -200,8 +226,15 @@
     autoSave = ui.autoSave !== false;   // default true (desktop writes to the open file)
     setupTab = typeof ui.setupTab === 'string' ? ui.setupTab : 'timeline';
     panelOpen = ui.panelOpen !== false; // panel is persistent by default
-    sprintSel = ui.sprintSel != null ? ui.sprintSel : 'cur';
-    sprintMode = ui.sprintMode === 'grid' ? 'grid' : 'board';
+    leftCollapsed = ui.leftCollapsed === true;
+    prioGroup = ['ws', 'epic'].indexOf(ui.prioGroup) !== -1 ? ui.prioGroup : 'none';
+    setColorBy(ui.colorBy);
+    sprLevel = ui.sprLevel === 'story' ? 'story' : 'feature';
+    prioLevel = ui.prioLevel === 'story' ? 'story' : 'feature';
+    prioStoryCol = ['priority', 'size', 'risk'].indexOf(ui.prioStoryCol) !== -1 ? ui.prioStoryCol : 'priority';
+    prioFeatCol = ['phase', 'priority', 'size', 'risk'].indexOf(ui.prioFeatCol) !== -1 ? ui.prioFeatCol : 'phase';
+    if (Array.isArray(ui.prioFields)) prioFields = ui.prioFields.map(String);
+    prioSort = ['doc', 'title', 'size'].indexOf(ui.prioSort) !== -1 ? ui.prioSort : 'priority';
     if (ui.expanded && typeof ui.expanded === 'object') {
       expanded = ui.expanded;
       uiExpandedLoaded = true;
@@ -369,7 +402,6 @@
       push('timeline', lbl + ' — Milestone', p.milestone ? 'yes' : 'no', it.milestone ? 'yes' : 'no');
       push('timeline', lbl + ' — Locked', p.locked ? 'yes' : 'no', it.locked ? 'yes' : 'no');
       push('status', lbl + ' — Done', p.done ? 'done' : 'not done', it.done ? 'done' : 'not done');
-      push('status', lbl + ' — Status', p.status, it.status);
       push('status', lbl + ' — Assignees', names(a, p.assignees), names(b, it.assignees));
       var sa = byId(p.stories), sb = byId(it.stories);
       (it.stories || []).forEach(function (st) {
@@ -383,7 +415,6 @@
         push('timeline', sl + ' — Duration', dWeeks(sp.durDays), dWeeks(st.durDays));
         push('timeline', sl + ' — Deadline', sp.deadline, st.deadline);
         push('status', sl + ' — Done', sp.done ? 'done' : 'not done', st.done ? 'done' : 'not done');
-        push('status', sl + ' — Status', sp.status, st.status);
         push('status', sl + ' — Assignees', names(a, sp.assignees), names(b, st.assignees));
       });
       (p.stories || []).forEach(function (st) {
@@ -467,13 +498,15 @@
     function optNames(s) { return ((s && s.options) || []).map(function (o) { return o.name; }).join(', '); }
     push('setup', 'Other options', optNames(a), optNames(b));
     // rateCard sits inside meta too — drop the raw duplicate from the generic pass
-    ops = ops.filter(function (op) { return op[1] !== 'Setup — rateCard' && op[1] !== 'Setup — statuses'; });
+    ops = ops.filter(function (op) { return op[1] !== 'Setup — rateCard'; });
     return { ops: ops, tl: tl };
   }
   // coalescing helpers (mergeOps / mergeTl / HISTORY_COALESCE_MS) live in core
+  var aiActor = false; // true while the AI assistant applies an edit (history attribution)
   function recordHistory(label, prevJson) {
     if (!label) return;
     var u = userName();
+    if (aiActor) u = (u || 'Unknown user') + ' · AI';
     var ops = [], tl = [];
     if (prevJson) {
       try {
@@ -551,9 +584,24 @@
     if (undoStack.length > 120) undoStack.shift();
     redoStack.length = 0;
     state = next;
+    multiSel = null; // ids from the previous document mean nothing here
     recordHistory(label, prev);
     afterChange();
     maybeAskName();
+  }
+  // opening a file is not an edit: the document arrives as-is — no version-
+  // history entry, nothing unsaved, and no undo back into the previous
+  // document (that would autosave the old doc over the new file)
+  function adoptState(next) {
+    state = next;
+    multiSel = null;
+    undoStack.length = 0;
+    redoStack.length = 0;
+    docSaved = true;
+    sessionEdited = false;
+    validation = RM.validate(state);
+    saveLocal();
+    render();
   }
   // the first change someone saves (autosave included) must carry an author:
   // ask for their name once, and stamp this session's anonymous entries
@@ -611,6 +659,7 @@
     docSaved = false;
     // a freshly-inserted row is held in place only until it has a start date
     state.items.forEach(function (it) { if (it.holdPos && it.startDay != null) delete it.holdPos; });
+    sessionEdited = true;
     validation = RM.validate(state);
     saveLocal();
     render();
@@ -834,7 +883,10 @@
     doc[kind] = RM.sortByOrder(list);
   }
   function dragTouches(id) {
-    return !!drag && (drag.itemId === id || drag.mid === id || drag.phaseId === id || drag.pid === id);
+    if (!drag) return false;
+    if (drag.itemId === id || drag.mid === id || drag.phaseId === id || drag.pid === id) return true;
+    // a group move drags every selected bar along with the one under the pointer
+    return !!drag.group && drag.group.some(function (g) { return g.id === id; });
   }
   // opts.merged: env already IS the disk truth (from flushShards) — skip the
   // merge with our base
@@ -872,6 +924,10 @@
     });
     if (typeof RM.dedupeNums === 'function') RM.dedupeNums(next); // two people minted the same #num
     if (selectedId && !RM.itemById(next, selectedId)) selectedId = null;
+    if (multiSel) { // a peer deleted a selected row: the selection shrinks
+      multiSel = multiSel.filter(function (id) { return !!RM.itemById(next, id); });
+      if (multiSel.length < 2) multiSel = null;
+    }
     state = next;
     validation = RM.validate(state);
     noteLocalStamps(now); // fields the peer took no longer differ from the baseline
@@ -1025,6 +1081,7 @@
     undoStack.length = 0;
     redoStack.length = 0;
     selectedId = null;
+    multiSel = null;
     state = res.doc;
     docSaved = true;
     validation = RM.validate(state);
@@ -1114,9 +1171,10 @@
     }
     return Promise.resolve();
   }
+  // every selected row (the whole multi-selection) plus whatever is being dragged
   function editingIds() {
     var out = [];
-    [selectedId, drag && drag.itemId].forEach(function (id) { if (id && out.indexOf(id) === -1) out.push(id); });
+    selIds().concat([drag && drag.itemId]).forEach(function (id) { if (id && out.indexOf(id) === -1) out.push(id); });
     return out;
   }
   function presenceChanged(uid, obj) {
@@ -1576,7 +1634,8 @@
     });
   }
 
-  function matchesFilter(it) {
+  // ownOnly: judge the feature by its own fields, not its stories' titles
+  function matchesFilter(it, ownOnly) {
     if (!filterText) return true;
     var q = filterText.toLowerCase();
     return (it.feature || '').toLowerCase().indexOf(q) !== -1 ||
@@ -1585,9 +1644,9 @@
       state.meta.scopeCols.some(function (c) {
         return RM.htmlToText(RM.scopeValue(it, c.key)).toLowerCase().indexOf(q) !== -1;
       }) ||
-      (it.stories || []).some(function (st) {
+      (!ownOnly && (it.stories || []).some(function (st) {
         return (st.title || '').toLowerCase().indexOf(q) !== -1;
-      });
+      }));
   }
 
   // ------------------------------------------------------------ toasts, popover, modal
@@ -1928,7 +1987,7 @@
     var vitems = viewItemsOf(state);
     state.phases.forEach(function (p) {
       seq.push({ kind: 'band', phaseId: p.id });
-      if (!p.collapsed && detailMode !== 'phase') {
+      if (!p.collapsed) {
         inPhase(vitems, p.id).filter(matchesFilter).forEach(function (it) {
           seq.push({ kind: 'item', id: it.id, phaseId: p.id });
         });
@@ -1938,12 +1997,10 @@
   }
 
   // ---- detail level (Scoping + Planning): how deep the row grid goes.
-  // phase: phase bands only · feature: features, stories tucked away ·
-  // story: features with every story row open
+  // feature: features, stories tucked away · story: every story row open
   var DM_MODES = [
-    ['phase', 'Phase', 'panel-top', 'Only phases — the whole plan at a glance'],
-    ['feature', 'Feature', 'rows-3', 'Down to the feature level'],
-    ['story', 'Story', 'list-tree', 'Every story, under its feature']
+    ['feature', 'Feature', 'rows-3'],
+    ['story', 'Story', 'list-tree']
   ];
   function setDetailMode(mode) {
     detailMode = mode;
@@ -1952,19 +2009,35 @@
     saveLocal();
     render();
   }
+  var LEVEL_MODES = DM_MODES;
+  // ONE level dropdown for every view: same markup (icon · label · caret),
+  // same title, same place — the far left of the view's toolbar
+  function levelBtnInner(modes, current) {
+    var m = modes.filter(function (x) { return x[0] === current; })[0] || modes[0];
+    return '<i data-lucide="' + m[2] + '"></i><span>' + esc(m[1]) + '</span><i data-lucide="chevron-down" class="dm-caret"></i>';
+  }
+  function levelBtnTitle(modes, current) {
+    var m = modes.filter(function (x) { return x[0] === current; })[0] || modes[0];
+    return 'Detail level: ' + m[1];
+  }
+  function levelBtnHtml(attr, modes, current) {
+    return '<button class="dm-btn" ' + attr + ' title="' + esc(levelBtnTitle(modes, current)) + '">' +
+      levelBtnInner(modes, current) + '</button>';
+  }
+  function openLevelMenu(anchor, modes, current, pick) {
+    openDropdown(anchor, modes.map(function (m) {
+      return { icon: m[2], label: esc(m[1]), checked: current === m[0], fn: function () { pick(m[0]); } };
+    }));
+  }
   function syncDetailBtn() {
     var b = $('#detailBtn');
     if (!b) return;
-    var m = DM_MODES.filter(function (x) { return x[0] === detailMode; })[0] || DM_MODES[1];
-    b.innerHTML = '<i data-lucide="' + m[2] + '"></i><span>' + esc(m[1]) + '</span><i data-lucide="chevron-down" class="dm-caret"></i>';
-    b.title = 'Detail level: ' + m[1] + ' — click to change';
+    b.innerHTML = levelBtnInner(DM_MODES, detailMode);
+    b.title = levelBtnTitle(DM_MODES, detailMode);
     if (window.lucide) lucide.createIcons();
   }
   $('#detailBtn').addEventListener('click', function () {
-    openDropdown($('#detailBtn'), DM_MODES.map(function (m) {
-      return { icon: m[2], label: esc(m[1]) + ' <small>' + esc(m[3]) + '</small>',
-        checked: detailMode === m[0], fn: function () { setDetailMode(m[0]); } };
-    }));
+    openLevelMenu($('#detailBtn'), DM_MODES, detailMode, setDetailMode);
   });
 
   // ------------------------------------------------------------ options
@@ -2019,6 +2092,7 @@
     if (compareOptId === id) compareOptId = prevId;
     state = next;
     docSaved = false;
+    sessionEdited = true;
     validation = RM.validate(state);
     saveLocal();
     render();
@@ -2202,9 +2276,19 @@
     moscow: { M: 'Must', S: 'Should', C: 'Could', W: 'Won’t' },
     levels: { C: 'Critical', H: 'High', M: 'Medium', L: 'Low' }
   };
-  function priorityValueLabel(v) {
-    var mp = PRIORITY_VALUE_LABELS[RM.prioritySchemeOf(state)] || {};
+  function priorityValueLabel(v, kind) {
+    var mp = PRIORITY_VALUE_LABELS[RM.prioritySchemeOf(state, kind)] || {};
     return mp[v] || v || '';
+  }
+  // ' pt-crit' / ' pt-high' / ' pt-med' / ' pt-low' — the color tier class
+  // every priority chip and picker button carries
+  function priTierClass(v, kind) {
+    var t = RM.priorityTier(state, v, kind);
+    return t ? ' pt-' + t : '';
+  }
+  function priTierColor(v, kind) {
+    var t = RM.PRIORITY_TIERS.indexOf(RM.priorityTier(state, v, kind));
+    return t === -1 ? RM.PALETTE.neutral : RM.PRIORITY_RAMP[t];
   }
 
   function riskValueLabel(v) {
@@ -2217,7 +2301,7 @@
   function mSub(m) { return (m && (m.role || m.type)) || ''; }
   function avatarHtml(m, extraCls) {
     var lbl = mLabel(m);
-    return '<span class="avatar' + (extraCls ? ' ' + extraCls : '') + '" title="' + esc(lbl + (mSub(m) ? ' — ' + mSub(m) : '')) +
+    return '<span class="avatar' + (extraCls ? ' ' + extraCls : '') + '" title="' + esc(lbl) +
       '" style="background:' + RM.avatarColor(lbl) + '">' + esc(RM.initialsOf(lbl)) + '</span>';
   }
   function memberById(id) {
@@ -2252,6 +2336,38 @@
     });
   }
   var scopeColW = {}; // field -> px override
+  function scopeColDef(key) {
+    return state.meta.scopeCols.filter(function (c) { return c.key === key; })[0] || null;
+  }
+  // does text column `key` show on rows of this kind ('feature' | 'story')?
+  function colShowsOn(key, kind) {
+    var c = scopeColDef(key);
+    return !c || RM.scopeColShows(c, kind);
+  }
+  // the panel's Fields: text columns in the Scoping tab's order, kept to
+  // the ones that show on this kind of row
+  function panelScopeCols(kind) {
+    return allScopeCols().map(function (c) { return scopeColDef(c[0]); })
+      .filter(function (c) { return c && RM.scopeColShows(c, kind); });
+  }
+  var SCOPE_SCOPE_LABELS = { both: 'Features and stories', feature: 'Features only', story: 'Stories only' };
+  // milestone marker shapes: lucide icon + panel glyph per style
+  var MS_STYLE_ICONS = { diamond: 'gem', star: 'star', circle: 'circle' };
+  var MS_STYLE_GLYPHS = { diamond: '◆', star: '★', circle: '●' };
+  function msStyleLabel(sname) { return sname.charAt(0).toUpperCase() + sname.slice(1); }
+  function setMsStyle(itemId, sname) {
+    commit('milestone style', function (s) {
+      var t = RM.itemById(s, itemId);
+      if (!t) return;
+      if (sname === 'diamond') delete t.msStyle; else t.msStyle = sname;
+    });
+  }
+  function msStyleItems(itemId, it) {
+    return RM.MS_STYLES.map(function (sname) {
+      return { icon: MS_STYLE_ICONS[sname], label: msStyleLabel(sname) + ' marker',
+        checked: RM.msStyleOf(it) === sname, fn: function () { setMsStyle(itemId, sname); } };
+    });
+  }
 
   // panel sections: key -> collapsed override (persisted in UI_KEY);
   // unlisted keys fall back to the defaults below
@@ -2278,15 +2394,21 @@
     renderCount++;
     presenceTouch(); // every selection change renders; the write itself is throttled
     var sx = board.scrollLeft, sy = board.scrollTop;
+    if (!RM.appEnabled(state, view)) view = 'planning'; // an app switched off under us (or in a loaded file)
+    $$('#viewTabs button[data-view]').forEach(function (b) { b.hidden = !RM.appEnabled(state, b.dataset.view); });
     critCache = RM.criticalPath(state);
     document.documentElement.style.setProperty('--week-px', weekPx + 'px');
-    if (presentMode && view === 'setup') setPresent(false);
     document.body.classList.toggle('no-cap', !showCap || !state.meta.capacityEnabled);
-    document.body.classList.toggle('present', presentMode);
     document.body.classList.toggle('cap-off', !state.meta.capacityEnabled);
     document.body.classList.toggle('no-size', !RM.sizingEnabled(state));
+    var boardView = view === 'planning' || view === 'scoping' || view === 'budget';
+    document.body.classList.toggle('left-collapsed', leftCollapsed && boardView);
     document.documentElement.style.setProperty('--left-w',
-      (presentMode && (view === 'planning' || view === 'budget') ? 0 : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan)) + 'px');
+      (leftCollapsed && boardView ? 0
+        : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan)) + 'px');
+    // folded: the pane is gone; only the floating reopen button remains
+    var lp = $('#leftPeek');
+    if (lp) lp.hidden = !(leftCollapsed && boardView);
     document.documentElement.style.setProperty('--panel-w', panelW + 'px');
     applyBuColWidths();
     renderHlCols();
@@ -2298,7 +2420,7 @@
     document.body.dataset.view = view;
     // a view switch or re-render can replace the rich cell the floating
     // B/I toolbar is anchored to — never leave the bar orphaned on screen
-    if (scFmtTarget && (view !== 'scoping' || !scFmtTarget.isConnected)) hideScFmtBar();
+    if (scFmtTarget && ((view !== 'scoping' && view !== 'prio' && view !== 'sprints') || !scFmtTarget.isConnected)) hideScFmtBar();
 
     renderTopbar();
     syncZoomCtl();
@@ -2314,6 +2436,11 @@
     }
     if (view === 'history') {
       renderHistoryPage();
+      renderPanel();
+      return;
+    }
+    if (view === 'prio') {
+      renderPrioPage();
       renderPanel();
       return;
     }
@@ -2558,7 +2685,7 @@
     if (window.lucide) lucide.createIcons();
   }
 
-  // ------------------------------------------------------------ sprinting view
+  // --------------------------------------------- sprint helpers (reports page)
   function currentSprintNum() {
     var meta = state.meta;
     var now = new Date();
@@ -2588,7 +2715,6 @@
       return RM.itemInWeeks(meta, it, r.w0, r.w1) && matchesFilter(it);
     });
   }
-
   // stories ride along: their own schedule decides sprint membership when
   // set, otherwise they follow their feature
   function storiesInSprint(num, items) {
@@ -2606,422 +2732,1285 @@
     });
     return out;
   }
-  // feature and story statuses are separate lists; the board's columns are
-  // the feature ones, so story statuses map across by name, else position
-  function mapStatusAcross(val, fromList, toList) {
-    var byName = toList.indexOf(val);
-    if (byName !== -1) return toList[byName];
-    var i = fromList.indexOf(val);
-    if (i <= 0) return toList[0];
-    if (i >= fromList.length - 1) return toList[toList.length - 1];
-    return toList[Math.max(1, Math.min(toList.length - 2, i))];
+  // ---------------------------------------------------------- prioritizing view
+  // Kanban of the phases (the horizons). Cards carry the same size, priority,
+  // epic and workstream chips as everywhere else, plus whichever scope
+  // columns the Fields menu selects (Description by default). Columns
+  // auto-sort by the active priority framework — the RICE scheme scores
+  // Reach × Impact × Confidence ÷ Effort from dropdowns — and the Group
+  // control lays the board out in workstream or epic swimlanes.
+  var RICE_OPTIONS = {
+    reach: { label: 'Reach / quarter', opts: [[1, '1'], [10, '10'], [100, '100'], [1000, '1,000'], [10000, '10,000']] },
+    impact: { label: 'Impact', opts: [[0.25, '0.25 · Minimal'], [0.5, '0.5 · Low'], [1, '1 · Medium'], [2, '2 · High'], [3, '3 · Massive']] },
+    confidence: { label: 'Confidence', opts: [[50, '50% · Low'], [80, '80% · Medium'], [100, '100% · High']] },
+    effort: { label: 'Effort', opts: [[0.5, '½ week'], [1, '1 week'], [2, '2 weeks'], [4, '4 weeks'], [8, '8 weeks'], [12, '12 weeks']] }
+  };
+  function riceScoreLabel(it) {
+    var sc = RM.riceScore(it);
+    return sc == null ? '' : String(Math.round(sc * 10) / 10);
   }
-  function storyColFor(stStatus) {
-    return mapStatusAcross(stStatus, RM.statusesOf(state, 'story'), RM.statusesOf(state, 'feature'));
+  function riceSelectsHtml(it) {
+    return Object.keys(RICE_OPTIONS).map(function (k) {
+      var def = RICE_OPTIONS[k];
+      var cur = (it.rice || {})[k];
+      return '<label class="rice-lab">' + esc(def.label) +
+        '<select data-rk="' + k + '"><option value="">—</option>' +
+        def.opts.map(function (o) {
+          return '<option value="' + o[0] + '"' + (cur === o[0] ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
+        }).join('') + '</select></label>';
+    }).join('');
   }
-  function storyStatusForCol(colName) {
-    return mapStatusAcross(colName, RM.statusesOf(state, 'feature'), RM.statusesOf(state, 'story'));
-  }
-
-  // pick a color for one status (Setup → Statuses): preset swatches or a
-  // custom color; "automatic" clears back to position-based defaults
-  var STATUS_SWATCHES = ['6E7883', '0057B8', '08875B', 'A66A00', 'B3362B', 'A14FBF', '0E7C86', 'C25E0E'];
-  function statusColorMenu(btn, kind, stName) {
-    var r = btn.getBoundingClientRect();
-    var cur = (state.meta.statusColors || {})[stName] || null;
-    var html = '<div class="swatches" style="padding:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:240px">' +
-      '<button class="swatch' + (!cur ? ' on' : '') + '" data-stpick="" title="Automatic (by position)" style="background:linear-gradient(135deg,#6E7883 45%,#08875B 55%)"></button>' +
-      STATUS_SWATCHES.map(function (hx) {
-        return '<button class="swatch' + (cur === hx ? ' on' : '') + '" data-stpick="' + hx + '" style="background:#' + hx + '"></button>';
-      }).join('') +
-      '<input type="color" data-stpickc value="#' + (cur || '0057B8') + '" title="Custom color">' +
-      '</div>';
-    openPopover(r.left, r.bottom + 4, html, function (host) {
-      host.addEventListener('click', function (ev) {
-        var b = ev.target.closest('[data-stpick]');
-        if (!b) return;
-        var hex = b.dataset.stpick;
-        closePopover();
-        commit('status color', function (s) {
-          s.meta.statusColors = s.meta.statusColors || {};
-          if (hex) s.meta.statusColors[stName] = hex;
-          else delete s.meta.statusColors[stName];
-        });
-      });
-      var ci = host.querySelector('[data-stpickc]');
-      if (ci) ci.addEventListener('change', function () {
-        var hex = ci.value.replace('#', '').toUpperCase();
-        closePopover();
-        commit('status color', function (s) {
-          s.meta.statusColors = s.meta.statusColors || {};
-          s.meta.statusColors[stName] = hex;
+  // the RICE editor every priority chip opens while the RICE scheme is active
+  function riceMenu(anchor, itemId) {
+    var it = RM.itemById(state, itemId);
+    if (!it) return;
+    var r = anchor.getBoundingClientRect();
+    openPopover(r.left, r.bottom + 4, '<div class="rice-pop">' + riceSelectsHtml(it) + '</div>', function (host) {
+      host.addEventListener('change', function (ev) {
+        var k = ev.target.dataset.rk;
+        if (!k) return;
+        var v = ev.target.value === '' ? null : parseFloat(ev.target.value);
+        commit('rice', function (s) {
+          var x = RM.itemById(s, itemId);
+          if (x) x.rice[k] = v;
         });
       });
     });
   }
-  function spStatusChip(kind, cur, act, id) {
-    var c = RM.statusColor(state, kind, cur);
-    return '<button class="sp-status" data-stc data-' + act + '="' + id + '" style="--st-c:#' + c +
-      '" title="Status \u2014 click to change">' + esc(cur) + '</button>';
+  // ONE priority chip everywhere: the picked value for MoSCoW / levels, the
+  // computed score under RICE
+  function priChipContent(it) {
+    if (RM.prioritySchemeOf(state) === 'rice') return esc(riceScoreLabel(it) || '·');
+    if (!it.priority) return '';
+    return RM.prioritySchemeOf(state) === 'levels' ? levelGlyph(it.priority) : esc(it.priority);
   }
-
-  function spCardHtml(it) {
-    var color = '#' + RM.colorForItem(state, it);
-    var dates = isScheduled(it)
-      ? RM.fmtShort(RM.dayToDate(state.meta, it.startDay)) +
-        (it.milestone ? '' : ' \u2192 ' + RM.fmtShort(RM.spanEndDate(state.meta, it.startDay, RM.itemSpan(it))))
-      : '';
-    return '<div class="sp-card" data-spcard="' + it.id + '" tabindex="0">' +
-      '<div class="sp-card-top">' +
-      '<span class="r-num">#' + it.num + '</span>' +
-      '<span class="r-dot' + (it.milestone ? ' msdot' : '') + '" style="background:' + color + '"></span>' +
-      '<span class="sp-card-dates">' + esc(dates) + '</span>' +
-      avatarStack(it.assignees) +
-      '</div>' +
-      '<div class="sp-card-title">' + esc(it.feature || '(untitled)') + '</div>' +
-      (it.size || it.epic
-        ? '<div class="sp-card-meta">' + (it.size ? '<span class="r-size">' + esc(it.size) + '</span>' : '') +
-          (it.epic ? '<span class="r-epic">' + esc(shorten(it.epic, 18)) + '</span>' : '') + '</div>'
-        : '') +
-      '</div>';
+  function priChipTitle(it) {
+    if (RM.prioritySchemeOf(state) === 'rice') return 'RICE score';
+    return 'Priority' + (it.priority ? '\nNow: ' + priorityValueLabel(it.priority) : '');
   }
-
-  function spStoryCardHtml(it, st) {
-    return '<div class="sp-card sp-stcard" data-spcardst="' + st.id + '" data-pid="' + it.id + '" tabindex="0">' +
-      '<div class="sp-card-top">' +
-      '<span class="sp-sttag">story</span>' +
-      '<span class="sp-card-dates" title="' + esc(it.feature) + '">#' + it.num + ' · ' + esc(shorten(it.feature, 20)) + '</span>' +
-      avatarStack(st.assignees) +
-      '</div>' +
-      '<div class="sp-card-title">' + esc(st.title || '(untitled)') + '</div>' +
-      (st.size ? '<div class="sp-card-meta"><span class="r-size">' + esc(st.size) + '</span></div>' : '') +
-      '</div>';
+  function priChipHasValue(it) {
+    return !!(RM.prioritySchemeOf(state) === 'rice' ? riceScoreLabel(it) : it.priority);
   }
-
-  function spGroupHtml(num, items) {
-    var out = [];
-    var label = sprintSel === 'all' ? '<div class="sp-ghd">' + esc(sprintLabel(num)) + '</div>' : '';
-    var stories = storiesInSprint(num, items);
-    if (sprintMode === 'board') {
-      var cols = RM.statusesOf(state, 'feature').map(function (st) {
-        var mine = items.filter(function (it) { return RM.statusOf(state, it, 'feature') === st; });
-        var mineSt = stories.filter(function (p) { return storyColFor(RM.statusOf(state, p.st, 'story')) === st; });
-        return '<div class="sp-col" data-spcol="' + esc(st) + '">' +
-          '<div class="sp-colhd"><span class="st-dot" style="background:#' + RM.statusColor(state, 'feature', st) + '"></span>' +
-          esc(st) + '<span class="band-count">' + (mine.length + mineSt.length) + '</span></div>' +
-          '<div class="sp-colbody">' + mine.map(spCardHtml).join('') +
-          mineSt.map(function (p) { return spStoryCardHtml(p.it, p.st); }).join('') + '</div>' +
-          '</div>';
-      }).join('');
-      out.push(label + '<div class="sp-board">' + cols + '</div>');
-    } else {
-      var rows = [];
-      items.forEach(function (it) {
-        rows.push('<tr class="sp-r" data-id="' + it.id + '">' +
-          '<td class="sp-c-num">#' + it.num + '</td>' +
-          '<td class="sp-c-title"><span class="r-dot' + (it.milestone ? ' msdot' : '') + '" style="background:#' + RM.colorForItem(state, it) + '"></span>' +
-          '<input class="sp-title" data-sptitle="' + it.id + '" value="' + esc(it.feature) + '"></td>' +
-          '<td>' + spStatusChip('feature', RM.statusOf(state, it, 'feature'), 'spstatus', it.id) + '</td>' +
-          '<td class="sp-c-asg"><button class="sp-asgbtn" data-spasg="' + it.id + '" title="Assignees">' +
-          (avatarStack(it.assignees) || '<i data-lucide="user-plus"></i>') + '</button></td>' +
-          '<td>' + (RM.sizingEnabled(state) && !it.milestone
-            ? '<button class="sp-szbtn" data-spsize="' + it.id + '">' + (it.size ? esc(it.size) : '\u2014') + '</button>' : '') + '</td>' +
-          '<td class="sp-c-dur">' + (it.milestone ? '\u25C6' : (isScheduled(it) || it.durDays != null ? totalWeeks(it) : '')) + '</td>' +
-          '</tr>');
-        (it.stories || []).forEach(function (st) {
-          rows.push('<tr class="sp-r sp-story" data-id="' + it.id + '" data-spst="' + st.id + '">' +
-            '<td class="sp-c-num"></td>' +
-            '<td class="sp-c-title sp-ind"><input class="sp-title" data-spsttitle="' + st.id + '" value="' + esc(st.title) + '"></td>' +
-            '<td>' + spStatusChip('story', RM.statusOf(state, st, 'story'), 'spststatus', st.id) + '</td>' +
-            '<td class="sp-c-asg"><button class="sp-asgbtn" data-spstasg="' + st.id + '" title="Story assignees">' +
-            (avatarStack(st.assignees) || '<i data-lucide="user-plus"></i>') + '</button></td>' +
-            '<td>' + (RM.sizingEnabled(state)
-              ? '<button class="sp-szbtn" data-spstsize="' + st.id + '" title="Story size">' + (st.size ? esc(st.size) : '—') + '</button>' : '') + '</td>' +
-            '<td class="sp-c-dur">' + (st.durDays != null ? totalWeeks(st) : '') + '</td>' +
-            '</tr>');
-        });
+  function openPriorityEditor(anchor, itemId) {
+    var it = RM.itemById(state, itemId);
+    if (!it) return;
+    if (RM.prioritySchemeOf(state) === 'rice') { riceMenu(anchor, itemId); return; }
+    openDropdown(anchor, [{ label: '<i>None</i>', checked: !it.priority, fn: function () {
+      commit('priority', function (s) { RM.itemById(s, itemId).priority = null; });
+    } }].concat(RM.priorityOrderOf(state).map(function (pv) {
+      return { icon: RM.prioritySchemeOf(state) === 'levels' ? LEVEL_GLYPHS[pv] : undefined,
+        dot: '#' + priTierColor(pv),
+        label: (RM.prioritySchemeOf(state) === 'levels' ? '' : pv + ' · ') + esc(priorityValueLabel(pv)),
+        checked: it.priority === pv, fn: function () {
+        commit('priority', function (s) { RM.itemById(s, itemId).priority = pv; });
+      } };
+    })));
+  }
+  // a story's priority picker — shared by the panel and the Prioritizing board
+  function storyPriorityMenu(anchor, itemId, stId) {
+    var stPri = (storyById(RM.itemById(state, itemId) || {}, stId) || {}).priority;
+    function setPri(pv) {
+      commit('story priority', function (s) {
+        var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
+        if (st2) st2.priority = pv;
       });
-      out.push(label +
-        '<table class="sp-grid"><thead><tr><th>#</th><th>Title</th><th>Status</th><th>Assignees</th><th>Size</th><th>Dur</th></tr></thead>' +
-        '<tbody>' + (rows.join('') || '<tr><td colspan="6" class="p-none">Nothing scheduled in this sprint.</td></tr>') + '</tbody></table>');
     }
-    return out.join('');
+    var stLevels = RM.prioritySchemeOf(state, 'story') === 'levels';
+    openDropdown(anchor, [{ label: '<i>None</i>', checked: !stPri, fn: function () { setPri(null); } }]
+      .concat(RM.priorityOrderOf(state, 'story').map(function (pv) {
+        return { icon: stLevels ? LEVEL_GLYPHS[pv] : undefined,
+          dot: '#' + priTierColor(pv, 'story'),
+          label: (stLevels ? '' : pv + ' · ') + esc(priorityValueLabel(pv, 'story')),
+          checked: stPri === pv, fn: function () { setPri(pv); } };
+      })));
   }
-
-  function renderSprintPage() {
-    var host = $('#sprintView');
-    if (!host) return;
-    var meta = state.meta;
-    var withS = RM.sprintsEnabled(meta);
-    var selNum = sprintSel === 'cur' ? currentSprintNum() : sprintSel;
-    var selLabel = sprintSel === 'all' ? (withS ? 'All sprints' : 'All weeks')
-      : sprintSel === 'cur' ? (withS ? 'Current sprint' : 'This week') + ' \u2014 ' + sprintLabel(selNum)
-      : sprintLabel(selNum);
-    var groups;
-    if (sprintSel === 'all') {
-      groups = sprintNums().map(function (n) { return { num: n, items: itemsInSprint(n) }; })
-        .filter(function (g) { return g.items.length; });
-    } else {
-      groups = [{ num: selNum, items: itemsInSprint(selNum) }];
+  // ---- story estimate fields: setters, pickers and ONE chip set shared by
+  // Planning, Scoping, Sprinting and Prioritizing (size · priority · risk ·
+  // duration, each only when its scheme is on)
+  function withStory(label, itemId, stId, fn) {
+    commit(label, function (s) {
+      var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
+      if (st2) fn(st2, s);
+    });
+  }
+  function setStorySize(itemId, stId, sz) {
+    withStory('story size', itemId, stId, function (st2, s) {
+      st2.size = sz;
+      if (sz && st2.startDay != null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, RM.sizeDays(s, sz, 'story'));
+    });
+  }
+  function setStoryRisk(itemId, stId, rv) {
+    withStory('story risk', itemId, stId, function (st2) { st2.risk = rv; });
+  }
+  // days = null clears the duration (and takes the story off the timeline)
+  function setStoryDur(itemId, stId, days) {
+    withStory('story duration', itemId, stId, function (st2, s) {
+      if (days == null) { st2.durDays = null; st2.startDay = null; }
+      else st2.durDays = st2.startDay != null ? RM.stretchSpan(s.meta, st2.startDay, days) : days;
+    });
+  }
+  function storySizeMenu(anchor, itemId, stId) {
+    var cur = (storyById(RM.itemById(state, itemId) || {}, stId) || {}).size;
+    openDropdown(anchor, [{ label: '<i>no size</i>', checked: !cur, fn: function () { setStorySize(itemId, stId, null); } }]
+      .concat(RM.sizeOrderOf(state, 'story').map(function (sz) {
+        return { label: esc(sz) + ' <small>' + sizeHuman(sz, 'story') + '</small>', checked: cur === sz,
+          fn: function () { setStorySize(itemId, stId, sz); } };
+      })));
+  }
+  function storyRiskMenu(anchor, itemId, stId) {
+    if (RM.riskSchemeOf(state) === 'auto') return; // computed for features only
+    var cur = (storyById(RM.itemById(state, itemId) || {}, stId) || {}).risk;
+    openDropdown(anchor, [{ label: '<i>None</i>', checked: !cur, fn: function () { setStoryRisk(itemId, stId, null); } }]
+      .concat(RM.riskOrderOf(state).map(function (rv) {
+        return { icon: LEVEL_GLYPHS[rv], label: esc(riskValueLabel(rv)), checked: cur === rv,
+          fn: function () { setStoryRisk(itemId, stId, rv); } };
+      })));
+  }
+  // inline weeks editor for a duration chip: empty clears, a number sets
+  // working days; the caller commits through onSave(days | null)
+  function inlineWeeksEditor(chip, curDays, onSave) {
+    if (chip.querySelector('input')) return;
+    var inp = document.createElement('input');
+    inp.type = 'number'; inp.min = '0.2'; inp.step = '0.2';
+    inp.value = curDays != null ? Math.round(curDays / SPW() * 100) / 100 : '';
+    inp.className = 'hc-edit'; inp.style.width = '30px';
+    chip.textContent = '';
+    chip.appendChild(inp);
+    inp.focus(); inp.select();
+    var done = false;
+    var fin = function (saveIt) {
+      if (done) return; done = true;
+      if (!saveIt) { render(); return; }
+      var v = String(inp.value).trim();
+      onSave(v === '' ? null : Math.max(1, Math.round(Math.max(0.2, parseFloat(v) || 1) * SPW())));
+    };
+    inp.addEventListener('blur', function () { fin(true); });
+    inp.addEventListener('keydown', function (ev) {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') fin(true);
+      if (ev.key === 'Escape') fin(false);
+    });
+  }
+  // a story's duration readout: its own span, else its size estimate
+  function storyWeeks(st) {
+    var days = st.startDay != null && st.durDays != null ? RM.workInSpan(state.meta, st.startDay, st.durDays)
+      : st.durDays != null ? st.durDays : RM.sizeDays(state, st.size, 'story');
+    return days ? fmtDays(days) : '';
+  }
+  // story chip HTML; attr names the click hook ('data-act' on rows,
+  // 'data-spact' on Sprinting, 'data-prstact' on Prioritizing cards). Values
+  // are st-size / st-pri / st-risk / st-wk everywhere.
+  function storyChipHtml(key, st, attr, blank) {
+    blank = blank == null ? '·' : blank;
+    if (key === 'size') {
+      if (!RM.sizingEnabled(state, 'story')) return '';
+      return '<span class="r-size" tabindex="0" role="button" ' + attr + '="st-size" title="Story size">' +
+        (st.size ? esc(st.size) : blank) + '</span>';
     }
-    host.innerHTML =
-      '<div class="sp-page">' +
-      '<div class="sp-toolbar">' +
-      '<button class="dd-btn" data-sprsel><span>' + esc(selLabel) + '</span><i data-lucide="chevron-down"></i></button>' +
-      '<div class="seg sp-modeseg">' +
-      '<button data-spmode="board"' + (sprintMode === 'board' ? ' class="on"' : '') + ' title="Kanban board"><i data-lucide="square-kanban"></i>Board</button>' +
-      '<button data-spmode="grid"' + (sprintMode === 'grid' ? ' class="on"' : '') + ' title="Editable list"><i data-lucide="rows-3"></i>Grid</button>' +
-      '</div>' +
-      '</div>' +
-      groups.map(function (g) { return spGroupHtml(g.num, g.items); }).join('') +
-      (groups.length ? '' : '<div class="p-none" style="padding:30px">Nothing scheduled' + (sprintSel === 'all' ? '' : ' in this sprint') + '.</div>') +
+    if (key === 'pri') {
+      if (!RM.priorityEnabled(state, 'story')) return '';
+      return '<span class="r-risk pri' + (st.priority ? ' has-risk' : '') + priTierClass(st.priority, 'story') + '" tabindex="0" role="button" ' + attr + '="st-pri" title="' +
+        esc('Story priority' + (st.priority ? '\nNow: ' + priorityValueLabel(st.priority, 'story') : '')) + '">' +
+        (st.priority ? (RM.prioritySchemeOf(state, 'story') === 'levels' ? levelGlyph(st.priority) : esc(st.priority)) : blank) + '</span>';
+    }
+    if (key === 'risk') {
+      if (!RM.riskEnabled(state)) return '';
+      if (RM.riskSchemeOf(state) === 'auto') return '<span class="r-risk rk-none" title="Dependency risk is computed per feature"></span>';
+      return '<span class="r-risk rk-none' + (st.risk ? ' has-risk' : '') + '" tabindex="0" role="button" ' + attr + '="st-risk" title="' +
+        esc(RM.riskColLabel(state) + (st.risk ? '\nNow: ' + riskValueLabel(st.risk) : '')) + '">' +
+        (st.risk ? levelGlyph(st.risk) : blank) + '</span>';
+    }
+    if (key === 'dur') {
+      return '<span class="r-wk editable" tabindex="0" role="button" ' + attr + '="st-wk" title="Story duration">' +
+        (storyWeeks(st) || blank) + '</span>';
+    }
+    return '';
+  }
+  // routes a story chip click; returns true when it handled one
+  function storyChipAction(act, anchor, itemId, stId) {
+    if (act === 'st-size') storySizeMenu(anchor, itemId, stId);
+    else if (act === 'st-pri') storyPriorityMenu(anchor, itemId, stId);
+    else if (act === 'st-risk') storyRiskMenu(anchor, itemId, stId);
+    else if (act === 'st-wk') {
+      var stW = storyById(RM.itemById(state, itemId) || {}, stId);
+      inlineWeeksEditor(anchor, stW ? stW.durDays : null, function (days) { setStoryDur(itemId, stId, days); });
+    } else return false;
+    return true;
+  }
+  // feature twins for the boards that lack the row chips (Sprinting, Prioritizing)
+  function itemRiskMenu(anchor, itemId) {
+    var it = RM.itemById(state, itemId);
+    if (!it || RM.riskSchemeOf(state) === 'auto') return; // computed, not set
+    openDropdown(anchor, [{ label: '<i>None</i>', checked: !it.risk, fn: function () { setItemRisk(itemId, null); } }]
+      .concat(RM.riskOrderOf(state).map(function (rv) {
+        return { icon: LEVEL_GLYPHS[rv], label: esc(riskValueLabel(rv)), checked: it.risk === rv,
+          fn: function () { setItemRisk(itemId, rv); } };
+      })));
+  }
+  function setItemDur(itemId, days) {
+    commit('duration', function (s) {
+      var t = RM.itemById(s, itemId);
+      if (!t || t.milestone) return;
+      if (days == null) { t.startDay = null; t.durDays = null; }
+      else t.durDays = t.startDay != null ? RM.stretchSpan(s.meta, t.startDay, days) : days;
+    });
+  }
+  function itemChipHtml(key, it, attr) {
+    if (it.milestone) return '';
+    if (key === 'size') {
+      if (!RM.sizingEnabled(state)) return '';
+      return '<span class="r-size" tabindex="0" role="button" ' + attr + '="size" title="Size">' + (it.size ? esc(it.size) : '·') + '</span>';
+    }
+    if (key === 'pri') {
+      if (!RM.priorityEnabled(state)) return '';
+      return '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) + '" tabindex="0" role="button" ' + attr + '="priority" title="' +
+        esc(priChipTitle(it)) + '">' + (priChipContent(it) || '·') + '</span>';
+    }
+    if (key === 'risk') {
+      if (!RM.riskEnabled(state)) return '';
+      if (RM.riskSchemeOf(state) === 'auto') {
+        var rkA = RM.depRisk(state, it);
+        return '<span class="r-risk rk-' + rkA.level + '" title="' + esc(rkA.level === 'none' ? 'No dependency risk detected' : 'Dependency risk ' + rkA.level) + '">' +
+          (rkA.level === 'none' ? '·' : levelGlyph(rkA.level.charAt(0).toUpperCase())) + '</span>';
+      }
+      return '<span class="r-risk rk-none' + (it.risk ? ' has-risk' : '') + '" tabindex="0" role="button" ' + attr + '="risk" title="' +
+        esc(RM.riskColLabel(state) + (it.risk ? '\nNow: ' + riskValueLabel(it.risk) : '')) + '">' +
+        (it.risk ? levelGlyph(it.risk) : '·') + '</span>';
+    }
+    if (key === 'dur') {
+      return '<span class="r-wk editable" tabindex="0" role="button" ' + attr + '="dur" title="Duration">' + totalWeeks(it) + '</span>';
+    }
+    return '';
+  }
+  function itemChipAction(act, anchor, itemId) {
+    var itA = RM.itemById(state, itemId);
+    if (!itA) return false;
+    if (act === 'size') {
+      openDropdown(anchor, [{ label: '<i>no size</i>', checked: !itA.size, fn: function () { setItemSize(itemId, null); } }]
+        .concat(RM.sizeOrderOf(state).map(function (sz) {
+          return { label: esc(sz) + ' <small>' + sizeHuman(sz) + '</small>', checked: itA.size === sz, fn: function () { setItemSize(itemId, sz); } };
+        })));
+    } else if (act === 'priority') openPriorityEditor(anchor, itemId);
+    else if (act === 'risk') itemRiskMenu(anchor, itemId);
+    else if (act === 'dur') inlineWeeksEditor(anchor, itA.durDays, function (days) { setItemDur(itemId, days); });
+    else return false;
+    return true;
+  }
+  // sort under the active framework: RICE score descending, else the
+  // scheme's ladder; unset last, ties keep document order
+  function prioRank(it) {
+    if (RM.prioritySchemeOf(state) === 'rice') {
+      var sc = RM.riceScore(it);
+      return sc == null ? Infinity : -sc;
+    }
+    var order = RM.priorityOrderOf(state);
+    var i = it.priority ? order.indexOf(it.priority) : -1;
+    return i === -1 ? Infinity : i;
+  }
+  function prSortItems(list) {
+    var rank;
+    if (prioSort === 'title') {
+      rank = null; // compare directly
+    } else if (prioSort === 'size') {
+      var so = RM.sizeOrderOf(state);
+      rank = function (it) { var i2 = it.size ? so.indexOf(it.size) : -1; return i2 === -1 ? Infinity : -i2; }; // big first, unset last
+    } else if (prioSort === 'priority' && RM.priorityEnabled(state)) {
+      rank = prioRank;
+    } else {
+      return list.slice(); // document order
+    }
+    return list.map(function (it, i) { return { it: it, i: i }; })
+      .sort(function (a, b) {
+        if (!rank) return (a.it.feature || '').localeCompare(b.it.feature || '') || (a.i - b.i);
+        return (rank(a.it) - rank(b.it)) || (a.i - b.i);
+      })
+      .map(function (x) { return x.it; });
+  }
+  // board-level match: the text filter plus the epic / workstream dropdowns
+  function prMatches(it) {
+    if (!matchesFilter(it)) return false;
+    if (prioFEpic != null && (it.epic || '') !== prioFEpic) return false;
+    if (prioFWs != null && (it.workstream || '') !== prioFWs) return false;
+    return true;
+  }
+  function prCardFields() {
+    var by = {};
+    scopeCols().forEach(function (c) { if (colShowsOn(c[0], 'feature')) by[c[0]] = c; });
+    return prioFields.map(function (k) { return by[k]; }).filter(Boolean);
+  }
+  function prCardHtml(it) {
+    var fields = prCardFields().map(function (c) {
+      // no label — a quiet "No description"-style hint fills the empty field
+      return '<div class="pr-rich" contenteditable="true" data-prsc="' + c[0] + '" data-ph="No ' + esc(c[1].toLowerCase()) + '">' +
+        richDisplay(RM.scopeValue(it, c[0])) + '</div>';
+    }).join('');
+    var wsColor = it.workstream ? RM.colorForWs(state, it.workstream) : RM.defaultWsColor(state);
+    // Story level: the card lists its stories — title inline-editable, own
+    // priority chip — under the feature's own fields
+    var stories = prioLevel === 'story' && !it.milestone
+      ? '<div class="pr-stories">' + (it.stories || []).map(function (st) {
+          return '<div class="pr-story" data-prst="' + st.id + '">' +
+            '<i data-lucide="corner-down-right" class="pr-st-ico"></i>' +
+            '<input class="pr-st-title" data-prstf="title" placeholder="Story" value="' + esc(st.title) + '">' +
+            ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-prstact'); }).join('') +
+            '</div>';
+        }).join('') +
+        '<button class="pr-st-add" data-prstadd="1"><i data-lucide="plus"></i>Add story</button></div>'
+      : '';
+    return '<div class="sp-card pr-card" data-prcard="' + it.id + '" style="--ws-c:#' + wsColor + '">' +
+      '<input class="pr-title" data-prf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
+      fields + stories +
+      '<div class="pr-chips">' +
+      (RM.sizingEnabled(state) && prioFeatCol !== 'size' // the column field's chip is redundant
+        ? '<span class="r-size" tabindex="0" role="button" data-pract="size" title="Size">' +
+          (it.size ? esc(it.size) : '·') + '</span>' : '') +
+      (RM.priorityEnabled(state) && prioFeatCol !== 'priority'
+        ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) +
+          '" tabindex="0" role="button" data-pract="priority" title="' + esc(priChipTitle(it)) + '">' +
+          (priChipContent(it) || '·') + '</span>' : '') +
+      (prioFeatCol === 'risk' ? '' : itemChipHtml('risk', it, 'data-pract')) + itemChipHtml('dur', it, 'data-pract') +
+      (prioGroup === 'epic' ? '' : // the swimlane already names the epic
+        '<span class="pr-chip" tabindex="0" role="button" data-pract="epic" title="Epic">' +
+        '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>') +
+      (state.meta.workstreamsEnabled && prioGroup !== 'ws' 
+        ? '<span class="pr-chip" tabindex="0" role="button" data-pract="ws" title="Workstream">' +
+          '<span class="dd-dot" style="background:#' + wsColor + '"></span>' + esc(it.workstream || RM.defaultWsName(state)) + '</span>' : '') +
+      '</div></div>';
+  }
+  // ---- Story level: a board of story cards in columns of one story field
+  // (priority / size / risk); dragging a card sets that field on the story
+  var PR_STORY_COLS = { priority: ['arrow-down-wide-narrow', 'Priority'], size: ['ruler', 'Size'], risk: ['triangle-alert', 'Risk'] };
+  function prStoryColKinds() {
+    var out = [];
+    if (RM.priorityEnabled(state, 'story')) out.push('priority');
+    if (RM.sizingEnabled(state, 'story')) out.push('size');
+    if (RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto') out.push('risk');
+    return out;
+  }
+  function prStoryColLabel(v) {
+    if (v === '') return 'Unset';
+    if (prioStoryCol === 'priority') return priorityValueLabel(v, 'story');
+    if (prioStoryCol === 'risk') return riskValueLabel(v);
+    return v;
+  }
+  // [{ key, name }] — the field's ladder in scheme order, then Unset
+  function prStoryColumns() {
+    var vals = prioStoryCol === 'priority' ? RM.priorityOrderOf(state, 'story')
+      : prioStoryCol === 'risk' ? RM.riskOrderOf(state) : RM.sizeOrderOf(state, 'story');
+    return vals.map(function (v) { return { key: v, name: prStoryColLabel(v) }; }).concat([{ key: '', name: 'Unset' }]);
+  }
+  // the story's value for the column field; anything the ladder does not
+  // know (an old scheme's value) files under Unset instead of vanishing
+  function prStoryVal(st) {
+    var v = st[prioStoryCol] || '';
+    if (!v) return '';
+    return prStoryColumns().some(function (c) { return c.key === v; }) ? v : '';
+  }
+  // a story shows when its feature passes the dropdowns and either the story
+  // title or the feature itself matches the text filter
+  function prStoryMatches(it, st) {
+    if (prioFEpic != null && (it.epic || '') !== prioFEpic) return false;
+    if (prioFWs != null && (it.workstream || '') !== prioFWs) return false;
+    if (!filterText) return true;
+    return (st.title || '').toLowerCase().indexOf(filterText.toLowerCase()) !== -1 || matchesFilter(it, true);
+  }
+  // every visible story as { it, st } pairs, in document order
+  function prStoryPairs(items) {
+    var out = [];
+    items.forEach(function (it) {
+      if (it.milestone) return;
+      (it.stories || []).forEach(function (st) { if (prStoryMatches(it, st)) out.push({ it: it, st: st }); });
+    });
+    return out;
+  }
+  function prSortStories(pairs) {
+    var rank;
+    if (prioSort === 'title') {
+      return pairs.map(function (x, i) { return { x: x, i: i }; })
+        .sort(function (a, b) { return (a.x.st.title || '').localeCompare(b.x.st.title || '') || (a.i - b.i); })
+        .map(function (y) { return y.x; });
+    } else if (prioSort === 'size' && RM.sizingEnabled(state, 'story')) {
+      var so = RM.sizeOrderOf(state, 'story');
+      rank = function (st) { var i2 = st.size ? so.indexOf(st.size) : -1; return i2 === -1 ? Infinity : -i2; };
+    } else if (prioSort === 'priority' && RM.priorityEnabled(state, 'story')) {
+      var po = RM.priorityOrderOf(state, 'story');
+      rank = function (st) { var i3 = st.priority ? po.indexOf(st.priority) : -1; return i3 === -1 ? Infinity : i3; };
+    } else return pairs.slice();
+    return pairs.map(function (x, i) { return { x: x, i: i }; })
+      .sort(function (a, b) { return (rank(a.x.st) - rank(b.x.st)) || (a.i - b.i); })
+      .map(function (y) { return y.x; });
+  }
+  function prStoryCardHtml(it, st) {
+    var wsColor = it.workstream ? RM.colorForWs(state, it.workstream) : RM.defaultWsColor(state);
+    var chips = ['size', 'pri', 'risk', 'dur'].filter(function (k) {
+      return !(k === 'pri' && prioStoryCol === 'priority') && !(k === 'size' && prioStoryCol === 'size') && !(k === 'risk' && prioStoryCol === 'risk');
+    }).map(function (k) { return storyChipHtml(k, st, 'data-prstact'); }).join('');
+    return '<div class="sp-card pr-card pr-stcard' + (st.done ? ' done' : '') + '" data-prcard="' + it.id + '" data-prst="' + st.id + '" style="--ws-c:#' + wsColor + '">' +
+      '<div class="pr-stfeat" title="Feature"><span class="r-num">#' + it.num + '</span>' +
+      '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' +
+      '<span class="pr-stfeatname">' + esc(it.feature || '(untitled)') + '</span></div>' +
+      '<input class="pr-title pr-st-title" data-prstf="title" placeholder="Story" value="' + esc(st.title || '') + '">' +
+      '<div class="pr-chips">' + chips + '</div></div>';
+  }
+  function prStoryColHtml(col, pairs, laneAttr) {
+    var mine = prSortStories(pairs.filter(function (x) { return prStoryVal(x.st) === col.key; }));
+    return '<div class="sp-col" data-prcol="' + esc(col.key) + '"' + (laneAttr || '') + '>' +
+      '<div class="sp-colbody">' + mine.map(function (x) { return prStoryCardHtml(x.it, x.st); }).join('') + '</div></div>';
+  }
+  // ---- Feature level columns: the phases (default) or one feature field's
+  // ladder — priority / size / risk — plus Unset; dragging a card sets it
+  var PR_FEAT_COLS = { phase: ['flag', 'Phase'], priority: ['arrow-down-wide-narrow', 'Priority'], size: ['ruler', 'Size'], risk: ['triangle-alert', 'Risk'] };
+  function prFeatColKinds() {
+    var out = ['phase'];
+    if (RM.priorityEnabled(state) && RM.prioritySchemeOf(state) !== 'rice') out.push('priority'); // RICE is computed, no ladder
+    if (RM.sizingEnabled(state)) out.push('size');
+    if (RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto') out.push('risk');
+    return out;
+  }
+  function prFeatColumns() {
+    if (prioFeatCol === 'phase') return state.phases.map(function (p) { return { key: p.id, name: p.name }; });
+    var vals = prioFeatCol === 'priority' ? RM.priorityOrderOf(state)
+      : prioFeatCol === 'risk' ? RM.riskOrderOf(state) : RM.sizeOrderOf(state);
+    return vals.map(function (v) {
+      return { key: v, name: prioFeatCol === 'priority' ? priorityValueLabel(v) : prioFeatCol === 'risk' ? riskValueLabel(v) : v };
+    }).concat([{ key: '', name: 'Unset' }]);
+  }
+  // the feature's value for the column field; off-ladder values file under Unset
+  function prFeatVal(it) {
+    if (prioFeatCol === 'phase') return it.phaseId;
+    var v = it[prioFeatCol] || '';
+    if (!v) return '';
+    return prFeatColumns().some(function (c) { return c.key === v; }) ? v : '';
+  }
+  function prColHtml(col, items, laneAttr) {
+    var mine = prSortItems(items.filter(function (it) { return prFeatVal(it) === col.key && prMatches(it); }));
+    return '<div class="sp-col" data-prcol="' + esc(col.key) + '"' + (laneAttr || '') + '>' +
+      '<div class="sp-colbody">' + mine.map(prCardHtml).join('') + '</div>' +
+      (prioFeatCol === 'phase' // a new feature needs a phase to land in
+        ? '<button class="pr-add" data-pradd="' + col.key + '"' + (laneAttr || '') + '><i data-lucide="plus"></i> Add</button>' : '') +
       '</div>';
+  }
+  function prLaneKey(it) { return prioGroup === 'ws' ? (it.workstream || '') : (it.epic || ''); }
+  var PR_GROUPS = { none: ['square-kanban', 'None'], ws: ['layers', 'Workstreams'], epic: ['tag', 'Epics'] };
+  var PR_SORTS = { priority: ['arrow-down-wide-narrow', 'Priority'], doc: ['list', 'Document order'],
+    title: ['arrow-down-a-z', 'Title'], size: ['ruler', 'Size'] };
+  function prDdLabel(pair) { return '<i data-lucide="' + pair[0] + '"></i>' + esc(pair[1]); }
+  function renderPrioPage() {
+    var host = $('#prioView');
+    if (!host) return;
+    if (prioGroup === 'ws' && !state.meta.workstreamsEnabled) prioGroup = 'none';
+    var storyMode = prioLevel === 'story';
+    var stKinds = storyMode ? prStoryColKinds() : [];
+    if (storyMode && stKinds.indexOf(prioStoryCol) === -1 && stKinds.length) prioStoryCol = stKinds[0];
+    var ftKinds = storyMode ? [] : prFeatColKinds();
+    if (!storyMode && ftKinds.indexOf(prioFeatCol) === -1) prioFeatCol = 'phase';
+    var phases = state.phases;
+    var grouped = prioGroup !== 'none';
+    // columns: phases (or a feature field's ladder) for features, a story field's ladder for stories
+    var cols = storyMode ? prStoryColumns() : prFeatColumns();
+    var allPairs = storyMode ? prStoryPairs(state.items) : null;
+    var head = (grouped ? '<div class="pr-corner"></div>' : '') + cols.map(function (c) {
+      var n = storyMode
+        ? allPairs.filter(function (x) { return prStoryVal(x.st) === c.key; }).length
+        : state.items.filter(function (it) { return prFeatVal(it) === c.key && prMatches(it); }).length;
+      return '<div class="pr-phhd">' + esc(c.name) + '<span class="pr-lanect">' + n + '</span></div>';
+    }).join('');
+    var rows;
+    if (storyMode && !stKinds.length) {
+      rows = '<div class="p-none" style="grid-column:1/-1;padding:30px">Turn on a story priority, size or risk scheme in Setup to lay stories out in columns.</div>';
+    } else if (storyMode && !grouped) {
+      rows = cols.map(function (c) { return prStoryColHtml(c, allPairs); }).join('');
+    } else if (storyMode) {
+      var stLanes = prioGroup === 'ws'
+        ? [{ key: '', name: RM.defaultWsName(state), dot: RM.defaultWsColor(state) }]
+            .concat(allWorkstreams().map(function (w) { return { key: w, name: w, dot: RM.colorForWs(state, w) }; }))
+        : [{ key: '', name: 'No epic' }]
+            .concat(allEpics().map(function (ep) { return { key: ep, name: ep, icon: RM.iconForEpic(state, ep) || 'tag' }; }));
+      stLanes = stLanes.filter(function (ln) { return allPairs.some(function (x) { return prLaneKey(x.it) === ln.key; }); });
+      rows = stLanes.map(function (ln) {
+        var lanePairs = allPairs.filter(function (x) { return prLaneKey(x.it) === ln.key; });
+        var laneAttr = ' data-prlane="' + esc(ln.key) + '"';
+        return '<div class="pr-lanecell">' +
+          (ln.dot ? '<span class="dd-dot" style="background:#' + ln.dot + '"></span>' : '') +
+          (ln.icon ? '<i data-lucide="' + ln.icon + '"></i>' : '') +
+          '<span class="pr-lanename">' + esc(ln.name) + '</span>' +
+          '<span class="pr-lanect">' + lanePairs.length + '</span></div>' +
+          cols.map(function (c) { return prStoryColHtml(c, lanePairs, laneAttr); }).join('');
+      }).join('') || '<div class="p-none" style="grid-column:1/-1;padding:30px">Nothing matches.</div>';
+    } else if (!grouped) {
+      rows = cols.map(function (c) { return prColHtml(c, state.items); }).join('');
+    } else {
+      var lanes = prioGroup === 'ws'
+        ? [{ key: '', name: RM.defaultWsName(state), dot: RM.defaultWsColor(state) }]
+            .concat(allWorkstreams().map(function (w) { return { key: w, name: w, dot: RM.colorForWs(state, w) }; }))
+        : [{ key: '', name: 'No epic' }]
+            .concat(allEpics().map(function (ep) { return { key: ep, name: ep, icon: RM.iconForEpic(state, ep) || 'tag' }; }));
+      lanes = lanes.filter(function (ln) {
+        return state.items.some(function (it) { return prLaneKey(it) === ln.key && prMatches(it); });
+      });
+      var vitemsPr = viewItemsOf(state); // cards in on-screen (planning) order
+      rows = lanes.map(function (ln) {
+        var laneItems = vitemsPr.filter(function (it) { return prLaneKey(it) === ln.key && prMatches(it); });
+        var laneAttr = ' data-prlane="' + esc(ln.key) + '"';
+        return '<div class="pr-lanecell">' +
+          (ln.dot ? '<span class="dd-dot" style="background:#' + ln.dot + '"></span>' : '') +
+          (ln.icon ? '<i data-lucide="' + ln.icon + '"></i>' : '') +
+          '<span class="pr-lanename">' + esc(ln.name) + '</span>' +
+          '<span class="pr-lanect">' + laneItems.length + '</span></div>' +
+          cols.map(function (c) { return prColHtml(c, laneItems, laneAttr); }).join('');
+      }).join('') || '<div class="p-none" style="grid-column:1/-1;padding:30px">Nothing matches.</div>';
+    }
+    // an active filter wears what it picked: the epic's own icon, the
+    // workstream's color dot, and a blue outline
+    var epicFilterDd = allEpics().length
+      ? '<button class="dd-btn' + (prioFEpic == null ? '' : ' pr-on') + '" data-prdd="fepic" title="Filter by epic">' +
+        '<span class="dd-label">' + (prioFEpic == null ? '<i data-lucide="tag"></i>All epics'
+          : '<i data-lucide="' + (prioFEpic ? (RM.iconForEpic(state, prioFEpic) || 'tag') : 'tag') + '"></i>' + esc(prioFEpic || 'No epic')) + '</span>' +
+        '<i data-lucide="chevron-down"></i></button>' : '';
+    var wsFilterDd = state.meta.workstreamsEnabled
+      ? '<button class="dd-btn' + (prioFWs == null ? '' : ' pr-on') + '" data-prdd="fws" title="Filter by workstream">' +
+        '<span class="dd-label">' + (prioFWs == null ? '<i data-lucide="layers"></i>All workstreams'
+          : '<span class="dd-dot" style="background:#' + (prioFWs ? RM.colorForWs(state, prioFWs) : RM.defaultWsColor(state)) + '"></span>' +
+            esc(prioFWs || RM.defaultWsName(state))) + '</span>' +
+        '<i data-lucide="chevron-down"></i></button>' : '';
+    // which field the columns represent (phases or a ladder for features; a ladder for stories)
+    var colsDd = (storyMode ? stKinds.length : ftKinds.length > 1)
+      ? '<span class="pr-lab">Columns</span>' +
+        '<button class="dd-btn" data-prdd="cols" title="' + (storyMode ? 'Which story field the columns represent' : 'Which feature field the columns represent') + '">' +
+        '<span class="dd-label">' + prDdLabel(storyMode ? PR_STORY_COLS[prioStoryCol] : PR_FEAT_COLS[prioFeatCol]) + '</span><i data-lucide="chevron-down"></i></button>'
+      : '';
+    host.innerHTML = '<div class="sp-page">' +
+      '<div class="pr-bar">' +
+      levelBtnHtml('data-prdd="level"', LEVEL_MODES, prioLevel) +
+      '<span class="filter-wrap pr-filter"><i data-lucide="search" class="filter-ico" aria-hidden="true"></i>' +
+      '<input id="prFilter" type="search" placeholder="Filter cards" aria-label="Filter cards" value="' + esc(filterText) + '">' +
+      '<kbd class="kbd filter-kbd" aria-hidden="true">⌘F</kbd></span>' +
+      epicFilterDd + wsFilterDd +
+      '<div class="pr-settings">' +
+      colsDd +
+      '<span class="pr-lab">Group</span>' +
+      '<button class="dd-btn" data-prdd="group" title="Swimlanes">' +
+      '<span class="dd-label">' + prDdLabel(PR_GROUPS[prioGroup]) + '</span><i data-lucide="chevron-down"></i></button>' +
+      '<span class="pr-lab">Sort</span>' +
+      '<button class="dd-btn" data-prdd="sort" title="Order cards inside each column">' +
+      '<span class="dd-label">' + prDdLabel(PR_SORTS[prioSort]) + '</span><i data-lucide="chevron-down"></i></button>' +
+      (storyMode ? '' : '<button id="prFieldsBtn" title="Choose which fields cards show"><i data-lucide="list-checks"></i>Fields</button>') +
+      '</div></div>' +
+      '<div class="pr-table' + (storyMode ? ' pr-stboard' : '') + '" style="grid-template-columns:' + (grouped ? '170px ' : '') +
+      'repeat(' + cols.length + ', minmax(' + (storyMode ? '200px' : '230px') + ', 1fr))">' + head + rows + '</div></div>';
     if (window.lucide) lucide.createIcons();
   }
 
-  // sprint view interactions
-  $('#sprintView').addEventListener('click', function (e) {
-    if (dragConsumedClick) { dragConsumedClick = false; return; }
-    var selBtn = e.target.closest('[data-sprsel]');
-    if (selBtn) {
-      var withS = RM.sprintsEnabled(state.meta);
-      var items = [
-        { label: withS ? 'Current sprint' : 'This week', checked: sprintSel === 'cur', fn: function () { sprintSel = 'cur'; saveLocal(); render(); } },
-        { label: withS ? 'All sprints' : 'All weeks', checked: sprintSel === 'all', fn: function () { sprintSel = 'all'; saveLocal(); render(); } },
-        { sep: true }
-      ];
-      sprintNums().forEach(function (n) {
-        items.push({ label: esc(sprintLabel(n)), checked: sprintSel === n, fn: function () {
-          sprintSel = n; saveLocal(); render();
-        } });
+  var prFilterTimer = null;
+  $('#prioView').addEventListener('input', function (e) {
+    if (e.target.id !== 'prFilter') return;
+    var v = e.target.value;
+    clearTimeout(prFilterTimer);
+    prFilterTimer = setTimeout(function () {
+      filterText = v.trim();
+      render();
+      var nf = $('#prFilter'); // the render rebuilt the input — hand focus back
+      if (nf) {
+        nf.focus();
+        nf.setSelectionRange(nf.value.length, nf.value.length);
+      }
+    }, 120);
+  });
+  $('#prioView').addEventListener('change', function (e) {
+    var t = e.target;
+    if (t.dataset.prf === 'feature') {
+      var card = t.closest('[data-prcard]');
+      if (!card) return;
+      var id = card.dataset.prcard, val = t.value;
+      commit('rename', function (s) {
+        var x = RM.itemById(s, id);
+        if (x) x.feature = val;
       });
-      openDropdown(selBtn, items);
       return;
     }
-    var modeBtn = e.target.closest('[data-spmode]');
-    if (modeBtn) {
-      sprintMode = modeBtn.dataset.spmode;
-      saveLocal();
+    if (t.dataset.prstf === 'title') {
+      var stRow = t.closest('[data-prst]'), stCard = t.closest('[data-prcard]');
+      if (!stRow || !stCard) return;
+      var stId0 = stRow.dataset.prst, cardId0 = stCard.dataset.prcard, tv = t.value;
+      commit('rename story', function (s) {
+        var st2 = storyById(RM.itemById(s, cardId0) || {}, stId0);
+        if (st2) st2.title = tv;
+      });
+    }
+  });
+  // card scope fields are the same rich editors as the scoping grid: the
+  // floating B/I/list toolbar rides along while one has focus
+  $('#prioView').addEventListener('focusin', function (e) {
+    if (!e.target.classList || !e.target.classList.contains('pr-rich')) return;
+    ensureScFmtBar().hidden = false;
+    scFmtTarget = e.target;
+    placeScFmtBar();
+  });
+  // card scope fields commit on blur, exactly like the scoping grid's cells
+  $('#prioView').addEventListener('focusout', function (e) {
+    if (e.target.classList && e.target.classList.contains('pr-rich') && scFmtBar) hideScFmtBar();
+    var ed = e.target.classList && e.target.classList.contains('pr-rich') ? e.target : null;
+    if (!ed || !ed.dataset.prsc) return;
+    var card = ed.closest('[data-prcard]');
+    if (!card) return;
+    var id = card.dataset.prcard;
+    var it = RM.itemById(state, id);
+    if (!it) return;
+    var key = ed.dataset.prsc;
+    var v = sanitizeHtml(ed.innerHTML);
+    if (v === RM.scopeValue(it, key) || v === richDisplay(RM.scopeValue(it, key))) return;
+    commit('scope ' + key, function (s) { RM.setScopeValue(RM.itemById(s, id), key, v); });
+  });
+  $('#prioView').addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (t.id === 'prFilter' && e.key === 'Escape') {
+      e.stopPropagation();
+      t.value = '';
+      filterText = '';
       render();
       return;
     }
-    var stBtn = e.target.closest('[data-spstatus]');
-    if (stBtn) {
-      var sid = stBtn.dataset.spstatus;
-      openDropdown(stBtn, RM.statusesOf(state, 'feature').map(function (stName) {
-        var cur = RM.statusOf(state, RM.itemById(state, sid), 'feature');
-        return { label: esc(stName), dot: '#' + RM.statusColor(state, 'feature', stName), checked: cur === stName, fn: function () {
-          commit('status', function (s) { RM.setStatus(s, RM.itemById(s, sid), 'feature', stName); });
-        } };
-      }));
-      return;
-    }
-    var ssBtn = e.target.closest('[data-spststatus]');
-    if (ssBtn) {
-      var stId = ssBtn.dataset.spststatus;
-      var rowElS = ssBtn.closest('[data-id]');
-      var pid = rowElS && rowElS.dataset.id;
-      var pIt = pid && RM.itemById(state, pid);
-      var stObj = pIt && storyById(pIt, stId);
-      if (!stObj) return;
-      openDropdown(ssBtn, RM.statusesOf(state, 'story').map(function (stName) {
-        return { label: esc(stName), dot: '#' + RM.statusColor(state, 'story', stName), checked: RM.statusOf(state, stObj, 'story') === stName, fn: function () {
-          commit('status', function (s) {
-            var t = storyById(RM.itemById(s, pid) || {}, stId);
-            if (t) RM.setStatus(s, t, 'story', stName);
-          });
-        } };
-      }));
-      return;
-    }
-    var asgBtn = e.target.closest('[data-spasg]');
-    if (asgBtn) {
-      var aid2 = asgBtn.dataset.spasg;
-      var itA = RM.itemById(state, aid2);
-      if (!itA) return;
-      if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
-      openDropdown(asgBtn, state.team.map(function (mm) {
-        var onA = (itA.assignees || []).indexOf(mm.id) !== -1;
-        return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onA, fn: function () {
-          commit('assignees', function (s) {
-            var t = RM.itemById(s, aid2);
-            t.assignees = t.assignees || [];
-            var at = t.assignees.indexOf(mm.id);
-            if (at === -1) t.assignees.push(mm.id);
-            else t.assignees.splice(at, 1);
-          });
-        } };
-      }));
-      return;
-    }
-    var szBtn = e.target.closest('[data-spsize]');
-    if (szBtn) {
-      var szId = szBtn.dataset.spsize;
-      var itZ = RM.itemById(state, szId);
-      openDropdown(szBtn, [{ label: '<i>no size</i>', checked: !itZ.size, fn: function () { setItemSize(szId, null); } }]
-        .concat(RM.sizeOrderOf(state).map(function (sz) {
-          return { label: esc(sz), checked: itZ.size === sz, fn: function () { setItemSize(szId, sz); } };
-        })));
-      return;
-    }
-    var stAsgBtn = e.target.closest('[data-spstasg]');
-    if (stAsgBtn) {
-      var rowA = stAsgBtn.closest('[data-id]');
-      var pidA = rowA && rowA.dataset.id;
-      var stIdA = stAsgBtn.dataset.spstasg;
-      var stA = pidA && storyById(RM.itemById(state, pidA) || {}, stIdA);
-      if (!stA) return;
-      if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
-      openDropdown(stAsgBtn, state.team.map(function (mm) {
-        var onA2 = (stA.assignees || []).indexOf(mm.id) !== -1;
-        return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onA2, fn: function () {
-          commit('story assignees', function (s) {
-            var t = storyById(RM.itemById(s, pidA) || {}, stIdA);
-            if (!t) return;
-            t.assignees = t.assignees || [];
-            var at2 = t.assignees.indexOf(mm.id);
-            if (at2 === -1) t.assignees.push(mm.id);
-            else t.assignees.splice(at2, 1);
-          });
-        } };
-      }));
-      return;
-    }
-    var stSzBtn = e.target.closest('[data-spstsize]');
-    if (stSzBtn) {
-      var rowZ = stSzBtn.closest('[data-id]');
-      var pidZ = rowZ && rowZ.dataset.id;
-      var stIdZ = stSzBtn.dataset.spstsize;
-      var stZ = pidZ && storyById(RM.itemById(state, pidZ) || {}, stIdZ);
-      if (!stZ) return;
-      openDropdown(stSzBtn, [{ label: '<i>no size</i>', checked: !stZ.size, fn: function () {
-        commit('story size', function (s) {
-          var t = storyById(RM.itemById(s, pidZ) || {}, stIdZ);
-          if (t) t.size = null;
+    if (e.key === 'Enter' && t.dataset && (t.dataset.prf === 'feature' || t.dataset.prstf === 'title')) t.blur();
+  });
+  $('#prioView').addEventListener('click', function (e) {
+    if (dragConsumedClick) { dragConsumedClick = false; return; } // the click that trails a card drag
+    var dd = e.target.closest('[data-prdd]');
+    if (dd) {
+      var kind = dd.dataset.prdd;
+      if (kind === 'level') {
+        openLevelMenu(dd, LEVEL_MODES, prioLevel, function (mode) {
+          if (prioLevel !== mode) { prioLevel = mode; saveLocal(); render(); }
         });
-      } }].concat(RM.sizeOrderOf(state).map(function (sz) {
-        return { label: esc(sz), checked: stZ.size === sz, fn: function () {
-          commit('story size', function (s) {
-            var t = storyById(RM.itemById(s, pidZ) || {}, stIdZ);
-            if (t) t.size = sz;
-          });
+      } else if (kind === 'group') {
+        openDropdown(dd, Object.keys(PR_GROUPS).map(function (k) {
+          if (k === 'ws' && !state.meta.workstreamsEnabled) return null;
+          return { icon: PR_GROUPS[k][0], label: esc(PR_GROUPS[k][1]), checked: prioGroup === k, fn: function () {
+            prioGroup = k; saveLocal(); render();
+          } };
+        }).filter(Boolean));
+      } else if (kind === 'sort') {
+        openDropdown(dd, Object.keys(PR_SORTS).map(function (k) {
+          return { icon: PR_SORTS[k][0], label: esc(PR_SORTS[k][1]), checked: prioSort === k, fn: function () {
+            prioSort = k; saveLocal(); render();
+          } };
+        }));
+      } else if (kind === 'cols' && prioLevel === 'story') {
+        openDropdown(dd, prStoryColKinds().map(function (k) {
+          return { icon: PR_STORY_COLS[k][0], label: PR_STORY_COLS[k][1], checked: prioStoryCol === k, fn: function () {
+            if (prioStoryCol !== k) { prioStoryCol = k; saveLocal(); render(); }
+          } };
+        }));
+      } else if (kind === 'cols') {
+        openDropdown(dd, prFeatColKinds().map(function (k) {
+          return { icon: PR_FEAT_COLS[k][0], label: PR_FEAT_COLS[k][1], checked: prioFeatCol === k, fn: function () {
+            if (prioFeatCol !== k) { prioFeatCol = k; saveLocal(); render(); }
+          } };
+        }));
+      } else if (kind === 'fepic') {
+        openDropdown(dd, [{ label: '<i>All epics</i>', checked: prioFEpic == null, fn: function () { prioFEpic = null; render(); } },
+          { label: '<i>— no epic —</i>', checked: prioFEpic === '', fn: function () { prioFEpic = ''; render(); } }]
+          .concat(allEpics().map(function (ep) {
+            return { icon: RM.iconForEpic(state, ep) || 'tag', label: esc(ep), checked: prioFEpic === ep, fn: function () {
+              prioFEpic = ep; render();
+            } };
+          })));
+      } else if (kind === 'fws') {
+        openDropdown(dd, [{ label: '<i>All workstreams</i>', checked: prioFWs == null, fn: function () { prioFWs = null; render(); } },
+          { label: esc(RM.defaultWsName(state)) + ' <i>(default)</i>', dot: '#' + RM.defaultWsColor(state),
+            checked: prioFWs === '', fn: function () { prioFWs = ''; render(); } }]
+          .concat(allWorkstreams().map(function (w) {
+            return { label: esc(w), dot: '#' + RM.colorForWs(state, w), checked: prioFWs === w, fn: function () {
+              prioFWs = w; render();
+            } };
+          })));
+      }
+      return;
+    }
+    if (e.target.closest('#prFieldsBtn')) {
+      openDropdown(e.target.closest('#prFieldsBtn'), scopeCols().filter(function (c) { return colShowsOn(c[0], 'feature'); }).map(function (c) {
+        return { label: esc(c[1]), checked: prioFields.indexOf(c[0]) !== -1, fn: function () {
+          var at = prioFields.indexOf(c[0]);
+          if (at === -1) prioFields.push(c[0]); else prioFields.splice(at, 1);
+          saveLocal();
+          render();
         } };
-      })));
+      }));
       return;
     }
-  });
-  $('#sprintView').addEventListener('change', function (e) {
-    var t = e.target;
-    if (t.dataset.sptitle) {
-      var nv = t.value;
-      commit('rename', function (s) { RM.itemById(s, t.dataset.sptitle).feature = nv; });
+    // story rows (Story level): priority chip, add-story button
+    var stChipP = e.target.closest('[data-prstact]');
+    if (stChipP) {
+      var stRowP = stChipP.closest('[data-prst]'), stCardP = stChipP.closest('[data-prcard]');
+      if (stRowP && stCardP) storyChipAction(stChipP.dataset.prstact, stChipP, stCardP.dataset.prcard, stRowP.dataset.prst);
       return;
     }
-    if (t.dataset.spsttitle) {
-      var rowT = t.closest('[data-id]');
-      var pidT = rowT && rowT.dataset.id;
-      var nv2 = t.value;
-      commit('rename story', function (s) {
-        var stT = storyById(RM.itemById(s, pidT) || {}, t.dataset.spsttitle);
-        if (stT) stT.title = nv2;
+    var stAdd = e.target.closest('[data-prstadd]');
+    if (stAdd) {
+      var stCardA = stAdd.closest('[data-prcard]');
+      if (!stCardA) return;
+      var addId = stCardA.dataset.prcard, newSt = RM.uid('s');
+      commit('add story', function (s) {
+        var x = RM.itemById(s, addId);
+        if (x) x.stories.push({ id: newSt, title: '', done: false });
       });
+      var ni = $('#prioView [data-prst="' + newSt + '"] input');
+      if (ni) ni.focus();
+      return;
+    }
+    var chip = e.target.closest('[data-pract]');
+    if (chip) {
+      var cardC = chip.closest('[data-prcard]');
+      if (!cardC) return;
+      var cid = cardC.dataset.prcard;
+      var itC = RM.itemById(state, cid);
+      if (!itC) return;
+      var act = chip.dataset.pract;
+      if (act === 'size') {
+        openDropdown(chip, [{ label: '<i>no size</i>', checked: !itC.size, fn: function () {
+          setItemSize(cid, null);
+        } }].concat(RM.sizeOrderOf(state).map(function (sz) {
+          return { label: esc(sz) + ' <small>' + sizeHuman(sz) + '</small>', checked: itC.size === sz, fn: function () {
+            setItemSize(cid, sz);
+          } };
+        })));
+      } else if (act === 'priority') openPriorityEditor(chip, cid);
+      else if (act === 'risk' || act === 'dur') itemChipAction(act, chip, cid);
+      else if (act === 'epic') openDropdown(chip, setEpicMenu(cid, true));
+      else if (act === 'ws') {
+        openDropdown(chip, wsMenuItems(cid, function () {
+          return $('#prioView [data-prcard="' + cid + '"] [data-pract="ws"]');
+        }));
+      }
+      return;
+    }
+    var add = e.target.closest('[data-pradd]');
+    if (add) {
+      var lane = add.getAttribute('data-prlane');
+      var group = prioGroup;
+      addFeature(add.dataset.pradd);
+      // in a swimlane the new card belongs to the lane it was added in
+      if (lane && selectedId) {
+        var nid = selectedId;
+        commit(group === 'ws' ? 'workstream' : 'epic', function (s) {
+          var x = RM.itemById(s, nid);
+          if (x) { if (group === 'ws') x.workstream = lane; else x.epic = lane; }
+        });
+      }
     }
   });
-  // kanban: drag a card (feature or story) between status columns
-  $('#sprintView').addEventListener('pointerdown', function (e) {
-    if (e.button !== 0) return;
-    var card = e.target.closest('.sp-card');
-    if (!card || e.target.closest('button,input')) return;
-    drag = { kind: 'spcard', itemId: card.dataset.spcard || card.dataset.pid, stId: card.dataset.spcardst || null,
-      x0: e.clientX, y0: e.clientY, moved: false, ghost: null };
+  $('#prioView').addEventListener('contextmenu', function (e) {
+    var card = e.target.closest('[data-prcard]');
+    if (!card || e.target.closest('input,textarea,select,[contenteditable="true"]')) return;
+    e.preventDefault();
+    e.stopPropagation(); // the app-chrome theme menu must not replace this
+    var cid = card.dataset.prcard;
+    var itX = RM.itemById(state, cid);
+    if (!itX) return;
+    var cx = e.clientX, cy = e.clientY;
+    if (card.dataset.prst) { // a story card: jump to its feature, or delete the story
+      var stIdX = card.dataset.prst;
+      openContextMenu(cx, cy, [
+        { icon: 'rows-3', label: 'Go to feature', fn: function () { select(cid, true); } },
+        { sep: true },
+        { icon: 'trash-2', label: 'Delete story', danger: true, fn: function () {
+          commit('delete story', function (s) {
+            var t = RM.itemById(s, cid);
+            if (t) t.stories = (t.stories || []).filter(function (st) { return st.id !== stIdX; });
+          });
+        } }
+      ]);
+      return;
+    }
+    openContextMenu(cx, cy, [
+      { icon: 'folder-input', label: 'Move to phase…', fn: function () { openContextMenu(cx, cy, movePhaseMenu(cid)); } },
+      { icon: 'tag', label: 'Set epic…', fn: function () { openContextMenu(cx, cy, setEpicMenu(cid, false)); } },
+      state.meta.workstreamsEnabled
+        ? { icon: 'layers', label: 'Set workstream…', fn: function () {
+            openContextMenu(cx, cy, wsMenuItems(cid, function () {
+              return $('#prioView [data-prcard="' + cid + '"] [data-pract="ws"]');
+            }));
+          } }
+        : null,
+      { sep: true },
+      { icon: 'trash-2', label: 'Delete…', danger: true, fn: function () { deleteItemConfirm(cid); } }
+    ].filter(Boolean));
   });
-  function spCardDragMove(e) {
+  // cards drag between horizons (phase columns) — and across swimlanes
+  $('#prioView').addEventListener('pointerdown', function (e) {
+    if (e.button !== 0 || drag) return;
+    if (e.target.closest('input,textarea,button,select,[contenteditable="true"],[data-pract]')) return;
+    var card = e.target.closest('[data-prcard]');
+    if (!card) return;
+    drag = { kind: 'prcard', id: card.dataset.prcard, st: card.dataset.prst || null, el: card,
+      x0: e.clientX, y0: e.clientY, moved: false, ghost: null, colEl: null };
+    e.preventDefault();
+  });
+  function prCardDragMove(e) {
     if (!drag.ghost) {
-      var src = $('#sprintView .sp-card[' + (drag.stId
-        ? 'data-spcardst="' + drag.stId + '"' : 'data-spcard="' + drag.itemId + '"') + ']');
       drag.ghost = document.createElement('div');
       drag.ghost.className = 'sp-card sp-card-ghost';
-      drag.ghost.textContent = drag.stId
-        ? (storyById(RM.itemById(state, drag.itemId) || {}, drag.stId) || {}).title || ''
-        : (RM.itemById(state, drag.itemId) || {}).feature || '';
+      var t = RM.itemById(state, drag.id);
+      var stG = drag.st && t ? storyById(t, drag.st) : null;
+      drag.ghost.textContent = stG ? (stG.title || 'Story') : ((t && t.feature) || 'Card');
       document.body.appendChild(drag.ghost);
-      if (src) src.classList.add('sp-dragging');
+      drag.el.classList.add('sp-dragging');
     }
     drag.ghost.style.left = (e.clientX + 10) + 'px';
     drag.ghost.style.top = (e.clientY + 8) + 'px';
-    var col = document.elementFromPoint(e.clientX, e.clientY);
-    col = col && col.closest ? col.closest('.sp-col') : null;
-    $$('#sprintView .sp-col').forEach(function (c) { c.classList.toggle('drop', c === col); });
-    drag.overCol = col ? col.dataset.spcol : null;
+    var under = (document.elementFromPoint && document.elementFromPoint(e.clientX, e.clientY)) || e.target;
+    drag.colEl = under && under.closest ? under.closest('[data-prcol]') : null;
+    $$('#prioView .sp-col').forEach(function (c) { c.classList.toggle('drop', c === drag.colEl); });
   }
-  function spCardDragEnd(d) {
+  function prCardDragEnd(d) {
     if (d.ghost) d.ghost.remove();
-    $$('#sprintView .sp-col').forEach(function (c) { c.classList.remove('drop'); });
-    if (!d.overCol) { render(); return; }
-    var target = d.overCol;
-    if (d.stId) {
-      var stTarget = storyStatusForCol(target);
-      commit('status', function (s) {
-        var t = storyById(RM.itemById(s, d.itemId) || {}, d.stId);
-        if (t) RM.setStatus(s, t, 'story', stTarget);
+    d.el.classList.remove('sp-dragging');
+    $$('#prioView .sp-col').forEach(function (c) { c.classList.remove('drop'); });
+    var t = RM.itemById(state, d.id);
+    var toId = d.colEl && d.colEl.dataset.prcol;
+    var lane = d.colEl ? d.colEl.getAttribute('data-prlane') : null; // null = no swimlanes
+    var group = prioGroup;
+    if (d.st) { // story card: the column IS the field value ('' = unset)
+      var stD = t ? storyById(t, d.st) : null;
+      var field = prioStoryCol;
+      if (toId == null || !stD || (stD[field] || '') === toId) { render(); return; }
+      commit('story ' + field, function (s) {
+        var st2 = storyById(RM.itemById(s, d.id) || {}, d.st);
+        if (st2) st2[field] = toId || null;
       });
       return;
     }
-    commit('status', function (s) {
-      var t = RM.itemById(s, d.itemId);
-      if (t) RM.setStatus(s, t, 'feature', target);
+    if (prioFeatCol !== 'phase') { // the column IS the field value ('' = unset)
+      var ff = prioFeatCol;
+      var laneSame = lane == null || prLaneKey(t) === lane;
+      if (toId == null || !t || ((t[ff] || '') === toId && laneSame)) { render(); return; }
+      commit(ff, function (s) {
+        var x = RM.itemById(s, d.id);
+        if (!x) return;
+        if ((x[ff] || '') !== toId) {
+          x[ff] = toId || null;
+          if (ff === 'size' && toId && isScheduled(x) && !x.locked) x.durDays = RM.stretchSpan(s.meta, x.startDay, RM.sizeDays(s, toId)); // as setItemSize
+          if (ff === 'risk') x.riskDays = 0; // as setItemRisk
+        }
+        if (lane != null) { if (group === 'ws') x.workstream = lane; else x.epic = lane; }
+      });
+      return;
+    }
+    if (!toId || !t || (t.phaseId === toId && (lane == null || prLaneKey(t) === lane))) { render(); return; }
+    commit('move card', function (s) {
+      var x = RM.itemById(s, d.id);
+      if (lane != null) {
+        if (group === 'ws') x.workstream = lane;
+        else x.epic = lane;
+      }
+      RM.placeItem(s, d.id, toId, null); // end of the target phase: one order key changes
     });
   }
-  // right-click a card / grid row: quick status + jump to Planning
+
+  // ------------------------------------------------------------ sprinting page
+  // Sprint by sprint: a sidebar of sprints (Unscheduled last) and ONE
+  // scrolling page of sections, rows per sprint — features or stories.
+  // Dragging a row to another sprint moves it on the timeline (start = that
+  // sprint's first day, span kept, stories ride along) and reorders the
+  // shared items array, so the new order shows in every view.
+  var sprScroll = 0;   // #spvMain scroll offset, kept across re-renders
+  function sprSecKey(num) { return num == null ? 'u' : String(num); }
+  function sprSecNum(key) { return key === 'u' ? null : Number(key); }
+  function sprHasOwn(st) { return st.startDay != null && st.durDays != null; }
+  // stories of one feature that belong to sprint `num` (null = unscheduled):
+  // a story's own timeline decides when it has one, else it follows the feature
+  function sprStoriesOf(it, num, featIn) {
+    var meta = state.meta, r = num == null ? null : RM.sprintRange(meta, num);
+    return (it.stories || []).filter(function (st) {
+      if (sprHasOwn(st)) return r ? RM.itemInWeeks(meta, st, r.w0, r.w1) : false;
+      return num == null ? it.startDay == null : featIn;
+    });
+  }
+  // row-level match: the text filter plus the phase / epic / workstream dropdowns
+  function sprMatches(it) {
+    if (!matchesFilter(it)) return false;
+    if (sprFPhase != null && it.phaseId !== sprFPhase) return false;
+    if (sprFEpic != null && (it.epic || '') !== sprFEpic) return false;
+    if (sprFWs != null && (it.workstream || '') !== sprFWs) return false;
+    return true;
+  }
+  function sprFilterOn() { return !!filterText || sprFPhase != null || sprFEpic != null || sprFWs != null; }
+  function sprSections() {
+    var meta = state.meta;
+    var nums = sprintNums().concat([null]); // Unscheduled trails the timeline
+    return nums.map(function (n) {
+      var vitemsSp = viewItemsOf(state); // rows in on-screen (planning) order
+      var items = n == null
+        ? vitemsSp.filter(function (it) { return it.startDay == null && sprMatches(it); })
+        : itemsInSprint(n).filter(sprMatches);
+      var inIds = {};
+      items.forEach(function (it) { inIds[it.id] = true; });
+      var feats = [];
+      if (sprLevel === 'story') {
+        vitemsSp.forEach(function (it) {
+          if (!sprMatches(it)) return;
+          var sts = sprStoriesOf(it, n, !!inIds[it.id]);
+          if (sts.length) feats.push({ it: it, stories: sts });
+        });
+      }
+      var w0 = n == null ? 0 : Math.max(0, RM.sprintRange(meta, n).w0);
+      var d0 = n == null ? 0 : RM.sprintStartDay(meta, n);
+      var wps = RM.sprintInfo(meta).wps;
+      return {
+        num: n, key: sprSecKey(n),
+        title: n == null ? 'Unscheduled' : (RM.sprintsEnabled(meta) ? 'Sprint ' + n : 'Week of ' + RM.fmtShort(RM.weekStartDate(meta, w0))),
+        dates: n == null ? '' : RM.fmtShort(RM.weekStartDate(meta, w0)) + ' – ' +
+          RM.fmtShort(RM.spanEndDate(meta, d0, Math.min(wps * SPW(), meta.numWeeks * SPW() - d0))),
+        items: items, feats: feats,
+        count: sprLevel === 'story'
+          ? feats.reduce(function (a, f) { return a + f.stories.length; }, 0) : items.length
+      };
+    });
+  }
+  function sprTag(it, num) {
+    if (num == null || !isScheduled(it)) return '';
+    var meta = state.meta, r = RM.sprintRange(meta, num), S = SPW();
+    var s0 = RM.sprintNumForWeek(meta, Math.floor(it.startDay / S));
+    var s1 = RM.sprintNumForWeek(meta, Math.max(0, Math.ceil(RM.itemEnd(it) / S) - 1));
+    var out = '';
+    if (it.startDay < r.w0 * S) out += '<span class="spv-tag" title="Started in an earlier sprint">from ' + (RM.sprintsEnabled(meta) ? 'S' + s0 : 'W' + s0) + '</span>';
+    if (RM.itemEnd(it) > r.w1 * S) out += '<span class="spv-tag" title="Continues into a later sprint">to ' + (RM.sprintsEnabled(meta) ? 'S' + s1 : 'W' + s1) + '</span>';
+    return out;
+  }
+  function sprDates(x) {
+    if (!isScheduled(x)) return '';
+    return RM.fmtShort(RM.dayToDate(state.meta, x.startDay)) + ' → ' +
+      RM.fmtShort(RM.spanEndDate(state.meta, x.startDay, RM.itemSpan(x)));
+  }
+  function sprPhaseName(it) {
+    var p = state.phases.filter(function (x) { return x.id === it.phaseId; })[0];
+    return p ? p.name : '';
+  }
+  function sprRowHtml(it, num) {
+    var color = '#' + RM.colorForItem(state, it);
+    return '<div class="spv-row' + (isSel(it.id) ? ' sel' : '') + (it.done ? ' done' : '') +
+      '" data-spid="' + it.id + '" data-spsec="' + sprSecKey(num) + '">' +
+      '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
+      '<span class="r-num">#' + it.num + '</span>' +
+      '<span class="r-dot' + (it.milestone ? ' msdot ' + RM.msStyleOf(it) : '') + '" style="background:' + color + '"></span>' +
+      '<input class="spv-title" data-spf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
+      sprTag(it, num) +
+      '<span class="spv-chip" tabindex="0" role="button" data-spact="epic" title="Epic">' +
+      '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>' +
+      '<span class="spv-est">' + ['size', 'pri', 'risk', 'dur'].map(function (k) { return itemChipHtml(k, it, 'data-spact'); }).join('') + '</span>' +
+      '<span class="spv-dates">' + esc(sprDates(it)) + '</span>' +
+      '<span class="spv-phase" title="Phase">' + esc(sprPhaseName(it)) + '</span>' +
+      '</div>';
+  }
+  function sprStoryRowHtml(it, st, num) {
+    var own = sprHasOwn(st);
+    return '<div class="spv-row spv-st' + (isSel(it.id) && selStory === st.id ? ' sel' : '') + (st.done ? ' done' : '') +
+      '" data-spid="' + it.id + '" data-spst="' + st.id + '" data-spsec="' + sprSecKey(num) + '">' +
+      '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
+      '<input class="spv-title" data-spf="story" placeholder="Story" value="' + esc(st.title || '') + '">' +
+      (own ? sprTag(st, num) : (num == null ? '' : '<span class="spv-tag" title="No timeline of its own">with feature</span>')) +
+      '<span class="spv-est">' + ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-spact'); }).join('') + '</span>' +
+      '<span class="spv-dates">' + esc(own ? sprDates(st) : '') + '</span>' +
+      '</div>';
+  }
+  function sprSectionHtml(sec) {
+    var body;
+    if (sprLevel === 'story') {
+      body = sec.feats.map(function (f) {
+        return '<div class="spv-feat" data-spfeat="' + f.it.id + '">' +
+          '<span class="r-num">#' + f.it.num + '</span>' +
+          '<span class="r-dot" style="background:#' + RM.colorForItem(state, f.it) + '"></span>' +
+          '<span class="spv-featname">' + esc(f.it.feature || '(untitled)') + '</span>' +
+          '<span class="spv-phase">' + esc(sprPhaseName(f.it)) + '</span></div>' +
+          f.stories.map(function (st) { return sprStoryRowHtml(f.it, st, sec.num); }).join('');
+      }).join('');
+    } else {
+      body = sec.items.map(function (it) { return sprRowHtml(it, sec.num); }).join('');
+    }
+    return '<section class="spv-sec" data-spsec="' + sec.key + '">' +
+      '<div class="spv-sechd"><h3>' + esc(sec.title) + '</h3>' +
+      (sec.dates ? '<span class="spv-secdates">' + esc(sec.dates) + '</span>' : '') +
+      '<span class="pr-lanect">' + sec.count + '</span></div>' +
+      '<div class="spv-rows">' + (body || '<div class="spv-empty">Nothing here' + (sprFilterOn() ? ' matches' : '') + '. Drop a row to move it into this sprint.</div>') + '</div>' +
+      (sprLevel === 'feature' ? '<button class="spv-add" data-spadd="' + sec.key + '"><i data-lucide="plus"></i>Add feature</button>' : '') +
+      '</section>';
+  }
+  function renderSprintPage() {
+    var host = $('#sprintView');
+    if (!host) return;
+    if (sprFPhase != null && !state.phases.some(function (p) { return p.id === sprFPhase; })) sprFPhase = null;
+    if (sprFWs != null && !state.meta.workstreamsEnabled) sprFWs = null;
+    var secs = sprSections();
+    // filter buttons wear what they picked (phase name, epic icon, workstream dot) and a blue outline
+    var fPh = sprFPhase == null ? null : state.phases.filter(function (p) { return p.id === sprFPhase; })[0];
+    var phaseFilterDd = state.phases.length > 1
+      ? '<button class="dd-btn' + (fPh ? ' pr-on' : '') + '" data-spdd="fphase" title="Filter by phase">' +
+        '<span class="dd-label"><i data-lucide="milestone"></i>' + (fPh ? esc(fPh.name) : 'All phases') + '</span>' +
+        '<i data-lucide="chevron-down"></i></button>' : '';
+    var epicFilterDd = allEpics().length
+      ? '<button class="dd-btn' + (sprFEpic == null ? '' : ' pr-on') + '" data-spdd="fepic" title="Filter by epic">' +
+        '<span class="dd-label">' + (sprFEpic == null ? '<i data-lucide="tag"></i>All epics'
+          : '<i data-lucide="' + (sprFEpic ? (RM.iconForEpic(state, sprFEpic) || 'tag') : 'tag') + '"></i>' + esc(sprFEpic || 'No epic')) + '</span>' +
+        '<i data-lucide="chevron-down"></i></button>' : '';
+    var wsFilterDd = state.meta.workstreamsEnabled
+      ? '<button class="dd-btn' + (sprFWs == null ? '' : ' pr-on') + '" data-spdd="fws" title="Filter by workstream">' +
+        '<span class="dd-label">' + (sprFWs == null ? '<i data-lucide="layers"></i>All workstreams'
+          : '<span class="dd-dot" style="background:#' + (sprFWs ? RM.colorForWs(state, sprFWs) : RM.defaultWsColor(state)) + '"></span>' +
+            esc(sprFWs || RM.defaultWsName(state))) + '</span>' +
+        '<i data-lucide="chevron-down"></i></button>' : '';
+    var cur = RM.sprintsEnabled(state.meta) ? currentSprintNum() : null;
+    var side = secs.map(function (sec) {
+      return '<button class="spv-sbtn' + (sec.num != null && sec.num === cur ? ' today' : '') +
+        '" data-spside="' + sec.key + '" title="' + esc(sec.title + (sec.dates ? ' · ' + sec.dates : '')) + '">' +
+        '<i data-lucide="' + (sec.num == null ? 'inbox' : 'calendar-range') + '"></i>' +
+        '<span class="spv-sbtxt"><span class="spv-sbname">' + esc(sec.title) + '</span>' +
+        (sec.dates ? '<small>' + esc(sec.dates) + '</small>' : '') + '</span>' +
+        '<span class="pr-lanect">' + sec.count + '</span></button>';
+    }).join('');
+    host.innerHTML = '<div class="spv">' +
+      '<aside class="spv-side"><div class="spv-sidehd">Sprints</div>' + side + '</aside>' +
+      '<div class="spv-main" id="spvMain"><div class="pr-bar">' +
+      levelBtnHtml('data-spdd="level"', LEVEL_MODES, sprLevel) +
+      '<span class="filter-wrap pr-filter"><i data-lucide="search" class="filter-ico" aria-hidden="true"></i>' +
+      '<input id="spFilter" type="search" placeholder="Filter rows" aria-label="Filter rows" value="' + esc(filterText) + '">' +
+      '<kbd class="kbd filter-kbd" aria-hidden="true">⌘F</kbd></span>' +
+      phaseFilterDd + epicFilterDd + wsFilterDd +
+      '</div>' +
+      secs.map(sprSectionHtml).join('') + '</div></div>';
+    if (window.lucide) lucide.createIcons();
+    var main = $('#spvMain');
+    main.scrollTop = sprScroll;
+    sprSyncSide();
+  }
+  // the sidebar tracks the section under the top of the scroll area
+  function sprSyncSide() {
+    var main = $('#spvMain');
+    if (!main) return;
+    var secs = $$('#spvMain .spv-sec');
+    var top = main.getBoundingClientRect().top + 60, on = secs[0];
+    secs.forEach(function (s) { if (s.getBoundingClientRect().top <= top) on = s; });
+    $$('#sprintView .spv-sbtn').forEach(function (b) {
+      b.classList.toggle('on', !!on && b.dataset.spside === on.dataset.spsec);
+    });
+  }
+  $('#sprintView').addEventListener('scroll', function (e) {
+    if (e.target.id !== 'spvMain') return;
+    sprScroll = e.target.scrollTop;
+    sprSyncSide();
+  }, true);
+  // adds a feature scheduled at the section's sprint (or unscheduled)
+  function sprAddFeature(key) {
+    var num = sprSecNum(key);
+    doAddFeature();
+    var nid = selectedId;
+    if (nid && num != null) {
+      commit('schedule', function (s) { RM.moveItemToSprint(s, nid, num, null); });
+    }
+  }
+  var spFilterTimer = null;
+  $('#sprintView').addEventListener('input', function (e) {
+    if (e.target.id !== 'spFilter') return;
+    var v = e.target.value;
+    clearTimeout(spFilterTimer);
+    spFilterTimer = setTimeout(function () {
+      filterText = v.trim();
+      render();
+      var nf = $('#spFilter');
+      if (nf) { nf.focus(); nf.setSelectionRange(nf.value.length, nf.value.length); }
+    }, 120);
+  });
+  $('#sprintView').addEventListener('change', function (e) {
+    var t = e.target;
+    if (!t.dataset || !t.dataset.spf) return;
+    var row = t.closest('[data-spid]');
+    if (!row) return;
+    var id = row.dataset.spid, stId = row.dataset.spst, val = t.value;
+    if (t.dataset.spf === 'story') {
+      commit('rename story', function (s) {
+        var st = storyById(RM.itemById(s, id) || {}, stId);
+        if (st) st.title = val;
+      });
+    } else {
+      commit('rename', function (s) {
+        var x = RM.itemById(s, id);
+        if (x) x.feature = val;
+      });
+    }
+  });
+  $('#sprintView').addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (t.id === 'spFilter' && e.key === 'Escape') {
+      e.stopPropagation();
+      t.value = '';
+      filterText = '';
+      render();
+      return;
+    }
+    if (e.key === 'Enter' && t.dataset && t.dataset.spf) t.blur();
+  });
+  $('#sprintView').addEventListener('click', function (e) {
+    if (dragConsumedClick) { dragConsumedClick = false; return; }
+    var sb = e.target.closest('[data-spside]');
+    if (sb) {
+      var sec = $('#spvMain .spv-sec[data-spsec="' + sb.dataset.spside + '"]');
+      var main = $('#spvMain');
+      if (sec && main) {
+        main.scrollTop = sec.offsetTop - main.offsetTop - 8;
+        sprScroll = main.scrollTop;
+        sprSyncSide();
+      }
+      return;
+    }
+    var lv = e.target.closest('[data-spdd="level"]');
+    if (lv) {
+      openLevelMenu(lv, LEVEL_MODES, sprLevel, function (mode) {
+        if (sprLevel !== mode) { sprLevel = mode; saveLocal(); render(); }
+      });
+      return;
+    }
+    var fdd = e.target.closest('[data-spdd]');
+    if (fdd) {
+      var fk = fdd.dataset.spdd;
+      if (fk === 'fphase') {
+        openDropdown(fdd, [{ label: '<i>All phases</i>', checked: sprFPhase == null, fn: function () { sprFPhase = null; render(); } }]
+          .concat(state.phases.map(function (p) {
+            return { label: esc(p.name), checked: sprFPhase === p.id, fn: function () { sprFPhase = p.id; render(); } };
+          })));
+      } else if (fk === 'fepic') {
+        openDropdown(fdd, [{ label: '<i>All epics</i>', checked: sprFEpic == null, fn: function () { sprFEpic = null; render(); } },
+          { label: '<i>— no epic —</i>', checked: sprFEpic === '', fn: function () { sprFEpic = ''; render(); } }]
+          .concat(allEpics().map(function (ep) {
+            return { icon: RM.iconForEpic(state, ep) || 'tag', label: esc(ep), checked: sprFEpic === ep, fn: function () {
+              sprFEpic = ep; render();
+            } };
+          })));
+      } else if (fk === 'fws') {
+        openDropdown(fdd, [{ label: '<i>All workstreams</i>', checked: sprFWs == null, fn: function () { sprFWs = null; render(); } },
+          { label: esc(RM.defaultWsName(state)) + ' <i>(default)</i>', dot: '#' + RM.defaultWsColor(state),
+            checked: sprFWs === '', fn: function () { sprFWs = ''; render(); } }]
+          .concat(allWorkstreams().map(function (w) {
+            return { label: esc(w), dot: '#' + RM.colorForWs(state, w), checked: sprFWs === w, fn: function () {
+              sprFWs = w; render();
+            } };
+          })));
+      }
+      return;
+    }
+    var add = e.target.closest('[data-spadd]');
+    if (add) { sprAddFeature(add.dataset.spadd); return; }
+    var chip = e.target.closest('[data-spact]');
+    var row = e.target.closest('[data-spid]');
+    if (chip && row) {
+      var cid = row.dataset.spid;
+      var itC = RM.itemById(state, cid);
+      if (!itC) return;
+      if (row.dataset.spst) storyChipAction(chip.dataset.spact, chip, cid, row.dataset.spst);
+      else if (chip.dataset.spact === 'epic') openDropdown(chip, setEpicMenu(cid, true));
+      else itemChipAction(chip.dataset.spact, chip, cid);
+      return;
+    }
+    if (row && !e.target.closest('input,button')) {
+      if (row.dataset.spst) {
+        var wasSt = selStory;
+        select(row.dataset.spid);
+        if (wasSt !== row.dataset.spst) { selStory = row.dataset.spst; render(); }
+      } else if (selectedId !== row.dataset.spid || selStory) select(row.dataset.spid);
+    }
+  });
   $('#sprintView').addEventListener('contextmenu', function (e) {
-    var card = e.target.closest('.sp-card,[data-id].sp-r');
-    if (!card || e.target.closest('input')) return;
+    var row = e.target.closest('[data-spid]');
+    if (!row || row.dataset.spst || e.target.closest('input,textarea,select')) return;
     e.preventDefault();
     e.stopPropagation();
-    var ctxStId = card.dataset.spcardst || card.dataset.spst;
-    if (ctxStId) {
-      // story card / row: story statuses + open the story panel
-      var ctxPid = card.dataset.pid || card.dataset.id;
-      var ctxIt = RM.itemById(state, ctxPid);
-      var ctxSt = ctxIt && storyById(ctxIt, ctxStId);
-      if (!ctxSt) return;
-      var stItems = RM.statusesOf(state, 'story').map(function (stName) {
-        return { label: esc(stName), dot: '#' + RM.statusColor(state, 'story', stName), checked: RM.statusOf(state, ctxSt, 'story') === stName, fn: function () {
-          commit('status', function (s) {
-            var t = storyById(RM.itemById(s, ctxPid) || {}, ctxStId);
-            if (t) RM.setStatus(s, t, 'story', stName);
-          });
-        } };
+    var cid = row.dataset.spid;
+    var itX = RM.itemById(state, cid);
+    if (!itX) return;
+    var cx = e.clientX, cy = e.clientY;
+    openContextMenu(cx, cy, [
+      { icon: 'folder-input', label: 'Move to phase…', fn: function () { openContextMenu(cx, cy, movePhaseMenu(cid)); } },
+      { icon: 'tag', label: 'Set epic…', fn: function () { openContextMenu(cx, cy, setEpicMenu(cid, false)); } },
+      state.meta.workstreamsEnabled
+        ? { icon: 'layers', label: 'Set workstream…', fn: function () { openContextMenu(cx, cy, wsMenuItems(cid, function () { return null; })); } }
+        : null,
+      isScheduled(itX) ? { icon: 'calendar-off', label: 'Unschedule', fn: function () {
+        commit('unschedule', function (s) { RM.moveItemToSprint(s, cid, null, null); });
+      } } : null,
+      { sep: true },
+      { icon: 'trash-2', label: 'Delete…', danger: true, fn: function () { deleteItemConfirm(cid); } }
+    ].filter(Boolean));
+  });
+  // rows drag between sprints (sections or sidebar entries) and reorder
+  // inside one; stories only reorder among their own feature's stories
+  $('#sprintView').addEventListener('pointerdown', function (e) {
+    if (e.button !== 0 || drag) return;
+    if (e.target.closest('input,textarea,button,select,[data-spact]')) return;
+    var row = e.target.closest('.spv-row');
+    if (!row) return;
+    drag = { kind: 'sprow', id: row.dataset.spid, stId: row.dataset.spst || null, fromSec: row.dataset.spsec,
+      el: row, x0: e.clientX, y0: e.clientY, moved: false, ghost: null, target: null };
+    e.preventDefault();
+  });
+  function sprClearDrop() {
+    $$('#sprintView .drop-before,#sprintView .drop-after,#sprintView .drop').forEach(function (n) {
+      n.classList.remove('drop-before', 'drop-after', 'drop');
+    });
+  }
+  function sprDragMove(e) {
+    if (!drag.ghost) {
+      drag.ghost = document.createElement('div');
+      drag.ghost.className = 'sp-card sp-card-ghost';
+      var t = RM.itemById(state, drag.id);
+      var st = t && drag.stId ? storyById(t, drag.stId) : null;
+      drag.ghost.textContent = st ? (st.title || 'Story') : ((t && t.feature) || 'Feature');
+      document.body.appendChild(drag.ghost);
+      drag.el.classList.add('sp-dragging');
+    }
+    drag.ghost.style.left = (e.clientX + 10) + 'px';
+    drag.ghost.style.top = (e.clientY + 8) + 'px';
+    var under = (document.elementFromPoint && document.elementFromPoint(e.clientX, e.clientY)) || e.target;
+    sprClearDrop();
+    drag.target = null;
+    if (!under || !under.closest) return;
+    var sb = under.closest('[data-spside]');
+    if (sb) { sb.classList.add('drop'); drag.target = { sec: sb.dataset.spside, beforeId: null, beforeStId: null }; return; }
+    var row = under.closest('.spv-row');
+    var sec = under.closest('.spv-sec');
+    if (!sec) return;
+    var tgt = { sec: sec.dataset.spsec, beforeId: null, beforeStId: null };
+    if (row && row !== drag.el) {
+      var r = row.getBoundingClientRect();
+      var before = e.clientY < r.top + r.height / 2;
+      var ref = before ? row : row.nextElementSibling;
+      while (ref && !ref.classList.contains('spv-row')) ref = ref.nextElementSibling; // skip feature headings
+      if (ref && ref !== drag.el) {
+        if (drag.stId) {
+          // a story only has a "before" among its own feature's stories
+          if (ref.dataset.spid === drag.id) tgt.beforeStId = ref.dataset.spst;
+        } else tgt.beforeId = ref.dataset.spid;
+      }
+      row.classList.add(before ? 'drop-before' : 'drop-after');
+    } else sec.classList.add('drop');
+    drag.target = tgt;
+  }
+  function sprDragEnd(d) {
+    if (d.ghost) d.ghost.remove();
+    d.el.classList.remove('sp-dragging');
+    sprClearDrop();
+    var t = d.target;
+    if (!t) { render(); return; }
+    var num = sprSecNum(t.sec), moved = t.sec !== d.fromSec;
+    if (d.stId) {
+      if (!moved && !t.beforeStId) { render(); return; }
+      commit(moved ? 'move story to sprint' : 'reorder story', function (s) {
+        RM.moveStoryToSprint(s, d.id, d.stId, moved ? num : sprHasOwn(storyById(RM.itemById(s, d.id) || {}, d.stId)) ? num : null, t.beforeStId);
       });
-      stItems.push({ sep: true });
-      stItems.push({ icon: 'chart-gantt', label: 'Show in Planning', fn: function () {
-        view = 'planning';
-        expanded[ctxPid] = true;
-        selectStory(ctxPid, ctxStId);
-        saveLocal();
-        render();
-      } });
-      openContextMenu(e.clientX, e.clientY, stItems);
       return;
     }
-    var cid = card.dataset.spcard || card.dataset.id;
-    var itC = RM.itemById(state, cid);
-    if (!itC) return;
-    var items = RM.statusesOf(state, 'feature').map(function (stName) {
-      return { label: esc(stName), dot: '#' + RM.statusColor(state, 'feature', stName), checked: RM.statusOf(state, itC, 'feature') === stName, fn: function () {
-        commit('status', function (s) { RM.setStatus(s, RM.itemById(s, cid), 'feature', stName); });
-      } };
+    if (!moved && !t.beforeId) { render(); return; }
+    commit(moved ? 'move to sprint' : 'reorder', function (s) {
+      if (moved) RM.moveItemToSprint(s, d.id, num, t.beforeId);
+      else RM.reorderItem(s, d.id, t.beforeId);
     });
-    items.push({ sep: true });
-    items.push({ icon: 'chart-gantt', label: 'Show in Planning', fn: function () {
-      view = 'planning';
-      selectedId = cid;
-      panelOpen = true;
-      saveLocal();
-      render();
-    } });
-    openContextMenu(e.clientX, e.clientY, items);
-  });
+  }
 
   function renderScopeHeader() {
     var out = ['<div class="sc-hrow">'];
@@ -3064,6 +4053,7 @@
     }
     var fsEl = $('#finishStat');
     if (fsEl) fsEl.textContent = fs;
+    if (window.HeadwayJira) HeadwayJira.renderStatus($('#btnJira'), state);
   }
 
   function renderHeader(laneW) {
@@ -3087,11 +4077,8 @@
       // secondary and only appears when there's room
       var dateTxt = cellW >= 64 ? RM.fmtShort(d) : (d.getUTCMonth() + 1) + '/' + d.getUTCDate();
       var numTag = cellW >= 56 && RM.sprintsEnabled(meta) ? '<span class="sp-num">S' + num + '</span>' : '';
-      var hnS = 0;
-      for (var wv = w0v; wv < w1v; wv++) hnS += RM.holidaysInWeek(meta, wv, hset);
       hs.push('<div class="sprint-cell" style="left:' + (w0v * weekPx) + 'px;width:' + cellW +
-        'px" title="Sprint ' + num + ' — starts week of ' + esc(RM.fmtShortYear(d)) +
-        (hnS ? ' · ' + hnS + ' holiday day' + (hnS > 1 ? 's' : '') : '') + '">' +
+        'px" title="Sprint ' + num + '">' +
         '<span class="sp-date">' + dateTxt + '</span>' + numTag + '</div>');
     }
 
@@ -3106,13 +4093,13 @@
       var cls, txt2 = '', title;
       if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = 'Holiday week'; }
       else if (cap.teamTotal === 0 || avail === Infinity) {
-        cls = 'idle'; title = 'No roster yet — add people in Resources';
+        cls = 'idle'; title = 'No roster yet';
       } else {
         var over = demand > avail + 1e-9;
         cls = over ? 'over' : (avail > 0 && demand / avail > 0.85 ? 'mid' : (demand === 0 ? 'idle' : 'ok'));
         txt2 = weekPx >= 20 ? fmtPe(avail) : '';
         title = fmtPe(avail) + ' available' +
-          (over ? ' — looks like too much concurrent work (' + fmtPe(demand) + ' focus units in flight)'
+          (over ? ' · ' + fmtPe(demand) + ' focus units in flight'
             : demand ? ' · ' + fmtPe(demand) + ' focus units in flight' : '');
       }
       hc.push('<div class="cap-cell ' + cls + (hn && !cell.blackout ? ' part' : '') + '" tabindex="0" data-w="' + w +
@@ -3187,7 +4174,7 @@
 
   function phSpanDragMove(e, dx) {
     var dd = daysFromDx(dx);
-    var sn = e.altKey ? function (d) { return d; } : snapTo;
+    var sn = e.altKey ? function (d) { return d; } : function (d) { return snapTo(d, 'feature'); };
     var lo = drag.lo0, hi = drag.hi0;
     if (drag.mode === 'move') {
       lo = Math.max(0, sn(drag.lo0 + dd));
@@ -3353,7 +4340,24 @@
     var vlist = validation.byItem[it.id] || [];
     var sizeCls = !it.size ? (isScheduled(it) ? ' missing' : '') : (sizeMatches(it) ? '' : ' custom');
     var rk = RM.depRisk(state, it, cyclic);
-    var riskTitle = 'Risk — click to change' +
+    // the feature's risk chip — same markup in the Scoping grid and the
+    // Planning row: computed under the auto scheme, picked otherwise
+    function riskChipHtml() {
+      var sch = RM.riskSchemeOf(state);
+      if (sch === 'auto') {
+        var autoTitle = rk.level === 'none' ? 'No dependency risk detected'
+          : 'Dependency risk ' + rk.level + ':\n\u00B7 ' + rk.reasons.join('\n\u00B7 ');
+        return '<span class="r-risk rk-' + rk.level + '" tabindex="0" title="' + esc(autoTitle) + '">' +
+          (rk.level === 'none' ? '' : levelGlyph(rk.level.charAt(0).toUpperCase())) + '</span>';
+      }
+      var hintLevel = sch === 'risk' ? rk.level : 'none'; // graph hint only for risk
+      var chipTitle = sch === 'risk' ? riskTitle : RM.riskColLabel(state) +
+        (it.risk ? '\nNow: ' + riskValueLabel(it.risk) : '');
+      return '<span class="r-risk rk-' + hintLevel + (it.risk ? ' has-risk' : '') +
+        '" tabindex="0" role="button" data-act="risk" title="' + esc(chipTitle) + '">' +
+        (it.risk ? levelGlyph(it.risk) : (hintLevel === 'none' ? '' : levelGlyph(hintLevel.charAt(0).toUpperCase()))) + '</span>';
+    }
+    var riskTitle = 'Risk' +
       (rk.level !== 'none' ? '\nDependency risk ' + rk.level + ':\n· ' + rk.reasons.join('\n· ') : '');
     var laneInner = '';
     var ports = '<span class="port p-in" data-port="in" title="Drag to another bar: this depends on it"></span>' +
@@ -3365,7 +4369,7 @@
       var msTip = it.feature + '  ·  ' + RM.fmtShort(RM.dayToDate(meta, it.startDay)) + '  ·  milestone' +
         (it.description ? '\n' + RM.htmlToText(it.description) : '');
       laneInner =
-        '<div class="bar ms' + (selectedId === it.id && !selStory ? ' selected' : '') +
+        '<div class="bar ms ms-' + RM.msStyleOf(it) + (isSel(it.id) && !selStory ? ' selected' : '') +
         (it.locked ? ' locked' : '') + (it.done ? ' done-bar' : '') +
         (showCrit && critCache && critCache.items[it.id] ? ' crit' : '') +
         '" data-bar="' + it.id + '"' +
@@ -3393,7 +4397,7 @@
       // one uniform duration on the timeline — the work/risk split lives in
       // the panel, not the paint
       laneInner =
-        '<div class="bar' + (selectedId === it.id ? ' selected' : '') +
+        '<div class="bar' + (isSel(it.id) && !selStory ? ' selected' : '') +
         (it.locked ? ' locked' : '') + (it.done ? ' done-bar' : '') + (width < 34 ? ' tiny' : '') +
         (showCrit && critCache && critCache.items[it.id] ? ' crit' : '') +
         '" data-bar="' + it.id + '"' +
@@ -3426,7 +4430,7 @@
             : RM.fmtShort(RM.dayToDate(cMeta, cIt.startDay)) + ' → ' +
               RM.fmtShort(RM.spanEndDate(cMeta, cIt.startDay, RM.itemSpan(cIt))));
           laneInner = (cIt.milestone
-            ? '<div class="bar ms cmp" style="left:' + (gs * dayPx()) + 'px;--bar-c:' + gCol +
+            ? '<div class="bar ms cmp ms-' + RM.msStyleOf(cIt) + '" style="left:' + (gs * dayPx()) + 'px;--bar-c:' + gCol +
               '" title="' + esc(gTip) + '"><span class="ms-diamond"></span></div>'
             : '<div class="bar cmp" style="left:' + (gs * dayPx()) + 'px;width:' +
               Math.max(6, (ge - gs + 1) * dayPx()) + 'px;--bar-c:' + gCol +
@@ -3442,8 +4446,7 @@
       if (dlDay != null) {
         var dlLate = RM.pastDeadline(meta, it);
         var dlX = (dlDay + 1) * dayPx();
-        var dlTip = 'Deadline ' + RM.fmtShortYear(RM.parseISO(it.deadline)) +
-          (dlLate ? ' — the item runs past it' : '');
+        var dlTip = 'Deadline ' + RM.fmtShortYear(RM.parseISO(it.deadline));
         dlHtml = '<span class="r-dl-mark' + (dlLate ? ' late' : '') + '" style="left:' + dlX +
           'px" title="' + esc(dlTip) + '"></span>';
         if (isScheduled(it)) {
@@ -3463,54 +4466,43 @@
       var cells = ['<div class="sc-row">'];
       var epIco2 = RM.iconForEpic(state, it.epic);
       var fixedContent = {
-        size: '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : '') + '</span>',
-        risk: (function () {
-          var sch = RM.riskSchemeOf(state);
-          if (sch === 'auto') {
-            // computed straight from the dependency graph — read-only
-            var autoTitle = rk.level === 'none' ? 'No dependency risk detected'
-              : 'Dependency risk ' + rk.level + ':\n\u00B7 ' + rk.reasons.join('\n\u00B7 ');
-            return '<span class="r-risk rk-' + rk.level + '" tabindex="0" title="' + esc(autoTitle) + '">' +
-              (rk.level === 'none' ? '' : levelGlyph(rk.level.charAt(0).toUpperCase())) + '</span>';
-          }
-          var hintLevel = sch === 'risk' ? rk.level : 'none'; // graph hint only for risk
-          var chipTitle = sch === 'risk' ? riskTitle : RM.riskColLabel(state) + ' \u2014 click to change' +
-            (it.risk ? '\nNow: ' + riskValueLabel(it.risk) : '');
-          return '<span class="r-risk rk-' + hintLevel + (it.risk ? ' has-risk' : '') +
-            '" tabindex="0" role="button" data-act="risk" title="' + esc(chipTitle) + '">' +
-            (it.risk ? levelGlyph(it.risk) : (hintLevel === 'none' ? '' : levelGlyph(hintLevel.charAt(0).toUpperCase()))) + '</span>';
-        })(),
+        size: '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size">' + (it.size ? esc(it.size) : '') + '</span>',
+        risk: riskChipHtml(),
         duration: it.milestone
-          ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone — 0 duration. Enter a duration to turn it back into a feature">0w</span>'
-          : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit. 0 makes it a milestone; empty takes it off the timeline">' +
+          ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone">0w</span>'
+          : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration">' +
             (isScheduled(it) || it.durDays != null ? totalWeeks(it) : '') + '</span>',
-        workstream: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="ws" title="Workstream — click to change">' +
+        workstream: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="ws" title="Workstream">' +
           '<span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' +
           (it.workstream ? esc(shorten(it.workstream, 18))
             : '<i class="dws">' + esc(shorten(RM.defaultWsName(state), 18)) + '</i>') + '</span>',
-        epic: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="epic" title="Epic — click to change">' +
+        epic: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="epic" title="Epic">' +
           (epIco2 ? '<i data-lucide="' + epIco2 + '"></i>' : '') +
           (it.epic ? esc(shorten(it.epic, 20)) : '') + '</span>',
-        start: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="startd" title="Start date — click to edit; empty takes it off the timeline">' +
+        start: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="startd" title="Start date">' +
           (isScheduled(it) ? esc(RM.fmtShort(RM.dayToDate(meta, it.startDay))) : '') + '</span>',
         deadline: (function () {
           var lateC = RM.pastDeadline(meta, it);
           return '<span class="r-ws sc-chip dl-chip' + (lateC ? ' late' : '') +
             '" tabindex="0" role="button" data-act="deadline" title="' +
-            esc('Hard deadline — click to edit' + (lateC ? '\nThe item runs past its deadline' : '')) + '">' +
+            esc('Hard deadline' + (lateC ? '\nThe item runs past its deadline' : '')) + '">' +
             (it.deadline ? esc(RM.fmtShort(RM.parseISO(it.deadline))) : '') + '</span>';
         })(),
-        priority: '<span class="r-risk pri' + (it.priority ? ' has-risk' : '') +
+        priority: '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) +
           '" tabindex="0" role="button" data-act="priority" title="' +
-          esc('Priority — click to change' + (it.priority ? '\nNow: ' + priorityValueLabel(it.priority) : '')) + '">' +
-          (it.priority ? (RM.prioritySchemeOf(state) === 'levels' ? levelGlyph(it.priority) : esc(it.priority)) : '') + '</span>',
-        assignees: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="asg" title="Assignees — click to change">' +
+          esc(priChipTitle(it)) + '">' + priChipContent(it) + '</span>',
+        assignees: '<span class="r-ws sc-chip" tabindex="0" role="button" data-act="asg" title="Assignees">' +
           (avatarStack(it.assignees) || '<i class="dws">+</i>') + '</span>'
       };
       allScopeCols().forEach(function (c) {
         if (isFixedColKey(c[0])) {
           cells.push('<div class="sc-cell sc-fix" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) + 'px">' +
             fixedContent[c[0]] + '</div>');
+          return;
+        }
+        if (!colShowsOn(c[0], 'feature')) {
+          cells.push('<div class="sc-cell sc-na" data-col="' + c[0] + '" style="width:' + scopeColWidth(c) +
+            'px" title="Stories only"></div>');
           return;
         }
         // every scope column holds rich text — edit it in place as such
@@ -3522,8 +4514,10 @@
       laneInner = cells.join('');
     }
     html.push(
-      '<div class="row item' + (view === 'scoping' ? ' scope' : '') +
-      (selectedId === it.id ? ' selected' : '') + (it.done ? ' done' : '') +
+      '<div class="row item' + (view === 'scoping' ? ' scope' : '') + (it.milestone ? ' ms' : '') +
+      // when one of its stories is the selection, the feature is only the
+      // selection's parent — marked, but never in the selected background
+      (isSel(it.id) ? (selStory && selectedId === it.id ? ' sel-parent' : ' selected') : '') + (it.done ? ' done' : '') +
       '" data-id="' + it.id + '">' +
       '<div class="row-left">' +
       '<span class="r-grip" data-act="grip"><i data-lucide="grip-vertical"></i></span>' +
@@ -3535,7 +4529,7 @@
         : '<span class="r-chev' + (expanded[it.id] ? ' open' : '') + '" data-act="stories" title="Stories (' + it.stories.length + ')">' +
           (it.stories.length ? '<i data-lucide="chevron-right"></i>' : '<span style="opacity:.35"><i data-lucide="chevron-right"></i></span>') + '</span>') +
       '<span class="r-num">' + it.num + '</span>' +
-      '<span class="r-dot' + (it.milestone ? ' msdot' : '') + '" style="background:' + color + '"></span>' +
+      '<span class="r-dot' + (it.milestone ? ' msdot ' + RM.msStyleOf(it) : '') + '" style="background:' + color + '"></span>' +
       '<div class="r-main">' +
       (it.locked ? '<span class="r-lock"><i data-lucide="lock"></i></span>' : '') +
       (it.done ? '<span class="r-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
@@ -3551,11 +4545,17 @@
       (view === 'scoping' ? '' : (function () {
         // the planning chips follow the user's column order/visibility
         var chips = {
-          size: '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size — click to change">' + (it.size ? esc(it.size) : (it.milestone ? '' : '·')) + '</span>',
+          size: RM.sizingEnabled(state)
+            ? '<span class="r-size' + (it.milestone ? '' : sizeCls) + '" tabindex="0" role="button" data-act="size" title="Size">' + (it.size ? esc(it.size) : (it.milestone ? '' : '·')) + '</span>'
+            : '<span class="r-size r-blank"></span>',
+          pri: RM.priorityEnabled(state)
+            ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) + '" tabindex="0" role="button" data-act="priority" title="' + esc(priChipTitle(it)) + '">' + (priChipContent(it) || '·') + '</span>'
+            : '<span class="r-risk r-blank"></span>',
+          risk: riskChipHtml(),
           dur: it.milestone
-            ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone — enter a duration to turn it back into a feature">◆</span>'
-            : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration — click to edit. 0 makes it a milestone; empty takes it off the timeline">' + totalWeeks(it) + '</span>',
-          asg: '<span class="r-asg" tabindex="0" role="button" data-act="asg" title="Assignees — click to change">' +
+            ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone">◆</span>'
+            : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration">' + totalWeeks(it) + '</span>',
+          asg: '<span class="r-asg" tabindex="0" role="button" data-act="asg" title="Assignees">' +
             (avatarStack(it.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>'
         };
         return plColsVisible().map(function (k) { return chips[k]; }).join('');
@@ -3572,12 +4572,20 @@
         html.push(
           '<div class="row story' + (selStory === st.id ? ' selected' : '') +
           '" data-story="' + st.id + '" data-id="' + it.id + '">' +
-          '<div class="row-left"><span class="st-pad"></span>' +
+          '<div class="row-left"><span class="st-pad"><span class="st-grip" title="Drag to reorder or move to another feature"><i data-lucide="grip-vertical"></i></span></span>' +
           (st.done ? '<span class="r-doneck st-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
           (view === 'scoping'
             // scoping: the story title edits in place like the feature titles
             ? '<div class="st-title st-name' + (st.done ? ' done' : '') + '" contenteditable="true" spellcheck="false" aria-label="Story title">' + esc(st.title) + '</div>'
             : '<span class="st-title' + (st.done ? ' done' : '') + '" data-act="st-open" title="Open story">' + esc(st.title) + '</span>') +
+          (view === 'scoping' ? '' : plColsVisible().map(function (k) {
+            if (k === 'asg') {
+              return '<span class="r-asg" tabindex="0" role="button" data-act="st-asg" title="Story assignees">' +
+                (avatarStack(st.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>';
+            }
+            // keep the column aligned even when the story scale is off
+            return storyChipHtml(k, st, 'data-act') || '<span class="' + (k === 'size' ? 'r-size' : k === 'dur' ? 'r-wk' : 'r-risk') + ' r-blank"></span>';
+          }).join('') + '<span class="r-warn"></span>') +
           '</div>' +
           (view === 'scoping'
             // scoping: stories share the grid — text columns, Size, Assignees,
@@ -3587,49 +4595,43 @@
                 var key = c[0];
                 var w = scopeColWidth(c);
                 if (!isFixedColKey(key)) {
-                  var sval = key === 'description' ? st.description : ((st.custom || {})[key] || '');
+                  if (!colShowsOn(key, 'story')) {
+                    return '<div class="sc-cell sc-na" data-col="' + key + '" style="width:' + w +
+                      'px" title="Features only"></div>';
+                  }
+                  var sval = RM.storyScopeValue(st, key);
                   return '<div class="sc-cell" data-col="' + key + '" style="width:' + w + 'px">' +
                     '<div class="sc-edit sc-rich" contenteditable="true" data-stscope="' + key + '">' + richDisplay(sval) + '</div></div>';
                 }
                 function stFix(inner) {
                   return '<div class="sc-cell sc-fix" data-col="' + key + '" style="width:' + w + 'px">' + inner + '</div>';
                 }
-                if (key === 'size' && RM.sizingEnabled(state)) {
-                  return stFix('<span class="r-size" tabindex="0" role="button" data-act="st-size" title="Story size — click to change">' +
-                    (st.size ? esc(st.size) : '') + '</span>');
-                }
+                if (key === 'size' && RM.sizingEnabled(state, 'story')) return stFix(storyChipHtml('size', st, 'data-act', ''));
+                if (key === 'risk' && RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto') return stFix(storyChipHtml('risk', st, 'data-act', ''));
                 if (key === 'assignees') {
-                  return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-asg" title="Story assignees — click to change">' +
+                  return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-asg" title="Story assignees">' +
                     (avatarStack(st.assignees) || '<i class="dws">+</i>') + '</span>');
                 }
-                if (key === 'priority' && RM.priorityEnabled(state)) {
-                  return stFix('<span class="r-risk pri' + (st.priority ? ' has-risk' : '') +
-                    '" tabindex="0" role="button" data-act="st-pri" title="' +
-                    esc('Story priority — click to change' + (st.priority ? '\nNow: ' + priorityValueLabel(st.priority) : '')) + '">' +
-                    (st.priority ? (RM.prioritySchemeOf(state) === 'levels' ? levelGlyph(st.priority) : esc(st.priority)) : '') + '</span>');
-                }
-                if (key === 'duration') {
-                  return stFix('<span class="r-wk editable" tabindex="0" role="button" data-act="st-wk" title="Story duration — click to edit; empty clears it">' +
-                    (st.durDays != null ? totalWeeks(st) : '') + '</span>');
-                }
+                // stories rank on their own priority scheme (never RICE)
+                if (key === 'priority' && RM.priorityEnabled(state, 'story')) return stFix(storyChipHtml('pri', st, 'data-act', ''));
+                if (key === 'duration') return stFix(storyChipHtml('dur', st, 'data-act', ''));
                 if (key === 'start') {
-                  return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-startd" title="Story start — click to edit; empty takes it off the timeline">' +
+                  return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-startd" title="Story start">' +
                     (st.startDay != null ? esc(RM.fmtShort(RM.dayToDate(state.meta, st.startDay))) : '') + '</span>');
                 }
                 if (key === 'deadline') {
                   var stLate = RM.pastDeadline(state.meta, st);
                   return stFix('<span class="r-ws sc-chip dl-chip' + (stLate ? ' late' : '') +
                     '" tabindex="0" role="button" data-act="st-dl" title="' +
-                    esc('Story deadline — click to edit' + (stLate ? '\nThe story runs past its deadline' : '')) + '">' +
+                    esc('Story deadline' + (stLate ? '\nThe story runs past its deadline' : '')) + '">' +
                     (st.deadline ? esc(RM.fmtShort(RM.parseISO(st.deadline))) : '') + '</span>');
                 }
                 // rolled up from the feature — shown dimmed and italic
                 var roll = key === 'workstream' ? esc(it.workstream || RM.defaultWsName(state))
                   : key === 'epic' ? esc(it.epic || '')
-                  : key === 'risk' ? (it.risk ? levelGlyph(it.risk) : '')
                   : '';
                 return '<div class="sc-cell sc-fix sc-na" data-col="' + key + '" style="width:' + w +
-                  'px" title="Rolls up from the feature — not set per story">' +
+                  'px" title="Rolls up from the feature">' +
                   (roll ? '<span class="sc-roll">' + roll + '</span>' : '') + '</div>';
               }).join('') + '</div></div></div>'
             : '<div class="row-lane"' + (!stSched && view === 'planning' ? ' title="Double-click to add a timeline"' : '') + '>' +
@@ -3638,12 +4640,16 @@
                     var stW = Math.max(6, st.durDays * dayPx());
                     // quiet label: inside when it fits, else right of the bar
                     var stLabW = st.title.length * 5.5 + 12;
-                    return '<div class="st-bar" data-stbar="' + st.id + '" data-id="' + it.id + '" style="left:' + (st.startDay * dayPx()) +
+                    return '<div class="st-bar' + (selStory === st.id ? ' selected' : '') + '" data-stbar="' + st.id + '" data-id="' + it.id + '" style="left:' + (st.startDay * dayPx()) +
                       'px;width:' + stW + 'px;--bar-c:' + color + '">' +
                       '<span class="stb-label' + (stLabW <= stW ? '' : ' out') + '">' + esc(st.title) + '</span>' +
                       '<span class="bh l" data-act="sh-l"></span><span class="bh r" data-act="sh-r"></span></div>';
                   })()
-                : '') +
+                // no timeline of its own: the title sits, faint and boxless,
+                // where the feature starts — it rides along with the feature
+                : (isScheduled(it)
+                    ? '<span class="st-ghost" style="left:' + (it.startDay * dayPx()) + 'px">' + esc(st.title) + '</span>'
+                    : '')) +
               '</div></div>'));
       });
       html.push(
@@ -3661,31 +4667,11 @@
     var vitems = viewItemsOf(state);
     state.phases.forEach(function (p) {
       var items = inPhase(vitems, p.id).filter(matchesFilter);
-      // phase detail: the band's lane carries the phase's span as a bar (the
-      // whole plan reads phase-by-phase, items tucked away)
-      var bandLane = p.description ? '<span class="band-desc" title="' + esc(RM.htmlToText(p.description)) + '">' + esc(RM.htmlToText(p.description)) + '</span>' : '';
-      if (detailMode === 'phase' && view === 'planning') {
-        var psp = RM.phaseSpan(state, p);
-        if (psp) {
-          // every scheduled item paints inside the span in ITS color, so the
-          // phase row doubles as a colored overview of what's in it
-          var segs = items.filter(isScheduled).map(function (sit) {
-            var sw = Math.max(3, (sit.milestone ? 1 : RM.itemSpan(sit)) * dayPx());
-            return '<span class="ph-seg" style="left:' + ((sit.startDay - psp.lo) * dayPx()) +
-              'px;width:' + sw + 'px;background:#' + RM.colorForItem(state, sit) + '" title="' +
-              esc('#' + sit.num + ' ' + sit.feature) + '"></span>';
-          }).join('');
-          bandLane = '<div class="ph-row-bar" style="left:' + (psp.lo * dayPx()) + 'px;width:' +
-            Math.max(6, (psp.hi - psp.lo) * dayPx()) + 'px" title="' +
-            esc(p.name + '  ·  ' + RM.fmtShort(RM.dayToDate(state.meta, psp.lo)) + ' → ' +
-              RM.fmtShort(RM.dayToDate(state.meta, Math.max(psp.lo, psp.hi - 1)))) + '">' + segs + '<span>' + esc(p.name) + '</span></div>';
-        }
-      }
+      var bandLane =p.description ? '<span class="band-desc" title="' + esc(RM.htmlToText(p.description)) + '">' + esc(RM.htmlToText(p.description)) + '</span>' : '';
       html.push(
-        '<div class="row band' + (detailMode === 'phase' ? ' ph-only' : '') + '" data-kind="band" data-phase="' + p.id + '">' +
+        '<div class="row band" data-kind="band" data-phase="' + p.id + '">' +
         '<div class="row-left">' +
-        (detailMode === 'phase' ? '' :
-          '<span class="band-chev' + (p.collapsed ? '' : ' open') + '" data-act="phase-toggle" title="Collapse / expand"><i data-lucide="chevron-right"></i></span>') +
+        '<span class="band-chev' + (p.collapsed ? '' : ' open') + '" data-act="phase-toggle" title="Collapse / expand"><i data-lucide="chevron-right"></i></span>' +
         '<span class="band-name">' + esc(p.name) + '</span>' +
         '<span class="band-count">' + items.length + '</span>' +
         (p.bucket ? '<span class="band-bucket-tag">backlog</span>' : '') +
@@ -3694,7 +4680,7 @@
         '</div>' +
         '<div class="row-lane">' + bandLane + '</div>' +
         '</div>');
-      if (p.collapsed || detailMode === 'phase') return;
+      if (p.collapsed) return;
 
       // grouping hierarchy: phase > workstream > epic ("no workstream" last)
       function partition(list, field, emptyLast) {
@@ -3709,7 +4695,8 @@
         }
         return { keys: keys, by: by };
       }
-      function epicBands(list, sub) {
+      function epicBands(list, sub, wsOf) {
+        wsKey = wsOf == null ? null : wsOf;
         var g = partition(list, 'epic', false);
         g.keys.forEach(function (key) {
           html.push(
@@ -3721,8 +4708,25 @@
             '</span><span class="band-count">' + g.by[key].length + '</span></div>' +
             '<div class="row-lane"></div></div>');
           g.by[key].forEach(function (it) { itemRowsHtml(html, it, cyclic); });
+          html.push(addRowHtml(p, { epic: key, workstream: wsKey }, true));
         });
       }
+      // click-to-add row; group rows (indented) put the feature into that
+      // epic / workstream, the phase row adds it at the phase's end
+      function addRowHtml(ph, group, sub) {
+        var where = ph.name;
+        if (group && group.epic) where = group.epic;
+        else if (group && group.epic === '') where = 'no epic';
+        else if (group && group.workstream) where = group.workstream;
+        else if (group && group.workstream === '') where = RM.defaultWsName(state);
+        return '<div class="row addrow' + (sub ? ' sub' : '') + '" data-kind="addrow" data-phase="' + ph.id + '"' +
+          (group && group.epic != null ? ' data-epic="' + esc(group.epic) + '"' : '') +
+          (group && group.workstream != null ? ' data-ws="' + esc(group.workstream) + '"' : '') +
+          '>' +
+          '<div class="row-left" title="Add a feature to ' + esc(where) + '"><span class="addrow-lab"><i data-lucide="plus"></i> Add feature</span></div>' +
+          '<div class="row-lane"></div></div>';
+      }
+      var wsKey = null;
       if (groupWs && state.meta.workstreamsEnabled) {
         var wg = partition(items, 'workstream', true);
         wg.keys.forEach(function (key) {
@@ -3734,8 +4738,11 @@
             '<span class="eb-name">' + (key ? esc(key) : esc(RM.defaultWsName(state)) + ' <i style="font-weight:400">default</i>') +
             '</span><span class="band-count">' + wg.by[key].length + '</span></div>' +
             '<div class="row-lane"></div></div>');
-          if (groupEpic) epicBands(wg.by[key], true);
-          else wg.by[key].forEach(function (it) { itemRowsHtml(html, it, cyclic); });
+          if (groupEpic) epicBands(wg.by[key], true, key);
+          else {
+            wg.by[key].forEach(function (it) { itemRowsHtml(html, it, cyclic); });
+            html.push(addRowHtml(p, { workstream: key }, true));
+          }
         });
       } else if (groupEpic) {
         epicBands(items, false);
@@ -3743,11 +4750,10 @@
         items.forEach(function (it) { itemRowsHtml(html, it, cyclic); });
       }
 
-      // blank click-to-add row at the bottom of every phase
-      html.push(
-        '<div class="row addrow" data-kind="addrow" data-phase="' + p.id + '" title="Add an item to ' + esc(p.name) + '">' +
-        '<div class="row-left"><span class="addrow-lab"><i data-lucide="plus"></i> New item</span></div>' +
-        '<div class="row-lane"></div></div>');
+      // click-to-add row at the bottom of the phase — only when the phase
+      // isn't already split into groups that carry their own add rows
+      var grouped = (groupWs && state.meta.workstreamsEnabled) || groupEpic;
+      if (!grouped || !items.length) html.push(addRowHtml(p, null, false));
     });
 
     rowsEl.innerHTML = html.join('');
@@ -3767,8 +4773,8 @@
     return fmtDays(days);
   }
 
-  function sizeHuman(size) {
-    var d = RM.sizeDays(state, size);
+  function sizeHuman(size, kind) {
+    var d = RM.sizeDays(state, size, kind);
     if (d == null) return '';
     if (d < 5) return d + 'd';
     return (Math.round(d / SPW() * 100) / 100) + 'w';
@@ -3848,7 +4854,12 @@
 
   // ------------------------------------------------------------ selection & panel
   var selStory = null; // story id when the panel shows a story (selectedId = its item)
+  function selIds() { return multiSel || (selectedId ? [selectedId] : []); }
+  function isSel(id) { return multiSel ? multiSel.indexOf(id) !== -1 : selectedId === id; }
+
   function select(id, scrollTo) {
+    flushPanelEdit();
+    multiSel = null;
     selectedId = id;
     selStory = null;
     selectedEdge = null;
@@ -3866,18 +4877,55 @@
       }
     }
   }
+  // shift-click: contiguous range from the anchor, in visible row order
+  function extendSelectionTo(itemId) {
+    if (!selectedId || selectedId === itemId) { select(itemId); return; }
+    flushPanelEdit();
+    var order = $$('#rows .row.item').map(function (r) { return r.dataset.id; });
+    var a = order.indexOf(selectedId), b = order.indexOf(itemId);
+    if (a === -1 || b === -1) { select(itemId); return; }
+    multiSel = order.slice(Math.min(a, b), Math.max(a, b) + 1);
+    selStory = null;
+    selectedEdge = null;
+    render();
+  }
+
   function selectStory(itemId, stId) {
+    flushPanelEdit();
+    multiSel = null;
     selectedId = itemId;
     selStory = stId;
     selectedEdge = null;
     render();
   }
 
+  // the panel is rebuilt from scratch on every render: keep its scroll offset,
+  // and during a disk reload hand focus back to the field that had it
   function renderPanel() {
+    var panel = $('#panel');
+    var keepTop = panel && !panel.hidden ? panel.scrollTop : 0;
+    var ae = document.activeElement;
+    var refocus = reloadingDoc && ae && panel && panel.contains(ae) ? panelFieldSelector(ae) : null;
+    renderPanelInner();
+    if (panel && !panel.hidden && keepTop) panel.scrollTop = keepTop;
+    if (refocus) {
+      var el = panel.querySelector(refocus);
+      if (el && el.focus) el.focus({ preventScroll: true });
+    }
+  }
+  function panelFieldSelector(el) {
+    if (el.id) return '#' + el.id;
+    var f = el.dataset && (el.dataset.f || el.dataset.stf);
+    if (!f) return null;
+    var key = el.dataset.f ? 'data-f' : 'data-stf';
+    return '[' + key + '="' + f + '"]' + (el.dataset.v != null ? '[data-v="' + el.dataset.v + '"]' : '') +
+      (el.dataset.k != null ? '[data-k="' + el.dataset.k + '"]' : '');
+  }
+  function renderPanelInner() {
     var panel = $('#panel');
     var peek = $('#panelPeek');
     // the panel lives on Planning AND Scoping: persistent, collapsible
-    if ((view !== 'planning' && view !== 'scoping') || presentMode) {
+    if (view !== 'planning' && view !== 'scoping') {
       panel.hidden = true; panel.innerHTML = '';
       if (peek) peek.hidden = true;
       return;
@@ -3893,7 +4941,7 @@
       panel.hidden = false;
       panel.innerHTML =
         '<div id="panelRz"></div>' +
-        '<div class="p-top"><button class="p-close" data-f="collapse" title="Hide panel"><i data-lucide="panel-right-close"></i></button></div>' +
+        '<div class="p-top"><button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
         '<div class="p-empty">No item selected<span>Click a row on the timeline to edit it here.</span></div>';
       if (window.lucide) lucide.createIcons();
       return;
@@ -3928,13 +4976,18 @@
           ' title="' + esc(riskValueLabel(s)) + '">' + levelGlyph(s) + '</button>';
       })).join('');
     var priInfo = '';
-    if (RM.priorityEnabled(state)) {
+    if (RM.prioritySchemeOf(state) === 'rice') {
+      // the RICE scheme edits through dropdowns; the score is the priority
+      priInfo = '<label class="p-lab" style="margin-top:10px">RICE score' +
+        (riceScoreLabel(it) ? ' · ' + riceScoreLabel(it) : '') + '</label>' +
+        '<div class="rice-pop rice-panel">' + riceSelectsHtml(it) + '</div>';
+    } else if (RM.priorityEnabled(state)) {
       var priLevels = RM.prioritySchemeOf(state) === 'levels';
       priInfo = '<label class="p-lab" style="margin-top:10px">Priority</label>' +
         '<div class="seg">' +
         ['<button data-f="priSet" data-v=""' + (!it.priority ? ' class="on"' : '') + ' title="Not set">None</button>']
           .concat(RM.priorityOrderOf(state).map(function (pv) {
-            return '<button data-f="priSet" data-v="' + pv + '"' + (it.priority === pv ? ' class="on"' : '') +
+            return '<button data-f="priSet" data-v="' + pv + '" class="' + (it.priority === pv ? 'on' : '') + priTierClass(pv) + '"' +
               ' title="' + esc(priorityValueLabel(pv)) + '">' + (priLevels ? levelGlyph(pv) : pv) + '</button>';
           })).join('') +
         '</div>';
@@ -4031,7 +5084,7 @@
       fields: 'text', details: 'info', schedule: 'calendar-range',
       people: 'users', deps: 'git-merge', stories: 'list-todo',
       timeline: 'chart-gantt', checks: 'shield-check',
-      meta: 'tags', danger: 'trash-2'
+      meta: 'tags', danger: 'trash-2', integrations: 'plug'
     };
     function sec(key, label, summary, body) {
       return '<div class="p-sec c' + (secOpen(key) ? ' open' : '') + '" data-sec="' + key + '">' +
@@ -4044,17 +5097,18 @@
 
     // every scope column (Description included) edits as rich text in one
     // always-available Fields section, in the document's column order
-    var fieldEds = state.meta.scopeCols.map(function (c) {
+    var fieldEds = panelScopeCols('feature').map(function (c) {
       return '<div class="p-fld"><label class="p-lab">' + esc(RM.scopeColLabel(c)) + '</label>' +
         wysHtml('col:' + c.key, RM.scopeValue(it, c.key), '') + '</div>';
     }).join('') || '<div class="p-none">No columns — add one in the Scoping view.</div>';
 
     panel.innerHTML =
       '<div id="panelRz"></div>' +
-      '<div class="p-top"><span class="p-num">#<input class="p-num-edit" data-f="num" value="' + it.num +
-      '" title="Item # — an invalid or taken number picks the next available one"></span>' +
-      (it.milestone ? '<span class="p-mschip" title="Milestone — fixed date">◆ Milestone</span>' : '') +
-      '<button class="p-close" data-f="collapse" title="Hide panel"><i data-lucide="panel-right-close"></i></button></div>' +
+      '<div class="p-top"><span class="p-lead"><span class="p-num">#<input class="p-num-edit" data-f="num" value="' + it.num +
+      '" style="width:' + (String(it.num).length + 1.6) + 'ch" title="Item #"></span>' +
+      (it.milestone ? '<button class="p-mschip" data-act="msstyle" title="Milestone">' +
+        MS_STYLE_GLYPHS[RM.msStyleOf(it)] + ' Milestone · ' + msStyleLabel(RM.msStyleOf(it)) + '</button>' : '') +
+      '</span><button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-f="feature" rows="1" placeholder="Feature name">' + esc(it.feature) + '</textarea>' +
 
       sec('fields', 'Fields', '', fieldEds) +
@@ -4120,6 +5174,11 @@
           }).join('') + '</div>')
         : '') +
 
+      sec('integrations', 'Integrations', '',
+        '<label class="p-lab">Jira key</label>' +
+        '<input data-f="jiraKey" placeholder="e.g. HW-12" value="' + esc(it.jiraKey || '') +
+        '" style="width:100%" title="Jira issue key">') +
+
       '<datalist id="wsList"><option>Product</option><option>Data</option><option>Process</option><option>Product / Process</option><option>All</option></datalist>';
     if (window.lucide) lucide.createIcons();
     var pn = $('.p-name', panel);
@@ -4129,8 +5188,8 @@
   // story detail panel: same scope columns as items; workstream/epic roll up
   function renderStoryPanel(panel, it, st) {
     var epIco = RM.iconForEpic(state, it.epic);
-    var fieldEds = state.meta.scopeCols.map(function (c) {
-      var v = c.key === 'description' ? st.description : ((st.custom || {})[c.key] || '');
+    var fieldEds = panelScopeCols('story').map(function (c) {
+      var v = RM.storyScopeValue(st, c.key);
       return '<div class="p-fld"><label class="p-lab">' + esc(RM.scopeColLabel(c)) + '</label>' +
         wysHtml('stcol:' + c.key, v, '') + '</div>';
     }).join('');
@@ -4148,15 +5207,42 @@
     } else {
       timeline = '<div class="m-hint">No timeline — double-click the story’s lane on the Planning tab to add one.</div>';
     }
+    // estimate: the story's own size / priority / risk scales (Setup → Sizing)
+    var stSizeBtns = RM.sizingEnabled(state, 'story')
+      ? '<label class="p-lab">Size</label><div class="seg">' +
+        ['<button data-stf="size" data-v=""' + (!st.size ? ' class="on"' : '') + ' title="Not set">—</button>']
+          .concat(RM.sizeOrderOf(state, 'story').map(function (sz) {
+            return '<button data-stf="size" data-v="' + esc(sz) + '"' + (st.size === sz ? ' class="on"' : '') +
+              ' title="' + fmtDays(RM.sizeDays(state, sz, 'story')) + '">' + esc(sz) + '</button>';
+          })).join('') + '</div>'
+      : '';
+    var stPriLevels = RM.prioritySchemeOf(state, 'story') === 'levels';
+    var stPriBtns = RM.priorityEnabled(state, 'story')
+      ? '<label class="p-lab" style="margin-top:10px">Priority</label><div class="seg">' +
+        ['<button data-stf="priority" data-v=""' + (!st.priority ? ' class="on"' : '') + ' title="Not set">None</button>']
+          .concat(RM.priorityOrderOf(state, 'story').map(function (pv) {
+            return '<button data-stf="priority" data-v="' + pv + '" class="' + (st.priority === pv ? 'on' : '') + priTierClass(pv, 'story') + '"' +
+              ' title="' + esc(priorityValueLabel(pv, 'story')) + '">' + (stPriLevels ? levelGlyph(pv) : pv) + '</button>';
+          })).join('') + '</div>'
+      : '';
+    var stRiskBtns = RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto'
+      ? '<label class="p-lab" style="margin-top:10px">' + esc(RM.riskColLabel(state)) + '</label><div class="seg">' +
+        ['<button data-stf="risk" data-v=""' + (!st.risk ? ' class="on"' : '') + ' title="Not set">None</button>']
+          .concat(RM.riskOrderOf(state).map(function (rv) {
+            return '<button data-stf="risk" data-v="' + rv + '"' + (st.risk === rv ? ' class="on"' : '') +
+              ' title="' + esc(riskValueLabel(rv)) + '">' + levelGlyph(rv) + '</button>';
+          })).join('') + '</div>'
+      : '';
+    var estimate = stSizeBtns + stPriBtns + stRiskBtns;
 
     panel.innerHTML =
       '<div id="panelRz"></div>' +
       '<div class="p-top">' +
       '<button class="p-crumb" data-stf="up" title="Back to #' + it.num + '">' +
       '<i data-lucide="corner-left-up"></i>#' + it.num + ' ' + esc(shorten(it.feature || '(untitled)', 26)) + '</button>' +
-      '<button class="p-close" data-f="collapse" title="Hide panel"><i data-lucide="panel-right-close"></i></button></div>' +
+      '<button class="p-close" data-f="collapse" title="Hide panel  ]"><i data-lucide="panel-right-close"></i></button></div>' +
       '<textarea class="p-name" data-stf="title" rows="1" placeholder="Story title">' + esc(st.title) + '</textarea>' +
-      '<label class="p-check fixed" style="margin:6px 0 2px"><input type="checkbox" data-stf="done"' + (st.done ? ' checked' : '') + '> Done</label>' +
+      '<label class="p-check fixed" style="margin:6px 0 8px"><input type="checkbox" data-stf="done"' + (st.done ? ' checked' : '') + '> Done</label>' +
 
       '<div class="p-sec c open"><button class="p-sechead" tabindex="-1">' +
       '<i data-lucide="chevron-right"></i><span class="p-seclab">Rolls up to</span></button>' +
@@ -4168,8 +5254,25 @@
       '</div><div class="m-hint">Stories inherit workstream and epic from their feature.</div></div></div>' +
 
       sec2('fields', 'Fields', fieldEds) +
-      sec2('ac', 'Acceptance criteria', wysHtml('stac', st.ac, 'When is it done?')) +
-      sec2('schedule', 'Timeline', timeline);
+      sec2('people', 'People',
+        '<label class="p-lab">Assignees</label>' +
+        '<div class="chips">' +
+        (st.assignees || []).map(function (aid) {
+          var mm = memberById(aid);
+          if (!mm) return '';
+          return '<span class="dep-chip asg-chip">' + avatarHtml(mm, 'sm') + ' ' + esc(mLabel(mm)) +
+            '<button class="x" data-stasgrm="' + aid + '"><i data-lucide="x"></i></button></span>';
+        }).join('') +
+        '</div>' +
+        (state.team.length
+          ? ddButton('stassign', '+ Assign\u2026', null, 'Assign people from the roster')
+          : '<div class="m-hint">Add people in the Resources panel to assign them.</div>')) +
+      (estimate ? sec2('estimate', 'Estimate', estimate) : '') +
+      sec2('schedule', 'Timeline', timeline) +
+      sec2('integrations', 'Integrations',
+        '<label class="p-lab">Jira key</label>' +
+        '<input data-stf="jiraKey" placeholder="e.g. HW-13" value="' + esc(st.jiraKey || '') +
+        '" style="width:100%" title="Jira issue key">');
     if (window.lucide) lucide.createIcons();
     var pn = $('.p-name', panel);
     if (pn) { pn.style.height = 'auto'; pn.style.height = pn.scrollHeight + 'px'; }
@@ -4301,6 +5404,8 @@
       '<div class="m-sec"><label>Label</label><input id="epName" style="width:100%" value="' + esc(epicName) + '">' +
       '<div class="m-hint">Renames the epic on all ' + count + ' item(s) that carry it.</div></div>' +
       '<div class="m-sec"><label>Icon</label><div class="iswatches">' + icons + '</div></div>' +
+      '<div class="m-sec"><label>Jira key</label><input id="epJira" style="width:100%" placeholder="e.g. HW-1" value="' + esc(state.epicJira[epicName] || '') + '">' +
+      '<div class="m-hint">The Jira epic these features parent to in the Jira CSV export.</div></div>' +
       '</div>' +
       '<div class="m-foot"><button data-m="x2">Cancel</button><button id="epSave" class="primary">Save</button></div></div>',
       function (host) {
@@ -4315,15 +5420,19 @@
         });
         $('#epSave', host).onclick = function () {
           var newName = $('#epName', host).value.trim();
+          var jira = RM.jiraKeyOf($('#epJira', host).value);
           closeModal();
           commit('edit epic', function (s) {
             var name2 = newName || epicName;
             if (name2 !== epicName) {
               s.items.forEach(function (x) { if (x.epic === epicName) x.epic = name2; });
               if (s.epicIcons[epicName] != null) { s.epicIcons[name2] = s.epicIcons[epicName]; delete s.epicIcons[epicName]; }
+              delete s.epicJira[epicName];
             }
             if (picked) s.epicIcons[name2] = picked;
             else delete s.epicIcons[name2];
+            if (jira) s.epicJira[name2] = jira;
+            else delete s.epicJira[name2];
           });
         };
       });
@@ -4486,6 +5595,18 @@
     saveLocal();
     renderPanel();
   });
+  function togglePanel() {
+    panelOpen = !panelOpen;
+    saveLocal();
+    renderPanel();
+  }
+  function toggleLeftPane() {
+    leftCollapsed = !leftCollapsed;
+    saveLocal();
+    render();
+  }
+  $('#leftCollapse').addEventListener('click', toggleLeftPane);
+  $('#leftPeek').addEventListener('click', toggleLeftPane);
 
   $('#panel').addEventListener('click', function (e) {
     // collapse works from every panel state (empty state included)
@@ -4498,6 +5619,8 @@
     }
     var it = selectedId && RM.itemById(state, selectedId);
     if (!it) return;
+    var msChip = e.target.closest('[data-act="msstyle"]');
+    if (msChip) { openDropdown(msChip, msStyleItems(it.id, it)); return; }
     var secBtn = e.target.closest('[data-sectoggle]');
     if (secBtn) {
       var sk = secBtn.dataset.sectoggle;
@@ -4521,6 +5644,15 @@
       return; // title/done/dates commit on change
     }
 
+    // story estimate buttons (size / priority / risk segs in the story panel)
+    var stBtn = e.target.closest('button[data-stf][data-v]');
+    if (stBtn && selStory) {
+      var stv = stBtn.dataset.v || null, stk = stBtn.dataset.stf;
+      if (stk === 'size') setStorySize(it.id, selStory, stv);
+      else if (stk === 'priority') withStory('story priority', it.id, selStory, function (st2) { st2.priority = stv; });
+      else if (stk === 'risk') setStoryRisk(it.id, selStory, stv);
+      return;
+    }
     var btn = e.target.closest('[data-f]');
     var dep = e.target.closest('[data-deprm]');
     var depTxt = e.target.closest('[data-deptxtrm]');
@@ -4575,6 +5707,22 @@
         openDropdown(dd, wsMenuItems(it.id, function () { return $('#panel [data-dd="ws"] .dd-label'); }));
         return;
       }
+      if (which === 'stassign' && selStory) {
+        var stAsgId = selStory;
+        openDropdown(dd, state.team.map(function (mm) {
+          var onS = ((storyById(it, stAsgId) || {}).assignees || []).indexOf(mm.id) !== -1;
+          return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onS, fn: function () {
+            commit('story assignees', function (s) {
+              var st2 = storyById(RM.itemById(s, it.id) || {}, stAsgId);
+              if (!st2) return;
+              st2.assignees = st2.assignees || [];
+              var atS = st2.assignees.indexOf(mm.id);
+              if (atS === -1) st2.assignees.push(mm.id); else st2.assignees.splice(atS, 1);
+            });
+          } };
+        }));
+        return;
+      }
       if (which === 'assign') {
         var aItems = state.team.map(function (mm) {
           var onA = (it.assignees || []).indexOf(mm.id) !== -1;
@@ -4603,6 +5751,15 @@
         openDropdown(dd, tItems);
         return;
       }
+    }
+    var stAsgRm = e.target.closest('[data-stasgrm]');
+    if (stAsgRm && selStory) {
+      var rmSid = selStory, rmPid = stAsgRm.dataset.stasgrm;
+      commit('story assignees', function (s) {
+        var st2 = storyById(RM.itemById(s, it.id) || {}, rmSid);
+        if (st2) st2.assignees = (st2.assignees || []).filter(function (x) { return x !== rmPid; });
+      });
+      return;
     }
     var asgrm = e.target.closest('[data-asgrm]');
     if (asgrm) {
@@ -4697,31 +5854,28 @@
 
   // rich editors commit on blur (contenteditable has no change event):
   //   col:<key>   — an item's scope column
-  //   stcol:<key> — a story's scope column ('description' maps to st.description)
-  //   stac        — a story's acceptance criteria
+  //   stcol:<key> — a story's scope column (Description / Acceptance criteria
+  //                 are story fields; the rest live in st.custom)
   $('#panel').addEventListener('focusout', function (e) {
     var ed = e.target.classList && e.target.classList.contains('wz-ed') ? e.target : null;
     if (!ed || !ed.dataset.f) return;
+    commitPanelEd(ed);
+  });
+  function commitPanelEd(ed) {
     var it = selectedId && RM.itemById(state, selectedId);
     if (!it) return;
     var f = ed.dataset.f;
     var v = sanitizeHtml(ed.innerHTML);
-    if (selStory && (f === 'stac' || f.indexOf('stcol:') === 0)) {
+    if (selStory && f.indexOf('stcol:') === 0) {
       var st = storyById(it, selStory);
       if (!st) return;
-      var cur = f === 'stac' ? st.ac
-        : (f === 'stcol:description' ? st.description : ((st.custom || {})[f.slice(6)] || ''));
+      var cur = RM.storyScopeValue(st, f.slice(6));
       if (v === cur || v === richDisplay(cur)) return;
       var stId = selStory;
       commit('story field', function (s) {
         var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
         if (!st2) return;
-        if (f === 'stac') st2.ac = v;
-        else if (f === 'stcol:description') st2.description = v;
-        else {
-          if (!st2.custom) st2.custom = {};
-          if (v) st2.custom[f.slice(6)] = v; else delete st2.custom[f.slice(6)];
-        }
+        RM.setStoryScopeValue(st2, f.slice(6), v);
       });
       return;
     }
@@ -4730,11 +5884,40 @@
       if (v === RM.scopeValue(it, key)) return;
       commit('scope ' + key, function (s) { RM.setScopeValue(RM.itemById(s, it.id), key, v); });
     }
-  });
+  }
+
+  // Blur is not a reliable commit trigger: the drag surfaces preventDefault
+  // on pointerdown (so focus never leaves the field) and macOS WebKit
+  // buttons don't take focus on click at all. Anything that re-renders the
+  // panel goes through here first so the focused field's pending edit lands.
+  var flushingEdit = false;
+  function flushPanelEdit() {
+    if (flushingEdit) return;
+    var ae = document.activeElement;
+    var panel = $('#panel');
+    if (!ae || !panel || panel.hidden || !panel.contains(ae)) return;
+    flushingEdit = true;
+    try {
+      if (ae.classList.contains('wz-ed') && ae.dataset.f) commitPanelEd(ae);
+      else if ((ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA') && !ae.readOnly &&
+        (ae.type === 'checkbox' ? ae.checked !== ae.defaultChecked : ae.value !== ae.defaultValue)) {
+        ae.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    } finally { flushingEdit = false; }
+  }
 
   $('#panel').addEventListener('change', function (e) {
     var it = selectedId && RM.itemById(state, selectedId);
     if (!it) return;
+    if (e.target.dataset.rk) { // panel RICE dropdowns (rice priority scheme)
+      var rk = e.target.dataset.rk;
+      var rv = e.target.value === '' ? null : parseFloat(e.target.value);
+      commit('rice', function (s) {
+        var x = RM.itemById(s, it.id);
+        if (x) x.rice[rk] = rv;
+      });
+      return;
+    }
     var stf = e.target.dataset.stf;
     if (stf && selStory) {
       var stId = selStory;
@@ -4762,6 +5945,7 @@
         if (!st2) return;
         if (stf === 'title') st2.title = String(sval);
         else if (stf === 'done') st2.done = !!sval;
+        else if (stf === 'jiraKey') st2.jiraKey = RM.jiraKeyOf(String(sval));
       });
       return;
     }
@@ -4787,6 +5971,7 @@
       commit(f, function (s) { RM.itemById(s, it.id)[f] = val; });
       return;
     }
+    if (f === 'jiraKey') { commit('jira key', function (s) { RM.itemById(s, it.id).jiraKey = RM.jiraKeyOf(val); }); return; }
     if (f === 'num') {
       var newNum;
       commit('renumber', function (s) { newNum = RM.renumberItem(s, it.id, val); });
@@ -4834,7 +6019,6 @@
       var sv = val.trim();
       if (sv) {
         expanded[it.id] = true;
-        if (detailMode === 'phase') detailMode = 'feature'; // keep the new story reachable
         commit('add story', function (s) {
           RM.itemById(s, it.id).stories.push({ id: RM.uid('s'), title: sv, done: false });
         });
@@ -4858,6 +6042,26 @@
         if (sug) { sug.hidden = true; }
         e.target.value = '';
       }
+    }
+  });
+
+  // Enter on any single-line field in the panel or the left panes (the
+  // panel title included) leaves the field and saves it. Blur commits in
+  // the browser; the change is re-fired only when blur left it uncommitted
+  // (the element is still attached with a dirty value).
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+    var t = e.target;
+    if (!t || !t.closest || !t.closest('#panel, #rows, #resPanel')) return;
+    var isArea = t.tagName === 'TEXTAREA';
+    if (isArea ? (!t.classList.contains('p-name') || e.shiftKey) : t.tagName !== 'INPUT') return;
+    if (!isArea && ['checkbox', 'radio', 'range', 'file', 'color'].indexOf(t.type) !== -1) return;
+    if (t.dataset.act === 'st-add' || t.dataset.f === 'depsearch') return;
+    e.preventDefault();
+    var wasSel = t.value !== t.defaultValue;
+    t.blur();
+    if (wasSel && t.isConnected && t.value !== t.defaultValue) {
+      t.dispatchEvent(new Event('change', { bubbles: true }));
     }
   });
 
@@ -4920,7 +6124,14 @@
     if (!rowEl) return;
 
     if (rowEl.dataset.kind === 'addrow') {
-      addFeature(rowEl.dataset.phase);
+      if (!e.target.closest('.row-left')) return; // the lane is empty space, not a button
+      var grp = null;
+      if (rowEl.dataset.epic != null || rowEl.dataset.ws != null) {
+        grp = {};
+        if (rowEl.dataset.epic != null) grp.epic = rowEl.dataset.epic;
+        if (rowEl.dataset.ws != null) grp.workstream = rowEl.dataset.ws;
+      }
+      addFeature(rowEl.dataset.phase, grp);
       return;
     }
 
@@ -4949,20 +6160,8 @@
       var stId = storyEl.dataset.story;
       if (act.dataset.act === 'st-open') {
         selectStory(itemId, stId);
-      } else if (act.dataset.act === 'st-size') {
-        openDropdown(act, [{ label: '<i>no size</i>', checked: !(storyById(it, stId) || {}).size, fn: function () {
-          commit('story size', function (s) {
-            var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
-            if (st2) st2.size = null;
-          });
-        } }].concat(RM.sizeOrderOf(state).map(function (sz) {
-          return { label: esc(sz), checked: (storyById(it, stId) || {}).size === sz, fn: function () {
-            commit('story size', function (s) {
-              var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
-              if (st2) st2.size = sz;
-            });
-          } };
-        })));
+      } else if (storyChipAction(act.dataset.act, act, itemId, stId)) {
+        return;
       } else if (act.dataset.act === 'st-asg') {
         if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
         openDropdown(act, state.team.map(function (mm) {
@@ -4978,55 +6177,6 @@
             });
           } };
         }));
-      } else if (act.dataset.act === 'st-pri') {
-        var stPri = (storyById(it, stId) || {}).priority;
-        openDropdown(act, [{ label: '<i>None</i>', checked: !stPri, fn: function () {
-          commit('story priority', function (s) {
-            var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
-            if (st2) st2.priority = null;
-          });
-        } }].concat(RM.priorityOrderOf(state).map(function (pv) {
-          return { icon: RM.prioritySchemeOf(state) === 'levels' ? LEVEL_GLYPHS[pv] : undefined,
-            label: (RM.prioritySchemeOf(state) === 'levels' ? '' : pv + ' · ') + esc(priorityValueLabel(pv)),
-            checked: stPri === pv, fn: function () {
-            commit('story priority', function (s) {
-              var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
-              if (st2) st2.priority = pv;
-            });
-          } };
-        })));
-      } else if (act.dataset.act === 'st-wk') {
-        if (act.querySelector('input')) return;
-        var stObjW = storyById(it, stId);
-        var stwInp = document.createElement('input');
-        stwInp.type = 'number';
-        stwInp.min = '0.2';
-        stwInp.step = '0.2';
-        stwInp.value = stObjW && stObjW.durDays != null ? Math.round(stObjW.durDays / SPW() * 100) / 100 : '';
-        stwInp.className = 'hc-edit';
-        stwInp.style.width = '30px';
-        act.textContent = '';
-        act.appendChild(stwInp);
-        stwInp.focus();
-        stwInp.select();
-        var stwDone = false;
-        var stwFin = function (saveIt) {
-          if (stwDone) return; stwDone = true;
-          var v = stwInp.value;
-          if (!saveIt) { render(); return; }
-          commit('story duration', function (s) {
-            var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
-            if (!st2) return;
-            if (String(v).trim() === '') { st2.durDays = null; st2.startDay = null; }
-            else st2.durDays = Math.max(1, Math.round(Math.max(0.2, parseFloat(v) || 1) * SPW()));
-          });
-        };
-        stwInp.addEventListener('blur', function () { stwFin(true); });
-        stwInp.addEventListener('keydown', function (ev) {
-          ev.stopPropagation();
-          if (ev.key === 'Enter') stwFin(true);
-          if (ev.key === 'Escape') stwFin(false);
-        });
       } else if (act.dataset.act === 'st-startd') {
         var stObjD = storyById(it, stId);
         openCalendar(act, stObjD && stObjD.startDay != null ? RM.fmtISO(RM.dayToDate(state.meta, stObjD.startDay)) : '',
@@ -5038,7 +6188,7 @@
               var sd2 = RM.dateToDay(s.meta, RM.parseISO(iso));
               if (sd2 == null) return;
               st2.startDay = Math.max(0, sd2);
-              if (st2.durDays == null) st2.durDays = SPW();
+              if (st2.durDays == null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, RM.storyEffortDays(s, st2));
             });
           }, { allowClear: true, clearLabel: 'Unschedule' });
       } else if (act.dataset.act === 'st-dl') {
@@ -5150,15 +6300,7 @@
           return;
         }
         case 'priority': {
-          openDropdown(act, [{ label: '<i>None</i>', checked: !it.priority, fn: function () {
-            commit('priority', function (s) { RM.itemById(s, itemId).priority = null; });
-          } }].concat(RM.priorityOrderOf(state).map(function (pv) {
-            return { icon: RM.prioritySchemeOf(state) === 'levels' ? LEVEL_GLYPHS[pv] : undefined,
-              label: (RM.prioritySchemeOf(state) === 'levels' ? '' : pv + ' · ') + esc(priorityValueLabel(pv)),
-              checked: it.priority === pv, fn: function () {
-              commit('priority', function (s) { RM.itemById(s, itemId).priority = pv; });
-            } };
-          })));
+          openPriorityEditor(act, itemId);
           return;
         }
         case 'asg': {
@@ -5244,6 +6386,7 @@
       select(itemId);
       return;
     }
+    if (e.shiftKey && rowEl.classList.contains('item')) { extendSelectionTo(itemId); return; }
     select(itemId);
   });
 
@@ -5416,6 +6559,10 @@
       var itemId = rowEl.dataset.id;
       var it = RM.itemById(state, itemId);
       if (!it) return;
+      if (multiSel && multiSel.length > 1 && multiSel.indexOf(itemId) !== -1) {
+        openContextMenu(cx, cy, bulkMenuItems(multiSel.slice(), cx, cy));
+        return;
+      }
       items = [
         it.milestone ? null : { icon: 'plus', label: 'Add story', fn: function () {
           if (detailMode !== 'story') { expanded[itemId] = true; saveLocal(); }
@@ -5453,11 +6600,12 @@
         } },
         { icon: it.milestone ? 'rectangle-horizontal' : 'gem',
           label: it.milestone ? 'Convert to feature' : 'Convert to milestone',
-          fn: function () { toggleMilestone(itemId); } },
+          fn: function () { toggleMilestone(itemId); } }
+      ].concat(it.milestone ? msStyleItems(itemId, it) : []).concat([
         { sep: true },
         { icon: 'copy', label: 'Duplicate', fn: function () { duplicateItem(itemId); } },
         { icon: 'trash-2', label: 'Delete #' + it.num + '…', fn: function () { deleteItemConfirm(itemId); } }
-      ].filter(Boolean);
+      ]).filter(Boolean);
     } else return;
     openContextMenu(cx, cy, items);
   });
@@ -5509,10 +6657,11 @@
       { icon: 'copy', label: 'Duplicate', fn: function () { duplicateItem(it.id); } },
       { icon: it.milestone ? 'rectangle-horizontal' : 'gem',
         label: it.milestone ? 'Convert to feature' : 'Convert to milestone',
-        fn: function () { toggleMilestone(it.id); } },
+        fn: function () { toggleMilestone(it.id); } }
+    ].concat(it.milestone ? msStyleItems(it.id, it) : []).concat([
       { sep: true },
       { icon: 'trash-2', label: 'Delete…', danger: true, fn: function () { deleteItemConfirm(it.id); } }
-    ]);
+    ]));
   });
 
   // quick app menu: theme switch lives here
@@ -5544,6 +6693,83 @@
     e.preventDefault();
     openContextMenu(e.clientX, e.clientY, themeMenuItems());
   });
+
+  // right-click on a multi-selection: every action applies to the whole group
+  function bulkMenuItems(ids, cx, cy) {
+    var sel = ids.map(function (id) { return RM.itemById(state, id); }).filter(Boolean);
+    function each(label, fn) {
+      commit(label, function (s) {
+        ids.forEach(function (id) {
+          var t = RM.itemById(s, id);
+          if (t) fn(s, t);
+        });
+      });
+    }
+    var allDone = sel.every(function (t) { return t.done; });
+    var allLocked = sel.every(function (t) { return t.locked; });
+    return [
+      { label: '<i>' + ids.length + ' selected</i>', fn: function () {} },
+      { sep: true },
+      { icon: 'folder-input', label: 'Move to phase…', fn: function () {
+        openContextMenu(cx, cy, state.phases.map(function (p) {
+          return { label: esc(p.name) + (p.bucket ? ' <small>(backlog)</small>' : ''),
+            checked: sel.every(function (t) { return t.phaseId === p.id; }),
+            fn: function () {
+              commit('move phase', function (s) {
+                // the group lands at the end of the target phase, in its own
+                // (on-screen) order — one order key per moved row
+                viewItemsOf(s).filter(function (t) { return ids.indexOf(t.id) !== -1; })
+                  .forEach(function (t) { RM.placeItem(s, t.id, p.id, null); });
+              });
+            } };
+        }));
+      } },
+      { icon: 'tag', label: 'Set epic…', fn: function () {
+        var eItems = [{ label: '<i>— none —</i>', checked: sel.every(function (t) { return !t.epic; }),
+          fn: function () { each('epic', function (s, t) { t.epic = ''; }); } }];
+        allEpics().forEach(function (ep) {
+          eItems.push({ label: esc(ep), icon: RM.iconForEpic(state, ep) || 'tag',
+            checked: sel.every(function (t) { return t.epic === ep; }),
+            fn: function () { each('epic', function (s, t) { t.epic = ep; }); } });
+        });
+        openContextMenu(cx, cy, eItems);
+      } },
+      state.meta.workstreamsEnabled
+        ? { icon: 'layers', label: 'Set workstream…', fn: function () {
+            var wItems = [{ label: esc(RM.defaultWsName(state)) + ' <i>(default)</i>',
+              dot: '#' + RM.defaultWsColor(state),
+              checked: sel.every(function (t) { return !t.workstream; }),
+              fn: function () { each('workstream', function (s, t) { t.workstream = ''; }); } }];
+            allWorkstreams().forEach(function (w) {
+              wItems.push({ label: esc(w), dot: '#' + RM.colorForWs(state, w),
+                checked: sel.every(function (t) { return t.workstream === w; }),
+                fn: function () { each('workstream', function (s, t) { t.workstream = w; }); } });
+            });
+            openContextMenu(cx, cy, wItems);
+          } }
+        : null,
+      { sep: true },
+      { icon: allDone ? 'circle' : 'circle-check', label: allDone ? 'Unmark as done' : 'Mark as done',
+        fn: function () { each('done', function (s, t) { t.done = !allDone; }); } },
+      { icon: allLocked ? 'lock-open' : 'lock', label: allLocked ? 'Unlock' : 'Lock',
+        fn: function () { each('lock', function (s, t) { t.locked = !allLocked; }); } },
+      sel.some(function (t) { return isScheduled(t); })
+        ? { icon: 'calendar-off', label: 'Unschedule', fn: function () {
+            each('unschedule', function (s, t) { t.startDay = null; t.durDays = null; t.riskDays = 0; });
+          } }
+        : null,
+      { sep: true },
+      { icon: 'trash-2', label: 'Delete ' + ids.length + '…', danger: true, fn: function () {
+        confirmBox('Delete ' + ids.length + ' items?', 'Every selected item is removed.', 'Delete', function () {
+          commit('delete', function (s) {
+            s.items = s.items.filter(function (x) { return ids.indexOf(x.id) === -1; });
+            selectedId = null;
+            multiSel = null;
+          });
+        }, true);
+      } }
+    ].filter(Boolean);
+  }
 
   // menu-item builders shared by the panel dropdowns and row context menus
   function movePhaseMenu(itemId) {
@@ -5617,7 +6843,8 @@
     commit('add feature', function (s) {
       var it = RM.normalizeState({
         meta: s.meta, phases: s.phases,
-        items: [{ id: newId, num: RM.nextNum(s), phaseId: anchor.phaseId, feature: '', size: 'M', headcount: 1 }]
+        items: [{ id: newId, num: RM.nextNum(s), phaseId: anchor.phaseId, feature: '', size: 'M', headcount: 1,
+          epic: anchor.epic || '', workstream: anchor.workstream || '', teamType: anchor.teamType }]
       }).items[0];
       it.id = newId;
       it.num = RM.nextNum(s);
@@ -5678,12 +6905,12 @@
   // the pointer marks the MIDDLE of the landing slot — the placed bar
   // centers on the cursor, then snaps
   function placeDurFor(it) {
-    if (!it) return 5;
+    if (!it) return RM.sprintDays(state.meta);
     if (it.milestone) return 1;
-    return it.durDays != null ? it.durDays : (RM.effortDays(state, it) || 5);
+    return it.durDays != null ? it.durDays : (RM.effortDays(state, it) || RM.sprintDays(state.meta));
   }
-  function centeredDayAt(clientX, dur) {
-    return Math.max(0, snapTo(Math.round(laneDayAt(clientX) - dur / 2)));
+  function centeredDayAt(clientX, dur, kind) {
+    return Math.max(0, snapTo(Math.round(laneDayAt(clientX) - dur / 2), kind));
   }
 
   // give a story its own little timeline where the pointer sits on its lane
@@ -5691,12 +6918,13 @@
     var cur = storyById(RM.itemById(state, itemId) || {}, stId);
     if (!cur || cur.startDay != null) return;
     placedAt = Date.now(); placedKey = 'st:' + stId;
-    var day = centeredDayAt(clientX, 5);
+    // a story defaults to one sprint
+    var day = centeredDayAt(clientX, RM.sprintDays(state.meta), 'story');
     commit('place story', function (s) {
       var st = storyById(RM.itemById(s, itemId), stId);
       if (!st) return;
       st.startDay = day;
-      st.durDays = RM.stretchSpan(s.meta, day, 5);
+      st.durDays = RM.stretchSpan(s.meta, day, RM.sprintDays(s.meta));
     });
   }
 
@@ -5705,14 +6933,14 @@
   function placeItemAt(itemId, clientX) {
     placedAt = Date.now(); placedKey = itemId;
     var it0 = RM.itemById(state, itemId);
-    var pDay = centeredDayAt(clientX, placeDurFor(it0));
+    var pDay = centeredDayAt(clientX, placeDurFor(it0), 'feature');
     commit('place item', function (s2) {
       var t2 = RM.itemById(s2, itemId);
       t2.startDay = pDay;
-      // a preset duration wins; else the size estimate; else one week
+      // a preset duration wins; else the size estimate; else one sprint
       t2.durDays = t2.milestone ? 0
         : (t2.durDays != null ? t2.durDays
-          : RM.stretchSpan(s2.meta, pDay, RM.effortDays(s2, t2) || 5));
+          : RM.stretchSpan(s2.meta, pDay, RM.effortDays(s2, t2) || RM.sprintDays(s2.meta)));
     });
     select(itemId);
   }
@@ -5727,8 +6955,52 @@
       dragTip.hidden = true;
     }
   }
+  // hovering a scheduled row whose bar is scrolled out of view floats a
+  // pointer at the near edge of the lane: "← title" or "title →"
+  var offTag = null, offRow = null;
+  function hideOffTag() {
+    if (offTag && offTag.parentNode) offTag.parentNode.removeChild(offTag);
+    offTag = null;
+    offRow = null;
+  }
+  // the row's bar in lane px ({x0, x1, title}), or null when it has none
+  function laneSpanOf(row) {
+    var it = RM.itemById(state, row.dataset.id);
+    if (!it) return null;
+    var st = row.dataset.story ? storyById(it, row.dataset.story) : null;
+    if (row.dataset.story && !st) return null;
+    if (st && st.startDay != null && st.durDays != null) {
+      return { x0: st.startDay * dayPx(), x1: st.startDay * dayPx() + Math.max(6, st.durDays * dayPx()), title: st.title };
+    }
+    // a story without its own timeline rides along with the feature
+    if (!isScheduled(it)) return null;
+    var w = it.milestone ? 1 : Math.max(1, it.durDays + (it.riskDays || 0));
+    return { x0: it.startDay * dayPx(), x1: (it.startDay + w) * dayPx(), title: st ? st.title : it.feature };
+  }
+  function showOffTag(row) {
+    var sp = laneSpanOf(row);
+    var vis0 = board.scrollLeft, vis1 = board.scrollLeft + Math.max(80, board.clientWidth - leftW());
+    var dir = !sp ? null : sp.x1 < vis0 ? 'left' : sp.x0 > vis1 ? 'right' : null;
+    if (!dir) { hideOffTag(); return; }
+    var lane = row.querySelector('.row-lane');
+    if (!lane) { hideOffTag(); return; }
+    if (!offTag) offTag = document.createElement('div');
+    offRow = row;
+    offTag.className = 'lane-off ' + dir;
+    offTag.innerHTML = '<span class="lo-arrow">' + (dir === 'left' ? '\u2190' : '\u2192') + '</span>' +
+      '<span class="lo-text">' + esc(sp.title || '(untitled)') + '</span>';
+    if (offTag.parentNode !== lane) lane.appendChild(offTag);
+    offTag.style.left = (dir === 'left' ? vis0 + 8 : vis1 - 8 - offTag.offsetWidth) + 'px';
+  }
+  board.addEventListener('scroll', function () {
+    if (!offRow) return;
+    if (document.body.contains(offRow)) showOffTag(offRow); else hideOffTag();
+  }, { passive: true });
   rowsEl.addEventListener('pointermove', function (e) {
-    if (view !== 'planning' || drag) { hidePlaceGhost(); return; }
+    if (view !== 'planning' || drag) { hidePlaceGhost(); hideOffTag(); return; }
+    var offHit = e.target.closest('.row-lane') && !e.target.closest('.row.story-add')
+      ? (e.target.closest('.row.story[data-story]') || e.target.closest('.row.item')) : null;
+    if (offHit) showOffTag(offHit); else hideOffTag();
     if (!e.target.closest('.row-lane') ||
       e.target.closest('[data-bar],[data-stbar],[data-ghost],.ghost-pill,.port,.ph-row-bar,.bar.cmp')) { hidePlaceGhost(); return; }
     var stRow = e.target.closest('.row.story[data-story]');
@@ -5736,19 +7008,21 @@
     var target = null, dur = 5, ms = false;
     if (stRow) {
       var stH = storyById(RM.itemById(state, stRow.dataset.id) || {}, stRow.dataset.story);
-      if (stH && stH.startDay == null) { target = stRow; dur = 5; }
+      if (stH && stH.startDay == null) { target = stRow; dur = RM.sprintDays(state.meta); }
     } else if (itRow) {
       var itH = RM.itemById(state, itRow.dataset.id);
       if (itH && !isScheduled(itH)) { target = itRow; dur = placeDurFor(itH); ms = !!itH.milestone; }
     }
     if (!target) { hidePlaceGhost(); return; }
-    var day = centeredDayAt(e.clientX, dur);
+    var day = centeredDayAt(e.clientX, dur, stRow ? 'story' : 'feature');
     var lane = target.querySelector('.row-lane');
     if (!placeGhost) {
       placeGhost = document.createElement('div');
       placeGhost.className = 'place-ghost';
     }
     placeGhost.classList.toggle('ms', ms);
+    RM.MS_STYLES.forEach(function (sn) { placeGhost.classList.remove(sn); });
+    if (ms) placeGhost.classList.add(RM.msStyleOf(itH));
     if (placeGhost.parentNode !== lane) lane.appendChild(placeGhost);
     placeGhost.style.left = (day * dayPx()) + 'px';
     placeGhost.style.width = Math.max(8, dur * dayPx()) + 'px';
@@ -5758,8 +7032,8 @@
     dragTip.style.left = (e.clientX + 14) + 'px';
     dragTip.style.top = (lr.top - 30) + 'px';
   });
-  rowsEl.addEventListener('pointerleave', hidePlaceGhost);
-  rowsEl.addEventListener('pointerdown', hidePlaceGhost);
+  rowsEl.addEventListener('pointerleave', function () { hidePlaceGhost(); hideOffTag(); });
+  rowsEl.addEventListener('pointerdown', function () { hidePlaceGhost(); hideOffTag(); });
 
   function justPlaced(key) { return placedKey === key && Date.now() - placedAt < 500; }
   rowsEl.addEventListener('dblclick', function (e) {
@@ -5986,16 +7260,12 @@
     var sSt = sIt && storyById(sIt, sStId);
     if (!sSt) return;
     var sVal = sanitizeHtml(e.target.innerHTML);
-    var sCur = sf === 'description' ? sSt.description : ((sSt.custom || {})[sf] || '');
+    var sCur = RM.storyScopeValue(sSt, sf);
     if (sVal === sCur || sVal === richDisplay(sCur)) return;
     commit('story field', function (s) {
       var st2 = storyById(RM.itemById(s, sItemId) || {}, sStId);
       if (!st2) return;
-      if (sf === 'description') st2.description = sVal;
-      else {
-        if (!st2.custom) st2.custom = {};
-        if (sVal) st2.custom[sf] = sVal; else delete st2.custom[sf];
-      }
+      RM.setStoryScopeValue(st2, sf, sVal);
     });
   });
 
@@ -6277,6 +7547,14 @@
     if (idx < ordKeys.length - 1) items2.push({ icon: 'arrow-right', label: 'Move right', fn: function () { shiftCol(1); } });
     items2.push({ icon: 'pencil', label: 'Rename…', fn: function () { scopeColModal(key); } });
     items2.push({ sep: true });
+    var curScope = (scopeColDef(key) || {}).scope || 'both';
+    ['both', 'feature', 'story'].forEach(function (sc) {
+      items2.push({ icon: sc === 'both' ? 'layers' : sc === 'feature' ? 'square' : 'list-todo',
+        label: SCOPE_SCOPE_LABELS[sc], checked: curScope === sc, fn: function () {
+          commit('column scope', function (s) { RM.setScopeColScope(s, key, sc); });
+        } });
+    });
+    items2.push({ sep: true });
     items2.push({ icon: 'trash-2', label: 'Remove column', fn: function () {
       commit('remove column', function (s) { RM.removeScopeCol(s, key); });
     } });
@@ -6331,13 +7609,63 @@
     if (e.button !== 0 || drag || view === 'scoping') return;
     if (e.target.closest('[data-bar],[data-ghost],[data-port],.row-left,.hdr-left,button,input,textarea,select,.ghost-pill')) return;
     if (!e.target.closest('#grid')) return;
+    if (e.shiftKey && view === 'planning') {
+      // shift-drag on empty lane: rubber-band select the bars it touches
+      drag = { kind: 'marquee', x0: e.clientX, y0: e.clientY, moved: false, box: null, ids: [] };
+      e.preventDefault();
+      return;
+    }
     drag = { kind: 'pan', x0: e.clientX, y0: e.clientY, sl: board.scrollLeft, st: board.scrollTop, moved: false };
   });
 
+  function marqueeMove(e) {
+    if (!drag.box) {
+      drag.box = document.createElement('div');
+      drag.box.id = 'marquee';
+      document.body.appendChild(drag.box);
+    }
+    var x1 = Math.min(drag.x0, e.clientX), x2 = Math.max(drag.x0, e.clientX);
+    var y1 = Math.min(drag.y0, e.clientY), y2 = Math.max(drag.y0, e.clientY);
+    drag.box.style.left = x1 + 'px';
+    drag.box.style.top = y1 + 'px';
+    drag.box.style.width = (x2 - x1) + 'px';
+    drag.box.style.height = (y2 - y1) + 'px';
+    drag.ids = [];
+    $$('#rows .bar[data-bar]').forEach(function (b) {
+      var r = b.getBoundingClientRect();
+      var hit = r.right >= x1 && r.left <= x2 && r.bottom >= y1 && r.top <= y2;
+      if (hit) drag.ids.push(b.dataset.bar);
+      b.classList.toggle('selected', hit);
+    });
+  }
+
+  function marqueeEnd(d) {
+    flushPanelEdit();
+    if (!d.ids.length) { multiSel = null; selectedId = null; selStory = null; render(); return; }
+    if (d.ids.length === 1) { select(d.ids[0]); return; }
+    multiSel = d.ids;
+    if (multiSel.indexOf(selectedId) === -1) selectedId = d.ids[0];
+    selStory = null;
+    selectedEdge = null;
+    render();
+  }
+
   function startBarDrag(e, itemId, mode, barEl) {
     var it = RM.itemById(state, itemId);
+    // dragging one bar of a multi-selection moves the whole group with it
+    var group = null;
+    if (mode === 'move' && multiSel && multiSel.indexOf(itemId) !== -1) {
+      group = [];
+      multiSel.forEach(function (id) {
+        if (id === itemId) return;
+        var g = RM.itemById(state, id);
+        if (!g || !isScheduled(g) || g.locked) return;
+        group.push({ id: id, start0: g.startDay, el: rowsEl.querySelector('[data-bar="' + id + '"]') });
+      });
+      if (!group.length) group = null;
+    }
     drag = {
-      kind: 'bar', mode: mode, itemId: itemId,
+      kind: 'bar', mode: mode, itemId: itemId, group: group,
       x0: e.clientX, y0: e.clientY,
       start0: it.startDay, dur0: it.durDays, risk0: it.riskDays || 0,
       ripple: e.metaKey || e.ctrlKey, // ⌘-drag pushes dependents along
@@ -6373,12 +7701,14 @@
     else if (drag.kind === 'stbar') stBarDragMove(e, dx);
     else if (drag.kind === 'ghost') ghostDragMove(e);
     else if (drag.kind === 'row') rowDragMove(e);
+    else if (drag.kind === 'marquee') marqueeMove(e);
     else if (drag.kind === 'strow') strowMove(e);
     else if (drag.kind === 'phspan') phSpanDragMove(e, dx);
     else if (drag.kind === 'port') portDragMove(e);
     else if (drag.kind === 'scol') scolDragMove(e);
     else if (drag.kind === 'scolmove') scolMoveMove(e);
-    else if (drag.kind === 'spcard') spCardDragMove(e);
+    else if (drag.kind === 'prcard') prCardDragMove(e);
+    else if (drag.kind === 'sprow') sprDragMove(e);
     else if (drag.kind === 'rfill') rfillMove(e);
     else if (drag.kind === 'bfill') bfillMove(e);
     else if (drag.kind === 'rrow') rrowMove(e);
@@ -6433,6 +7763,7 @@
     if (d.indicator) d.indicator.remove();
     if (d.vIndicator) d.vIndicator.remove();
     if (d.preview) d.preview.remove();
+    if (d.box) d.box.remove();
     if (d.kind === 'port') { $('#tempLink').setAttribute('hidden', ''); }
     if (!d.moved) { return; }
     dragConsumedClick = true;
@@ -6443,11 +7774,13 @@
     else if (d.kind === 'ghost') ghostDragEnd(d, e);
     else if (d.kind === 'row') rowDragEnd(d, e);
     else if (d.kind === 'strow') strowEnd(d);
+    else if (d.kind === 'marquee') marqueeEnd(d);
     else if (d.kind === 'phspan') phSpanDragEnd(d);
     else if (d.kind === 'port') portDragEnd(d);
     else if (d.kind === 'scol') saveLocal();
     else if (d.kind === 'scolmove') scolMoveEnd(d);
-    else if (d.kind === 'spcard') spCardDragEnd(d);
+    else if (d.kind === 'prcard') prCardDragEnd(d);
+    else if (d.kind === 'sprow') sprDragEnd(d);
     else if (d.kind === 'rfill') rfillEnd(d);
     else if (d.kind === 'bfill') bfillEnd(d);
     else if (d.kind === 'rrow') rrowEnd(d);
@@ -6470,22 +7803,36 @@
   });
 
   function daysFromDx(dx) { return Math.round(dx / dayPx()); }
-  // touched items align to the snap grid: position AND width become multiples
-  // snapDays is a MODE (1 = day, 5 = week, 10 = two weeks) — the actual
-  // grid follows the selected working days, so a week is SPW() slots and
-  // week snaps land on week starts regardless of holidays
-  function snapUnit() { return snapDays === 1 ? 1 : SPW() * (snapDays === 10 ? 2 : 1); }
-  function snapTo(d) { return Math.round(d / snapUnit()) * snapUnit(); }
+  // touched items align to the snap grid. Features and stories each have a
+  // MODE (day / week / sprint) — the actual grid follows the selected working
+  // days, so a week is SPW() slots and week snaps land on week starts
+  // regardless of holidays; sprint snaps land on sprint boundaries, which
+  // follow the sprint anchor in Setup
+  var SNAP_LABELS = { day: 'day', week: 'week', sprint: 'sprint' };
+  function snapModeFor(kind) { return kind === 'story' ? snapStory : snapFeat; }
+  function setSnapMode(kind, mode) { if (kind === 'story') snapStory = mode; else snapFeat = mode; }
+  function snapUnit(kind) {
+    var mode = snapModeFor(kind);
+    return mode === 'day' ? 1 : mode === 'sprint' ? RM.sprintDays(state.meta) : SPW();
+  }
+  function snapTo(d, kind) {
+    var u = snapUnit(kind);
+    var off = snapModeFor(kind) === 'sprint' ? ((RM.sprintInfo(state.meta).anchorWeek * SPW()) % u + u) % u : 0;
+    return Math.round((d - off) / u) * u + off;
+  }
 
   function barDragMove(e, dx) {
     var it = RM.itemById(state, drag.itemId);
     var dd = daysFromDx(dx);
-    var su = e.altKey ? 1 : snapUnit(); // ⌥ ignores the snap grid: any day
-    var sn = function (d) { return Math.round(d / su) * su; };
+    var su = e.altKey ? 1 : snapUnit('feature'); // ⌥ ignores the snap grid: any day
+    var sn = e.altKey ? function (d) { return d; } : function (d) { return snapTo(d, 'feature'); };
     var ns = drag.start0, nd = drag.dur0, nr = drag.risk0;
     if (drag.mode === 'move') ns = Math.max(0, sn(drag.start0 + dd));
-    else if (drag.mode === 'resize-r') nd = Math.max(su, sn(drag.dur0 + dd));
-    else if (drag.mode === 'resize-l') {
+    else if (drag.mode === 'resize-r') {
+      // the END edge lands on a grid line; never shorter than one grid step
+      nd = sn(drag.start0 + drag.dur0 + dd) - drag.start0;
+      if (nd < 1) nd = Math.max(1, su);
+    } else if (drag.mode === 'resize-l') {
       ns = Math.max(0, Math.min(sn(drag.start0 + dd), drag.start0 + drag.dur0 - su));
       nd = drag.dur0 + (drag.start0 - ns);
       if (nd < 1) nd = Math.max(1, su);
@@ -6495,10 +7842,17 @@
     drag.el.style.left = (ns * dayPx()) + 'px';
     if (!it.milestone) drag.el.style.width = (Math.max(6, nd * dayPx()) + nr * dayPx()) + 'px';
     drag.ns = ns; drag.nd = nd; drag.nr = nr;
+    if (drag.group) {
+      var gd = ns - drag.start0;
+      drag.group.forEach(function (g) {
+        if (g.el) { g.el.classList.add('dragging'); g.el.style.left = (Math.max(0, g.start0 + gd) * dayPx()) + 'px'; }
+      });
+    }
 
     // vertical: dragging the bar across other rows reorders / re-phases the
-    // item (same drop logic as dragging the row's left pane)
-    if (drag.mode === 'move') {
+    // item (same drop logic as dragging the row's left pane) — a group drag
+    // moves in time only
+    if (drag.mode === 'move' && !drag.group) {
       var srcRow = rowsEl.querySelector('.row[data-id="' + drag.itemId + '"]');
       var sr = srcRow && srcRow.getBoundingClientRect();
       drag.vTarget = (sr && (e.clientY < sr.top || e.clientY > sr.bottom)) ? dropTargetAt(e.clientY) : null;
@@ -6530,6 +7884,7 @@
         (nr > 0 ? ' + ' + fmtDays(riskWork) + ' risk' : '');
       if (drag.ripple) dragTip.innerHTML += ' · moves chain';
     }
+    if (drag.group) dragTip.innerHTML += ' · ' + (drag.group.length + 1) + ' items';
   }
 
   function barDragEnd(d) {
@@ -6548,6 +7903,16 @@
         // \u2318-drag moves the whole dependent chain rigidly with the bar
         var endDelta = (d.ns + d.nd + d.nr) - endBefore;
         rippleMoved = RM.shiftDependents(s, t.id, endDelta, { rigid: true });
+      }
+      if (d.group) {
+        var gd2 = d.ns - d.start0;
+        d.group.forEach(function (g) {
+          var gt = RM.itemById(s, g.id);
+          if (!gt || gt.startDay == null) return;
+          var gns = Math.max(0, g.start0 + gd2);
+          RM.shiftStories(gt, gns - gt.startDay);
+          gt.startDay = gns;
+        });
       }
       if (vr) applyDrop(s, d.itemId, vr);
     });
@@ -6569,12 +7934,14 @@
 
   function stBarDragMove(e, dx) {
     var dd = daysFromDx(dx);
-    var su = e.altKey ? 1 : snapUnit();
-    var sn = function (d) { return Math.round(d / su) * su; };
+    var su = e.altKey ? 1 : snapUnit('story');
+    var sn = e.altKey ? function (d) { return d; } : function (d) { return snapTo(d, 'story'); };
     var ns = drag.start0, nd = drag.dur0;
     if (drag.mode === 'move') ns = Math.max(0, sn(drag.start0 + dd));
-    else if (drag.mode === 'resize-r') nd = Math.max(su, sn(drag.dur0 + dd));
-    else if (drag.mode === 'resize-l') {
+    else if (drag.mode === 'resize-r') {
+      nd = sn(drag.start0 + drag.dur0 + dd) - drag.start0;
+      if (nd < 1) nd = Math.max(1, su);
+    } else if (drag.mode === 'resize-l') {
       ns = Math.max(0, Math.min(sn(drag.start0 + dd), drag.start0 + drag.dur0 - su));
       nd = drag.dur0 + (drag.start0 - ns);
       if (nd < 1) nd = Math.max(1, su);
@@ -6608,7 +7975,7 @@
 
   function ghostDragMove(e) {
     var it = RM.itemById(state, drag.itemId);
-    var day = Math.max(0, e.altKey ? laneDayAt(e.clientX) : snapTo(laneDayAt(e.clientX)));
+    var day = Math.max(0, e.altKey ? laneDayAt(e.clientX) : snapTo(laneDayAt(e.clientX), 'feature'));
     var dur = it.milestone ? 1
       : (it.durDays != null ? it.durDays : RM.stretchSpan(state.meta, day, RM.effortDays(state, it)));
     if (!drag.preview) {
@@ -6734,6 +8101,8 @@
       }
       st.order = orderAt(to.stories, at); // the key follows the row
       to.stories.splice(at, 0, st);
+      // the selection follows the moved story to its new feature
+      if (selStory === d.stId) selectedId = toItemId;
     });
   }
 
@@ -6863,6 +8232,7 @@
   function switchView(e) {
     var b = e.target.closest('[data-view]');
     if (!b || b.dataset.view === view) return;
+    flushPanelEdit();
     view = b.dataset.view;
     // entering Version History always lands on the newest change
     if (view === 'history') { vhSel = null; vhPick = []; vhTab = null; }
@@ -7115,31 +8485,35 @@
     var bundle = docKind === 'bundle';
     var shared = [
       desk ? { icon: 'folder-plus', nativeIcon: 'Add', label: 'New shared roadmap…', fn: newSharedRoadmap } : null,
-      desk ? { icon: 'folder-open', nativeIcon: 'Folder', label: 'Open shared roadmap…', fn: openSharedRoadmap } : null,
+      desk ? { icon: 'folder-open', label: 'Open shared roadmap…', fn: openSharedRoadmap } : null,
       desk && !bundle ? { icon: 'folder-sync', label: 'Convert to shared folder…', fn: convertToShared } : null
     ];
     var saveItem = bundle
       ? { icon: 'file-spreadsheet', label: 'Export .xlsx…', fn: exportXlsx }
       : { icon: 'download', label: 'Save', kbd: '⌘S', fn: function () { $('#btnSave').click(); } };
     // a workbook merged INTO the open shared roadmap (add-only)
-    var importItem = desk && bundle ? { icon: 'file-input', nativeIcon: 'MultipleDocuments', label: 'Import from Excel…', fn: importFromExcel } : null;
+    var importItem = desk && bundle ? { icon: 'file-input', label: 'Import from Excel…', fn: importFromExcel } : null;
     if (name === 'macApp') {
       // macOS: file actions live in the app-name menu (desktop.js appends the
-      // standard Hide/Quit block after these)
+      // standard Hide/Quit block after these). nativeIcon must name a macOS
+      // *template* image (monochrome, tints with the menu); Folder / Info /
+      // MultipleDocuments etc. are full-colour pictograms and look out of
+      // place next to the template ones, so those items carry no icon.
       return [
         { icon: 'file-plus-2', nativeIcon: 'Add', label: 'New project', fn: newProjectModal },
-        { icon: 'folder-open', nativeIcon: 'Folder', label: 'Open project', fn: openProject },
+        { icon: 'folder-open', label: 'Open project', fn: openProject },
         shared[0], shared[1], shared[2],
-        { icon: 'file-spreadsheet', nativeIcon: 'MultipleDocuments', label: 'Download template', fn: downloadTemplate },
+        { icon: 'file-spreadsheet', label: 'Download template', fn: downloadTemplate },
         { sep: true },
         saveItem,
         importItem,
         bundle ? null : { icon: 'save', label: 'Save as…', kbd: '⇧⌘S', fn: function () { window.HeadwayApp.save(true); } },
         bundle ? null : { icon: 'timer-reset', label: 'Auto save', checked: autoSave, fn: toggleAutoSave },
         { sep: true },
-        { icon: 'image', nativeIcon: 'Share', label: 'Export…', fn: function () { $('#btnExport').click(); } },
+        { icon: 'share', nativeIcon: 'Share', label: 'Export…', fn: function () { $('#btnExport').click(); } },
+        { icon: 'refresh-cw', label: 'Sync with Jira…', fn: function () { HeadwayJira.syncModal(); } },
         { sep: true },
-        { icon: 'circle-help', nativeIcon: 'Info', label: 'Help', fn: helpModal }
+        { icon: 'circle-help', label: 'Help', fn: helpModal }
       ].filter(Boolean);
     }
     if (name === 'file') {
@@ -7160,7 +8534,8 @@
           ? { icon: 'timer-reset', label: 'Auto save', checked: autoSave, fn: toggleAutoSave }
           : null,
         { sep: true },
-        { icon: 'image', label: 'Export…', fn: function () { $('#btnExport').click(); } },
+        { icon: 'share', label: 'Export…', fn: function () { $('#btnExport').click(); } },
+        window.HeadwayJira ? { icon: 'refresh-cw', label: 'Sync with Jira…', fn: function () { HeadwayJira.syncModal(); } } : null,
         { icon: 'file-spreadsheet', label: 'Download template', fn: downloadTemplate },
         { sep: true },
         { icon: 'circle-help', label: 'Shortcuts & help', fn: helpModal }
@@ -7194,12 +8569,16 @@
       ];
     }
     // view
-    var snapItems = [[1, 'day'], [5, 'week'], [10, '2 weeks']].map(function (sn) {
-      return { icon: 'magnet', label: 'Snap to ' + sn[1], checked: snapDays === sn[0], fn: function () {
-        snapDays = sn[0];
-        saveLocal(); renderTopbar();
-        toast('Drag snap: ' + sn[1]);
-      } };
+    var snapItems = [];
+    [['feature', 'Features'], ['story', 'Stories']].forEach(function (k, ki) {
+      if (ki) snapItems.push({ sep: true });
+      SNAP_MODES.forEach(function (mode) {
+        snapItems.push({ icon: 'magnet', label: k[1] + ' snap to ' + SNAP_LABELS[mode], checked: snapModeFor(k[0]) === mode, fn: function () {
+          setSnapMode(k[0], mode);
+          saveLocal(); renderTopbar();
+          toast(k[1] + ' snap: ' + SNAP_LABELS[mode]);
+        } });
+      });
     });
     return snapItems.concat([
       { sep: true },
@@ -7226,6 +8605,13 @@
         groupEpic = !groupEpic;
         saveLocal(); render();
       } },
+      { sep: true }
+    ].concat(COLOR_MODES.map(function (cm) {
+      return { icon: 'palette', label: 'Color by ' + cm[1].toLowerCase(), checked: colorBy === cm[0], fn: function () {
+        setColorBy(cm[0]);
+        saveLocal(); render();
+      } };
+    })).concat([
       { sep: true },
       { icon: 'chevrons-up-down', label: 'Expand all features', fn: function () {
         setDetailMode('story');
@@ -7248,8 +8634,7 @@
     ].concat(themeMenuItems())
       // macOS lost the native File menu (its actions moved to the app menu) —
       // keep the start page reachable from View there
-      .concat(isMacDesktop ? [{ sep: true }, { icon: 'house', label: 'Start page', fn: showStart }] : [])
-      .filter(Boolean));
+      .concat(isMacDesktop ? [{ sep: true }, { icon: 'house', label: 'Start page', fn: showStart }] : []))).filter(Boolean);
   }
 
   var openMenuName = null;
@@ -7328,33 +8713,66 @@
     requestAnimationFrame(renderArrows);
   }, { passive: false });
 
-  // floating zoom / expand cluster (bottom right of the timeline)
+  // floating zoom cluster (bottom right of the timeline)
   function syncZoomCtl() {
     var z = $('#zoomCtl');
     if (z) z.hidden = !(view === 'planning' || view === 'budget');
     // the cluster sits above the Resources panel when that is visible
     var rp = $('#resPanel');
     document.documentElement.style.setProperty('--res-total',
-      (rp && view === 'planning' && !presentMode ? rp.offsetHeight : 0) + 'px');
+      (rp && view === 'planning' ? rp.offsetHeight : 0) + 'px');
   }
   $('#zoomInBtn').addEventListener('click', function () { zoomBy(1.2); });
   $('#zoomOutBtn').addEventListener('click', function () { zoomBy(1 / 1.2); });
 
-  function addFeature(phaseId) {
+  // group = { epic?, workstream? }: the feature joins that group (its values
+  // set) and lands right after the group's last row, not the phase's end
+  function addFeature(phaseId, group) {
     var newId = RM.uid('i');
     commit('add feature', function (s) {
       var it = RM.normalizeState({
         meta: s.meta, phases: s.phases,
-        items: [{ id: newId, num: RM.nextNum(s), phaseId: phaseId, feature: '', size: 'M', headcount: 1 }]
+        items: [{ id: newId, num: RM.nextNum(s), phaseId: phaseId, feature: '', size: 'M', headcount: 1,
+          epic: group && group.epic != null ? group.epic : '',
+          workstream: group && group.workstream != null ? group.workstream : '' }]
       }).items[0];
       it.id = newId;
       it.num = RM.nextNum(s);
+      // the row lands right after the group's last row in the phase (after
+      // the phase's last row when the group is empty): one order key, keyed
+      // before the row that followed the group
+      var inGroup = function (x) {
+        return x.phaseId === phaseId &&
+          (!group || group.epic == null || (x.epic || '') === group.epic) &&
+          (!group || group.workstream == null || (x.workstream || '') === group.workstream);
+      };
+      var peers = inPhase(RM.sortByOrder(s.items.slice()), phaseId), lastIdx = -1;
+      peers.forEach(function (x, i2) { if (inGroup(x)) lastIdx = i2; });
+      var before = lastIdx === -1 ? null : peers[lastIdx + 1] || null;
       s.items.push(it);
-      RM.placeItem(s, newId, phaseId, null); // end of the phase, keyed after its last row
+      RM.placeItem(s, newId, phaseId, before ? before.id : null);
       s.phases.forEach(function (p) { if (p.id === phaseId) p.collapsed = false; });
       selectedId = newId;
     });
     select(newId, true);
+    focusRowTitle(newId);
+  }
+  // put the caret in a row's title in the left pane (Planning input or
+  // Scoping cell); the panel's name field is the fallback
+  function focusRowTitle(itemId) {
+    var nameEl = rowsEl.querySelector('.row[data-id="' + itemId + '"] .r-name');
+    if (nameEl) {
+      nameEl.focus();
+      if (nameEl.isContentEditable && window.getSelection) {
+        var rg = document.createRange();
+        rg.selectNodeContents(nameEl);
+        rg.collapse(false);
+        var sl = window.getSelection();
+        sl.removeAllRanges();
+        sl.addRange(rg);
+      }
+      return;
+    }
     var nameInput = $('#panel .p-name');
     if (nameInput) nameInput.focus();
   }
@@ -7447,6 +8865,7 @@
   // ------------------------------------------------------------ team modal
   // ------------------------------------------------------------ validation modal
   $('#btnValidation').addEventListener('click', validationModal);
+  $('#btnJira').addEventListener('click', function (e) { if (window.HeadwayJira) HeadwayJira.statusMenu(e.currentTarget); });
   function validationModal() {
     var groups = { error: [], warn: [], info: [] };
     viewItemsOf(state).forEach(function (it) { // issues listed in row order
@@ -7509,21 +8928,23 @@
   // header labels + the tooltip that explains each column (tooltips live on
   // the HEADERS — the cells themselves stay quiet)
   var BU_COL_DEFS = {
-    role: ['Role', 'Role — free text, e.g. “Senior Backend Dev”'],
-    type: ['Rate card', 'Rate card — the role whose default rate/cost applies (optional)'],
+    role: ['Role', 'Role'],
+    type: ['Rate card', 'Rate card'],
     ws: ['Workstream', 'Workstreams this person works on'],
-    cost: ['Cost', 'Cost (hourly) — empty inherits the rate card'],
-    rate: ['Rate', 'Rate (hourly) — empty inherits the rate card'],
-    margin: ['Margin', 'Margin — (rate − cost) ÷ rate'],
-    total: ['Total', 'Total — actual hours × rate']
+    cost: ['Cost', 'Cost (hourly)'],
+    rate: ['Rate', 'Rate (hourly)'],
+    margin: ['Margin', 'Margin'],
+    total: ['Total', 'Total']
   };
   var BU_KEYS = ['role', 'type', 'ws', 'cost', 'rate', 'margin', 'total'];
   var PL_COL_DEFS = {
-    size: ['Size', 'Size — click a row chip to change', 34],
+    size: ['Size', 'Size', 34],
+    pri: ['Pri', 'Priority', 26],
+    risk: ['Risk', 'Risk', 26],
     dur: ['Wks', 'Duration in weeks', 34],
-    asg: ['Ppl', 'Assignees', 44]
+    asg: ['Ppl', 'Assignees', 40]
   };
-  var PL_KEYS = ['size', 'dur', 'asg'];
+  var PL_KEYS = ['size', 'pri', 'risk', 'dur', 'asg'];
   function orderedCols(order, allKeys) {
     var out = (order || []).filter(function (k) { return allKeys.indexOf(k) !== -1; });
     allKeys.forEach(function (k) { if (out.indexOf(k) === -1) out.push(k); });
@@ -7537,7 +8958,9 @@
   function plColsVisible() {
     return plColsOrdered().filter(function (k) {
       if (plColHide[k]) return false;
-      if (k === 'size') return RM.sizingEnabled(state);
+      if (k === 'size') return RM.sizingEnabled(state) || RM.sizingEnabled(state, 'story');
+      if (k === 'pri') return RM.priorityEnabled(state) || RM.priorityEnabled(state, 'story');
+      if (k === 'risk') return RM.riskEnabled(state);
       return true;
     });
   }
@@ -7564,7 +8987,7 @@
       el.innerHTML = plColsVisible().map(function (k) {
         return '<i class="pl-only' + (k === 'size' ? ' sz-lab' : '') + '" data-plcol="' + k + '" title="' +
           esc(PL_COL_DEFS[k][1]) +
-          '" style="width:' + PL_COL_DEFS[k][2] + 'px">' + esc(PL_COL_DEFS[k][0]) + '</i>';
+          '" style="width:' + PL_COL_DEFS[k][2] + 'px"></i>';
       }).join('');
     }
   }
@@ -7774,8 +9197,7 @@
     costs.forEach(function (c) {
       var occ = RM.costOccurrences(state, c);
       var marks = occ.map(function (o) {
-        return '<span class="bu-costmark" title="' + esc(c.name + ' — ' + fmtMoney(o.amount) + ' on ' +
-          RM.fmtShortYear(RM.dayToDate(meta, o.day))) + '" style="left:' + (o.day * dayPx()) + 'px"></span>';
+        return '<span class="bu-costmark" title="' + esc(c.name) + '" style="left:' + (o.day * dayPx()) + 'px"></span>';
       }).join('');
       var kindLabel = c.kind === 'fixed' ? 'One-time' : c.kind === 'weekly' ? 'Weekly' : 'Monthly';
       var cTotal = RM.costTotal(state, c);
@@ -8309,23 +9731,51 @@
 
     // sizing approach picker + a fully editable option table (label → days);
     // editing options flips the scheme to Custom
-    var schemeRows = RM.SIZE_SCHEME_ORDER.map(function (k) {
-      var sch = RM.SIZE_SCHEMES[k];
-      return '<button class="su-scheme' + (m.sizeScheme === k ? ' on' : '') + '" data-suscheme="' + k + '">' +
-        '<span class="su-scheme-check"><i data-lucide="' + (m.sizeScheme === k ? 'circle-check' : 'circle') + '"></i></span>' +
-        '<span class="su-scheme-main"><b>' + esc(sch.name) + '</b><span>' + esc(sch.hint) + '</span></span>' +
-        '</button>';
-    }).join('') + (m.sizeScheme === 'custom'
-      ? '<div class="su-scheme on static"><span class="su-scheme-check"><i data-lucide="circle-check"></i></span>' +
-        '<span class="su-scheme-main"><b>Custom</b><span>Your own options and day values</span></span></div>'
-      : '');
-    var sizeOptRows = RM.sizeOrderOf(state).map(function (s2) {
-      return '<tr>' +
-        '<td><input data-suszlabel="' + esc(s2) + '" value="' + esc(s2) + '" aria-label="Option label"></td>' +
-        '<td><input type="number" min="1" data-susz="' + esc(s2) + '" value="' + m.sizeDays[s2] + '" aria-label="Working days"></td>' +
-        '<td class="hol-x"><button data-suszrm="' + esc(s2) + '" title="Remove option"><i data-lucide="x"></i></button></td>' +
-        '</tr>';
-    }).join('');
+    // features and stories each pick a scale; the story controls carry
+    // data-kind="story" and share the feature handlers
+    function schemeRowsFor(kind) {
+      var kAttr = kind === 'story' ? ' data-kind="story"' : '';
+      var cur = m[RM.sizeKeys(kind).scheme];
+      return RM.SIZE_SCHEME_ORDER.map(function (k) {
+        var sch = RM.SIZE_SCHEMES[k];
+        return '<button class="su-scheme' + (cur === k ? ' on' : '') + '" data-suscheme="' + k + '"' + kAttr + '>' +
+          '<span class="su-scheme-check"><i data-lucide="' + (cur === k ? 'circle-check' : 'circle') + '"></i></span>' +
+          '<span class="su-scheme-main"><b>' + esc(sch.name) + '</b><span>' + esc(sch.hint) + '</span></span>' +
+          '</button>';
+      }).join('') + (cur === 'custom'
+        ? '<div class="su-scheme on static"><span class="su-scheme-check"><i data-lucide="circle-check"></i></span>' +
+          '<span class="su-scheme-main"><b>Custom</b><span>Your own options and day values</span></span></div>'
+        : '');
+    }
+    function sizeOptRowsFor(kind) {
+      var kAttr = kind === 'story' ? ' data-kind="story"' : '';
+      var days = m[RM.sizeKeys(kind).days] || {};
+      return RM.sizeOrderOf(state, kind).map(function (s2) {
+        return '<tr>' +
+          '<td><input data-suszlabel="' + esc(s2) + '"' + kAttr + ' value="' + esc(s2) + '" aria-label="Option label"></td>' +
+          '<td><input type="number" min="1" data-susz="' + esc(s2) + '"' + kAttr + ' value="' + days[s2] + '" aria-label="Working days"></td>' +
+          '<td class="hol-x"><button data-suszrm="' + esc(s2) + '"' + kAttr + ' title="Remove option"><i data-lucide="x"></i></button></td>' +
+          '</tr>';
+      }).join('');
+    }
+    function sizingCardsFor(kind) {
+      var label = kind === 'story' ? 'Story size options' : 'Size options';
+      return RM.sizingEnabled(state, kind)
+        ? '<section class="su-card"><h2>' + label + '</h2>' +
+          '<table class="hol-table"><thead><tr><th>Label</th><th>Working days</th><th></th></tr></thead>' +
+          '<tbody>' + sizeOptRowsFor(kind) + '</tbody></table>' +
+          '<button id="suSzAdd' + (kind === 'story' ? 'Story' : '') + '" style="margin-top:8px"><i data-lucide="plus"></i> Add option</button>' +
+          (kind === 'story'
+            ? '<div class="m-hint">A sized story that lands on the timeline takes its size in working days; unsized stories take one sprint.</div>'
+            : '<div class="m-hint">Working days drive scheduling and the duration estimate; the risk rating stays a separate L/M/H flag.</div>') +
+          '</section>'
+        : '<section class="su-card"><h2>' + label + '</h2>' +
+          '<div class="m-hint">Sizing is off — set durations directly ' + (kind === 'story' ? 'on stories' : 'on items') + ' when you need them.</div>' +
+          '</section>';
+    }
+    var schemeRows = schemeRowsFor('feature');
+    var storySchemeRows = schemeRowsFor('story');
+    var storySizingCards = sizingCardsFor('story');
     var riskRows = RM.RISK_SCHEME_ORDER.map(function (k) {
       var rs = RM.RISK_SCHEMES[k];
       var on = RM.riskSchemeOf(state) === k;
@@ -8334,30 +9784,31 @@
         '<span class="su-scheme-main"><b>' + esc(rs.name) + '</b><span>' + esc(rs.desc) + '</span></span>' +
         '</button>';
     }).join('');
-    var priRows = RM.PRIORITY_SCHEME_ORDER.map(function (k) {
-      var ps = RM.PRIORITY_SCHEMES[k];
-      var on = RM.prioritySchemeOf(state) === k;
-      return '<button class="su-scheme' + (on ? ' on' : '') + '" data-supri="' + k + '">' +
-        '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
-        '<span class="su-scheme-main"><b>' + esc(ps.name) + '</b><span>' + esc(ps.desc) + '</span></span>' +
-        '</button>';
-    }).join('');
-    var sizingCards = RM.sizingEnabled(state)
-      ? '<section class="su-card"><h2>Size options</h2>' +
-        '<table class="hol-table"><thead><tr><th>Label</th><th>Working days</th><th></th></tr></thead>' +
-        '<tbody>' + sizeOptRows + '</tbody></table>' +
-        '<button id="suSzAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add option</button>' +
-        '<div class="m-hint">Working days drive scheduling and the duration estimate; the risk rating stays a separate L/M/H flag.</div>' +
-        '</section>'
-      : '<section class="su-card"><h2>Size options</h2>' +
-        '<div class="m-hint">Sizing is off — set durations directly on items when you need them.</div>' +
-        '</section>';
+    function priRowsFor(kind) {
+      var kAttr = kind === 'story' ? ' data-kind="story"' : '';
+      var list = kind === 'story' ? RM.STORY_PRIORITY_SCHEME_ORDER : RM.PRIORITY_SCHEME_ORDER;
+      return list.map(function (k) {
+        var ps = RM.PRIORITY_SCHEMES[k];
+        var on = RM.prioritySchemeOf(state, kind) === k;
+        return '<button class="su-scheme' + (on ? ' on' : '') + '" data-supri="' + k + '"' + kAttr + '>' +
+          '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
+          '<span class="su-scheme-main"><b>' + esc(ps.name) + '</b><span>' + esc(ps.desc) + '</span></span>' +
+          '</button>';
+      }).join('');
+    }
+    var priRows = priRowsFor('feature');
+    var storyPriRows = priRowsFor('story');
+    var sizingCards = sizingCardsFor('feature');
 
+    // every range edits in place: name is free text, the dates open the calendar
     var holRows = (m.holidayRanges || []).map(function (r, i) {
-      var dates = r.start === r.end ? r.start : r.start + ' → ' + r.end;
       return '<tr>' +
-        '<td>' + (r.name ? esc(r.name) : '<i class="hol-unnamed">—</i>') + '</td>' +
-        '<td class="hol-dates">' + esc(dates) + '</td>' +
+        '<td><input data-suholname="' + i + '" value="' + esc(r.name || '') + '" placeholder="—" aria-label="Holiday name" title="Rename"></td>' +
+        '<td class="hol-dates"><span class="hol-range">' +
+        '<input type="text" readonly class="cal-in" data-suholstart="' + i + '" value="' + esc(r.start) + '" aria-label="First day" title="First day">' +
+        '<span class="hol-arrow">→</span>' +
+        '<input type="text" readonly class="cal-in" data-suholend="' + i + '" value="' + esc(r.end) + '" aria-label="Last day" title="Last day">' +
+        '</span></td>' +
         '<td class="hol-x"><button data-suholrm="' + i + '" title="Remove"><i data-lucide="x"></i></button></td>' +
         '</tr>';
     }).join('');
@@ -8374,7 +9825,7 @@
         '<span class="su-name">' + esc(RM.defaultWsName(state)) + '</span>' +
         '<span class="band-bucket-tag">default</span>' +
         '<span class="band-count">' + count + '</span>' +
-        '<button data-sudefws title="Edit — items without a workstream use this name and color"><i data-lucide="pencil"></i></button>' +
+        '<button data-sudefws title="Edit"><i data-lucide="pencil"></i></button>' +
         '</div>';
     })();
     var wsRows = allWorkstreams().map(function (w) {
@@ -8407,7 +9858,7 @@
     var typeRows = state.teamTypes.map(function (t) {
       var rc = (m.rateCard && m.rateCard[t]) || {};
       return '<div class="su-row" data-key="' + esc(t) + '">' + grip() +
-        '<input class="su-name su-name-in" data-rcname="' + esc(t) + '" value="' + esc(t) + '" title="Rename role — applies to people, features and the rate card">' +
+        '<input class="su-name su-name-in" data-rcname="' + esc(t) + '" value="' + esc(t) + '" title="Rename role">' +
         '<span class="band-count">' + (typeCounts[t] || 0) + '</span>' +
         '<input class="su-rc" type="number" min="0" data-rccost="' + esc(t) + '" value="' + (rc.cost || '') + '" placeholder="cost/h" title="Default hourly cost for this role">' +
         '<input class="su-rc" type="number" min="0" data-rcrate="' + esc(t) + '" value="' + (rc.rate || '') + '" placeholder="rate/h" title="Default hourly bill rate for this role">' +
@@ -8459,7 +9910,7 @@
         '<div class="hol-add">' +
         '<input id="suHolName" placeholder="Name (optional)">' +
         '<input type="text" readonly class="cal-in" id="suHolStart" placeholder="First day" aria-label="First day">' +
-        '<input type="text" readonly class="cal-in" data-cal-clear="Single day" id="suHolEnd" placeholder="Last day" aria-label="Last day (optional)" title="Last day — leave empty for a single day">' +
+        '<input type="text" readonly class="cal-in" data-cal-clear="Single day" id="suHolEnd" placeholder="Last day" aria-label="Last day (optional)" title="Last day">' +
         '<button id="suHolAddBtn" class="fixed">Add</button>' +
         '</div>' +
         '<div class="m-hint">Single days or ranges (e.g. Christmas Eve through New Year’s). Non-working days stretch bars that span them.</div>' +
@@ -8511,9 +9962,9 @@
         '</section>',
       columns: (function () {
         var offNotes = [];
-        if (!RM.sizingEnabled(state)) offNotes.push('Size (enable in Sizing)');
+        if (!RM.sizingEnabled(state) && !RM.sizingEnabled(state, 'story')) offNotes.push('Size (enable in Sizing)');
         if (!RM.riskEnabled(state)) offNotes.push('Risk (pick a scheme in Sizing)');
-        if (!RM.priorityEnabled(state)) offNotes.push('Priority (pick a scheme in Sizing)');
+        if (!RM.priorityEnabled(state) && !RM.priorityEnabled(state, 'story')) offNotes.push('Priority (pick a scheme in Sizing)');
         if (!state.meta.workstreamsEnabled) offNotes.push('Workstream (enable in Workstreams)');
         var colRows = allScopeCols().map(function (c) {
           var fixed = isFixedColKey(c[0]);
@@ -8521,54 +9972,65 @@
             (fixed
               ? '<span class="su-name">' + esc(c[1]) + '</span><span class="band-bucket-tag">built-in</span>'
               : '<input class="su-name su-name-in" data-sucolname="' + esc(c[0]) + '" value="' + esc(c[1]) + '" title="Rename column">') +
+            (fixed ? '' : '<select data-sucolscope="' + esc(c[0]) + '" title="Which rows show this column">' +
+              ['both', 'feature', 'story'].map(function (sc) {
+                return '<option value="' + sc + '"' + (((scopeColDef(c[0]) || {}).scope || 'both') === sc ? ' selected' : '') + '>' +
+                  SCOPE_SCOPE_LABELS[sc] + '</option>';
+              }).join('') + '</select>') +
             (fixed ? '' : '<button data-sucolrm="' + esc(c[0]) + '" class="danger" title="Remove column"><i data-lucide="x"></i></button>') +
             '</div>';
         }).join('');
         return '<section class="su-card"><h2>Scoping columns</h2>' +
           '<div class="su-rows" data-sulist="scol">' + colRows + '</div>' +
           '<div class="p-row" style="margin-top:8px"><input id="suColAdd" placeholder="New column, e.g. Owner"><button id="suColAddBtn" class="fixed">Add</button></div>' +
-          '<div class="m-hint">Drag to reorder — the Scoping grid and the panel follow this order. Text columns rename and remove here; built-ins carry fixed data.' +
+          '<div class="m-hint">Drag to reorder — the Scoping grid and the panel follow this order. Text columns rename, pick which rows show them (features, stories, or both) and remove here; built-ins carry fixed data.' +
           (offNotes.length ? '<br>Hidden right now: ' + esc(offNotes.join(', ')) + '.' : '') + '</div>' +
           '</section>';
       })(),
-      statuses: ['feature', 'story'].map(function (kind) {
-        var list = RM.statusesOf(state, kind);
-        var rows = list.map(function (stName, si2) {
-          var last = si2 === list.length - 1;
-          return '<tr>' +
-            '<td style="width:26px"><button class="st-sw" data-stcsw="' + kind + ':' + esc(stName) +
-            '" style="background:#' + RM.statusColor(state, kind, stName) + '" title="Status color — click to change"></button></td>' +
-            '<td><input data-sustat="' + kind + '" data-old="' + esc(stName) + '" value="' + esc(stName) + '" aria-label="Status name"></td>' +
-            '<td>' + (last ? '<span class="band-bucket-tag">done</span>' : '') + '</td>' +
-            '<td class="hol-x">' + (list.length > 2 ? '<button data-sustatrm="' + kind + ':' + esc(stName) + '" title="Remove status"><i data-lucide="x"></i></button>' : '') + '</td>' +
-            '</tr>';
-        }).join('');
-        return '<section class="su-card"><h2>' + (kind === 'feature' ? 'Feature statuses' : 'Story statuses') + '</h2>' +
-          '<table class="hol-table"><thead><tr><th></th><th>Status</th><th></th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
-          '<div class="p-row" style="margin-top:8px"><input id="suStAdd-' + kind + '" placeholder="New status\u2026"><button data-sustatadd="' + kind + '" class="fixed">Add</button></div>' +
-          (kind === 'feature'
-            ? '<div class="m-hint">Used on the Sprinting board and grid. The last status counts as done.</div>'
-            : '') +
-          '</section>';
-      }).join(''),
       sizing:
-        '<section class="su-card"><h2>Approach</h2>' +
+        '<section class="su-card"><h2>Feature sizing</h2>' +
         '<div class="su-schemes">' + schemeRows + '</div>' +
         '</section>' + sizingCards +
+        '<section class="su-card"><h2>Story sizing</h2>' +
+        '<div class="su-schemes">' + storySchemeRows + '</div>' +
+        '<div class="m-hint">Stories estimate on their own scale — story points by default.</div>' +
+        '</section>' + storySizingCards +
         '<section class="su-card"><h2>Risk column</h2>' +
         '<div class="su-schemes">' + riskRows + '</div>' +
-        '<div class="m-hint">Risk measures uncertainty. Most projects track nothing here — pick a scheme only if your team actually reviews it.</div>' +
+        '<div class="m-hint">Risk measures uncertainty, for features and stories alike. Most projects track nothing here — pick a scheme only if your team actually reviews it.</div>' +
         '</section>' +
-        '<section class="su-card"><h2>Priority column</h2>' +
+        '<section class="su-card"><h2>Feature priority</h2>' +
         '<div class="su-schemes">' + priRows + '</div>' +
         '<div class="m-hint">Priority ranks importance — separate from risk.</div>' +
+        '</section>' +
+        '<section class="su-card"><h2>Story priority</h2>' +
+        '<div class="su-schemes">' + storyPriRows + '</div>' +
+        '<div class="m-hint">Stories rank on their own ladder — Critical / High / Medium / Low by default. RICE scores features only.</div>' +
+        '</section>',
+      apps:
+        '<section class="su-card"><h2>Apps</h2>' +
+        '<div class="m-hint" style="margin:0 0 10px">Which tabs this project shows. Turning an app off hides its tab; its data stays in the document.</div>' +
+        RM.APPS.map(function (a) {
+          var fixed = a[0] === 'planning';
+          return '<label class="p-check su-app' + (fixed ? ' fixed' : '') + '" title="' + esc(a[3]) + '">' +
+            '<input type="checkbox" data-suapp="' + a[0] + '"' + (RM.appEnabled(state, a[0]) ? ' checked' : '') + (fixed ? ' disabled' : '') + '> ' +
+            '<i data-lucide="' + a[2] + '"></i>' + esc(a[1]) + '<span class="su-app-desc">' + esc(a[3]) + '</span></label>';
+        }).join('') +
         '</section>',
       appearance:
         '<section class="su-card">' + personalFieldsHtml('appearance') +
         '<div class="m-hint">System follows your OS.</div>' +
         '</section>',
       prefs:
-        '<section class="su-card">' + personalFieldsHtml('behavior') + '</section>'
+        '<section class="su-card">' + personalFieldsHtml('behavior') + '</section>',
+      ai:
+        '<section class="su-card" id="aiSettingsCard">' +
+        (window.HeadwayAI ? HeadwayAI.settingsHtml() : '<div class="m-hint">AI module not loaded.</div>') +
+        '</section>',
+      jira:
+        '<section class="su-card" id="jiraSettingsCard">' +
+        (window.HeadwayJira ? HeadwayJira.settingsHtml() : '<div class="m-hint">Jira module not loaded.</div>') +
+        '</section>'
     };
     if (!tabBodies[setupTab]) setupTab = 'timeline';
 
@@ -8592,22 +10054,26 @@
       '<nav class="su-rail" aria-label="Settings sections">' + rail + '</nav>' +
       '<div class="su-content"><h1 class="su-page">' + esc(pageTitle) + '</h1>' + tabBodies[setupTab] + '</div>' +
       '</div>';
+    if (setupTab === 'ai' && window.HeadwayAI) HeadwayAI.wireSettings($('#aiSettingsCard', host));
+    if (setupTab === 'jira' && window.HeadwayJira) HeadwayJira.wireSettings($('#jiraSettingsCard', host));
     if (window.lucide) lucide.createIcons();
   }
 
   var SETUP_SECTIONS = [
     ['Project', [
       ['timeline', 'Timeline', 'calendar-range'],
+      ['apps', 'Apps', 'layout-grid'],
       ['phases', 'Phases', 'flag'],
       ['workstreams', 'Workstreams', 'layers'],
       ['team', 'Team', 'users'],
-      ['statuses', 'Statuses', 'list-checks'],
       ['columns', 'Columns', 'columns-3'],
-      ['sizing', 'Sizing', 'ruler']
+      ['sizing', 'Sizing', 'ruler'],
+      ['jira', 'Jira', 'link']
     ]],
     ['Personal', [
       ['appearance', 'Appearance', 'palette'],
-      ['prefs', 'Preferences', 'sliders-horizontal']
+      ['prefs', 'Preferences', 'sliders-horizontal'],
+      ['ai', 'AI assistant', 'sparkles']
     ]]
   ];
 
@@ -8642,6 +10108,22 @@
       toast('Workstreams ' + (wsOn ? 'enabled' : 'disabled'));
       return;
     }
+    if (t.dataset.suapp) {
+      var appKey = t.dataset.suapp, appOn = t.checked;
+      var appName = (RM.APPS.filter(function (a) { return a[0] === appKey; })[0] || [])[1] || appKey;
+      commit('app ' + (appOn ? 'on' : 'off'), function (s2) { s2.meta.apps[appKey] = appOn; });
+      toast(appName + (appOn ? ' enabled' : ' hidden'));
+      return;
+    }
+    if (t.dataset.suholname != null || t.dataset.suholstart != null || t.dataset.suholend != null) {
+      var hIdx = parseInt(t.dataset.suholname != null ? t.dataset.suholname
+        : t.dataset.suholstart != null ? t.dataset.suholstart : t.dataset.suholend, 10);
+      var hPatch = t.dataset.suholname != null ? { name: t.value }
+        : t.dataset.suholstart != null ? { start: t.value } : { end: t.value };
+      if ((hPatch.start != null && !hPatch.start) || (hPatch.end != null && !hPatch.end)) { render(); return; }
+      commit('holiday edit', function (s2) { RM.updateHolidayRange(s2.meta, hIdx, hPatch); });
+      return;
+    }
     if (t.id === 'suWeekHours') {
       var wh2 = Math.max(1, Math.min(80, parseFloat(t.value) || RM.WEEK_HOURS));
       commit('week hours', function (s2) { s2.meta.weekHours = wh2; });
@@ -8665,23 +10147,15 @@
       });
       return;
     }
+    if (t.dataset.sucolscope != null) {
+      var scKey = t.dataset.sucolscope, scVal = t.value;
+      commit('column scope', function (s2) { RM.setScopeColScope(s2, scKey, scVal); });
+      return;
+    }
     if (t.dataset.sucolname != null) {
       var cKey = t.dataset.sucolname;
       var cLbl = t.value.trim();
       commit('rename column', function (s2) { RM.renameScopeCol(s2, cKey, cLbl); });
-      return;
-    }
-    if (t.dataset.sustat != null) {
-      var stKind = t.dataset.sustat;
-      var oldSt = t.dataset.old;
-      var newSt = t.value.trim();
-      if (!newSt || newSt === oldSt) { render(); return; }
-      if (RM.statusesOf(state, stKind).indexOf(newSt) !== -1) {
-        toast('\u201C' + newSt + '\u201D already exists', 'err');
-        render();
-        return;
-      }
-      commit('rename status', function (s2) { RM.renameStatus(s2, stKind, oldSt, newSt); });
       return;
     }
     if (t.dataset.rcname != null) {
@@ -8709,15 +10183,15 @@
       return;
     }
     if (t.dataset.suszlabel != null) {
-      var oldLbl = t.dataset.suszlabel;
+      var oldLbl = t.dataset.suszlabel, lblKind = t.dataset.kind || 'feature';
       var newLbl = t.value.trim();
       if (!newLbl || newLbl === oldLbl) { render(); return; }
-      if (RM.sizeOrderOf(state).indexOf(newLbl) !== -1) {
+      if (RM.sizeOrderOf(state, lblKind).indexOf(newLbl) !== -1) {
         toast('“' + newLbl + '” already exists', 'err');
         render();
         return;
       }
-      commit('rename size', function (s2) { RM.renameSizeOption(s2, oldLbl, newLbl); });
+      commit('rename size', function (s2) { RM.renameSizeOption(s2, oldLbl, newLbl, lblKind); });
       return;
     }
     if (t.id === 'suStart') {
@@ -8754,11 +10228,11 @@
       return;
     }
     if (t.dataset.susz) {
-      var sz = t.dataset.susz;
-      var v = Math.max(1, parseInt(t.value, 10) || state.meta.sizeDays[sz] || 5);
+      var sz = t.dataset.susz, szKeys = RM.sizeKeys(t.dataset.kind || 'feature');
+      var v = Math.max(1, parseInt(t.value, 10) || (state.meta[szKeys.days] || {})[sz] || 5);
       commit('size days', function (s2) {
-        s2.meta.sizeDays[sz] = v;
-        s2.meta.sizeScheme = 'custom';
+        s2.meta[szKeys.days][sz] = v;
+        s2.meta[szKeys.scheme] = 'custom';
       });
       return;
     }
@@ -8785,9 +10259,9 @@
       return;
     }
     if (t.dataset.suscheme) {
-      var schemeKey = t.dataset.suscheme;
-      if (schemeKey === state.meta.sizeScheme) return;
-      commit('sizing approach', function (s2) { RM.setSizeScheme(s2, schemeKey); });
+      var schemeKey = t.dataset.suscheme, schemeKind = t.dataset.kind || 'feature';
+      if (schemeKey === state.meta[RM.sizeKeys(schemeKind).scheme]) return;
+      commit('sizing approach', function (s2) { RM.setSizeScheme(s2, schemeKey, schemeKind); });
       return;
     }
     if (t.dataset.surisk) {
@@ -8797,22 +10271,23 @@
       return;
     }
     if (t.dataset.supri) {
-      var priKey = t.dataset.supri;
-      if (priKey === RM.prioritySchemeOf(state)) return;
-      commit('priority column', function (s2) { RM.setPriorityScheme(s2, priKey); });
+      var priKey = t.dataset.supri, priKind = t.dataset.kind || 'feature';
+      if (priKey === RM.prioritySchemeOf(state, priKind)) return;
+      commit('priority column', function (s2) { RM.setPriorityScheme(s2, priKey, priKind); });
       return;
     }
-    if (t.id === 'suSzAdd') {
+    if (t.id === 'suSzAdd' || t.id === 'suSzAddStory') {
+      var addKind = t.id === 'suSzAddStory' ? 'story' : 'feature';
       commit('add size', function (s2) {
         var lbl = 'New', n2 = 2;
-        while (s2.meta.sizeOrder.indexOf(lbl) !== -1) lbl = 'New ' + n2++;
-        RM.addSizeOption(s2, lbl, 5);
+        while (s2.meta[RM.sizeKeys(addKind).order].indexOf(lbl) !== -1) lbl = 'New ' + n2++;
+        RM.addSizeOption(s2, lbl, 5, addKind);
       });
       return;
     }
     if (t.dataset.suszrm) {
-      var rmLbl = t.dataset.suszrm;
-      commit('remove size', function (s2) { RM.removeSizeOption(s2, rmLbl); });
+      var rmLbl = t.dataset.suszrm, rmKind = t.dataset.kind || 'feature';
+      commit('remove size', function (s2) { RM.removeSizeOption(s2, rmLbl, rmKind); });
       return;
     }
     if (t.id === 'suWsAddBtn') {
@@ -8832,27 +10307,6 @@
     if (t.dataset.sucolrm) {
       var rmKey = t.dataset.sucolrm;
       commit('remove column', function (s2) { RM.removeScopeCol(s2, rmKey); });
-      return;
-    }
-    if (t.dataset.sustatadd) {
-      var addKind = t.dataset.sustatadd;
-      var addInp = $('#suStAdd-' + addKind);
-      var addVal = addInp && addInp.value.trim();
-      if (!addVal) return;
-      if (RM.statusesOf(state, addKind).indexOf(addVal) !== -1) { toast('Status already exists', 'err'); return; }
-      commit('add status', function (s2) { RM.addStatus(s2, addKind, addVal); });
-      return;
-    }
-    if (t.dataset.sustatrm) {
-      var rmParts = t.dataset.sustatrm.split(':');
-      var rmKind = rmParts.shift();
-      var rmName = rmParts.join(':');
-      commit('remove status', function (s2) { RM.removeStatus(s2, rmKind, rmName); });
-      return;
-    }
-    if (t.dataset.stcsw) {
-      var swParts = t.dataset.stcsw.split(':');
-      statusColorMenu(t, swParts.shift(), swParts.join(':'));
       return;
     }
     if (t.dataset.suwps != null) {
@@ -8875,12 +10329,16 @@
     }
     var ttrm = t.dataset.suttrm;
     if (ttrm) {
-      var used = state.team.some(function (mm) { return mm.type === ttrm; }) ||
-        state.items.some(function (x) { return x.teamType === ttrm; });
-      if (used) { toast('“' + ttrm + '” is in use by roles or features', 'err'); return; }
-      commit('remove type', function (s2) {
-        s2.teamTypes = s2.teamTypes.filter(function (x) { return x !== ttrm; });
-      });
+      // people and features that had the role simply lose it
+      var usedP = state.team.filter(function (mm) { return mm.type === ttrm; }).length;
+      var usedF = state.items.filter(function (x) { return x.teamType === ttrm; }).length;
+      commit('remove type', function (s2) { RM.removeRole(s2, ttrm); });
+      if (usedP || usedF) {
+        var parts = [];
+        if (usedP) parts.push(usedP + (usedP === 1 ? ' person' : ' people'));
+        if (usedF) parts.push(usedF + (usedF === 1 ? ' feature' : ' features'));
+        toast('Removed “' + ttrm + '” — ' + parts.join(' and ') + ' now have no role');
+      }
       return;
     }
   });
@@ -8995,7 +10453,7 @@
       '<div class="m-head"><h2>Headway</h2><button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
       '<div class="m-body" style="font-size:12.5px;line-height:1.75;color:var(--ink-2)">' +
       '<b>Views</b> — Scoping (spreadsheet, resizable columns) and Planning (timeline), tabs up top<br>' +
-      '<b>Bars</b> — drag to move · edges resize · <span class="kbd">⌘drag</span> pushes dependents along · <span class="kbd">←</span><span class="kbd">→</span> nudge (<span class="kbd">⇧</span> = 1 week) · snap grid in View<br>' +
+      '<b>Bars</b> — drag to move · edges resize · <span class="kbd">⌘drag</span> pushes dependents along · <span class="kbd">←</span><span class="kbd">→</span> nudge (<span class="kbd">⇧</span> = 1 week) · snap grids (features / stories) in View<br>' +
       '<b>Sizes in weeks</b> — XS 2d · S 1w · M 2w · L 4w · XL 8w; the risk buffer uses the same scale (panel), shown as one duration<br>' +
       '<b>Rows</b> — drag the left pane to reorder / move phase (auto-order can re-sort by start) · right-click for insert/delete · chips cycle on click<br>' +
       '<b>Links</b> — drag a bar’s edge circles onto another row (left = depends ON it, right = dependency FOR it; Esc cancels) · click an arrow, Delete removes · orange = critical path<br>' +
@@ -9047,8 +10505,7 @@
         var t2 = Math.max(0, Math.min(1, h / RM.weekHoursOf(meta)));
         var bg = '#' + (darkActive() ? mixHex('242C35', '31597F', t2) : RM.tint('7FAEDD', 1 - t2));
         cells.push('<div class="rh' + cls + '" data-w="' + w + '" style="left:' + (w * weekPx) +
-          'px;width:' + weekPx + 'px;background:' + bg + '" title="' + esc(mLabel(m) + ' — week of ' +
-            RM.fmtShort(RM.weekStartDate(meta, w)) + ': ' + fmtH(h) + 'h') + '">' +
+          'px;width:' + weekPx + 'px;background:' + bg + '" title="' + esc(mLabel(m)) + '">' +
           (weekPx >= 20 ? fmtH(h) : '') + '</div>');
       }
       // SAME left columns as the Budgeting view (name · role · rate card ·
@@ -9060,7 +10517,7 @@
         memberColsHtml(m) +
         (state.meta.capacityEnabled
           ? '<span class="res-cap" tabindex="0" role="button" data-rcap="' + m.id +
-            '" title="Capacity at full-time hours — click to edit">' + fmtPe(m.capacity != null ? m.capacity : 1) + '×</span>'
+            '" title="Capacity at full-time hours">' + fmtPe(m.capacity != null ? m.capacity : 1) + '×</span>'
           : '') +
         '</div>' +
         '<div class="rlane" style="width:' + laneW + 'px">' + cells.join('') + '</div>' +
@@ -9519,16 +10976,21 @@
       return '<button data-pref-theme="' + t[0] + '"' + (themePref === t[0] ? ' class="on"' : '') + '>' +
         t[1].replace(' theme', '') + '</button>';
     }).join('') + '</div>';
-    var snapSeg = '<div class="seg">' + [[1, 'Day'], [5, 'Week'], [10, '2 weeks']].map(function (sn) {
-      return '<button data-pref-snap="' + sn[0] + '"' + (snapDays === sn[0] ? ' class="on"' : '') + '>' +
-        sn[1] + '</button>';
-    }).join('') + '</div>';
+    function snapSeg(kind) {
+      return '<div class="seg">' + SNAP_MODES.map(function (mode) {
+        return '<button data-pref-snap="' + kind + ':' + mode + '"' + (snapModeFor(kind) === mode ? ' class="on"' : '') + '>' +
+          SNAP_LABELS[mode].charAt(0).toUpperCase() + SNAP_LABELS[mode].slice(1) + '</button>';
+      }).join('') + '</div>';
+    }
     var appearance =
       '<div class="m-sec"><label>Your name</label>' +
       '<input type="text" data-pref-user maxlength="60" style="width:100%" placeholder="e.g. Alex Rivera" value="' + esc(userName()) + '">' +
       '<div class="m-hint">Recorded with your edits in Version history. Stored on this machine only.</div></div>' +
       '<div class="m-sec"><label>Theme</label>' + themeSeg + '</div>';
-    var behavior = '<div class="m-sec"><label>Drag snap</label>' + snapSeg + '</div>' +
+    var behavior = '<div class="m-sec"><label>Feature snap</label>' + snapSeg('feature') +
+      '<div class="m-hint">Grid for dragging, resizing and placing feature bars.</div></div>' +
+      '<div class="m-sec"><label>Story snap</label>' + snapSeg('story') +
+      '<div class="m-hint">Same for story bars — a sprint by default.</div></div>' +
       '<div class="m-sec"><label>Timeline</label>' +
       chk('deps', 'Dependency arrows', depsMode === 'on') +
       chk('crit', 'Critical path highlight', showCrit) +
@@ -9539,6 +11001,9 @@
       (state && state.meta.workstreamsEnabled ? chk('groupWs', 'Group by workstream', groupWs) : '') +
       chk('groupEpic', 'Group by epic', groupEpic) +
       '</div>' +
+      '<div class="m-sec"><label>Color bars by</label><div class="seg">' + COLOR_MODES.map(function (cm) {
+        return '<button data-pref-color="' + cm[0] + '"' + (colorBy === cm[0] ? ' class="on"' : '') + '>' + cm[1] + '</button>';
+      }).join('') + '</div></div>' +
       (desktop
         ? '<div class="m-sec"><label>Files</label>' + chk('autoSave', 'Auto-save to the open file', autoSave) + '</div>'
         : '');
@@ -9552,7 +11017,9 @@
       var tb = e.target.closest('[data-pref-theme]');
       if (tb) { setTheme(tb.dataset.prefTheme); after(); return; }
       var sb = e.target.closest('[data-pref-snap]');
-      if (sb) { snapDays = parseInt(sb.dataset.prefSnap, 10); saveLocal(); renderTopbar(); after(); return; }
+      if (sb) { var sp = sb.dataset.prefSnap.split(':'); setSnapMode(sp[0], sp[1]); saveLocal(); renderTopbar(); after(); return; }
+      var cb = e.target.closest('[data-pref-color]');
+      if (cb) { setColorBy(cb.dataset.prefColor); saveLocal(); render(); after(); return; }
     });
     host.addEventListener('change', function (e) {
       if (e.target.dataset.prefUser != null) { setUserName(e.target.value); return; }
@@ -9673,8 +11140,10 @@
       '<div class="sp-hero">' +
       '<div class="tb-mark sp-mark" aria-hidden="true"><span></span><span></span><span></span></div>' +
       '<div class="sp-brand"><h1>Headway</h1><div class="sp-sub">Roadmap planner</div></div>' +
-      '<button data-sp-settings title="Personal settings — theme, view options"><i data-lucide="settings"></i>Settings</button>' +
-      '</div>' +
+      '<div class="sp-hero-btns">' +
+      '<button data-sp-settings title="Personal settings"><i data-lucide="settings"></i>Settings</button>' +
+      (desktop ? updateButtonHtml() : '') +
+      '</div></div>' +
       '<div class="sp-actions">' +
       '<button class="primary sp-big" data-sp-new><i data-lucide="file-plus-2"></i>New project…</button>' +
       '<button class="sp-big" data-sp-opendlg><i data-lucide="folder-open"></i>Open…</button>' +
@@ -9684,7 +11153,7 @@
       '<div class="sp-recents">' +
       ((continueCard + rows) || '<div class="sp-empty">Nothing yet — projects you create or open appear here.</div>') +
       '</div>' +
-      (appVersion() ? '<div class="sp-version">Headway ' + esc(appVersion()) + '</div>' : '') +
+      (appVersion() ? '<div class="sp-version"><button class="sp-verbtn" data-sp-notes title="What\u2019s new in this version">Headway ' + esc(appVersion()) + '</button></div>' : '') +
       '</div>';
     if (window.lucide) lucide.createIcons();
   }
@@ -9695,20 +11164,106 @@
     return (window.HeadwayDesktop && window.HeadwayDesktop.appVersion) || '';
   }
 
+  // ---- start page update button (desktop only). Mirrors the shared updater
+  // in desktop.js: idle → "Check for updates", busy → "Checking…" /
+  // "Downloading…", ready → a pulsing "Update to x.y.z" that installs.
+  function updater() { return (window.HeadwayDesktop && window.HeadwayDesktop.updater) || null; }
+  function updateButtonHtml() {
+    var u = updater();
+    var st = u ? u.state : 'idle';
+    var label, icon = 'refresh-cw', extra = '';
+    if (st === 'checking') { label = 'Checking…'; extra = ' disabled'; }
+    else if (st === 'downloading') { label = 'Downloading ' + esc(u.version) + '…'; extra = ' disabled'; }
+    else if (st === 'ready') { label = 'Update to ' + esc(u.version); extra = ' class="sp-update-ready"'; icon = 'arrow-down-circle'; }
+    else if (st === 'installing') { label = 'Updating…'; extra = ' disabled'; }
+    else { label = 'Check for updates'; }
+    return '<button data-sp-update title="' + (st === 'ready' ? 'Version ' + esc(u.version) + ' downloaded \u2014 install and restart' : 'Check GitHub for a newer Headway') + '"' + extra + '>' +
+      '<i data-lucide="' + icon + '"></i>' + label + '</button>';
+  }
+  function updateButtonClick() {
+    var u = updater();
+    if (!u) { toast('Updates are only available in the desktop app'); return; }
+    if (u.state === 'ready') u.install();
+    else u.check(true);
+  }
+
+  // ---- release notes: the bundled CHANGELOG.md, one "## <version>" section
+  // per release. Shown once per version after an update (and on first
+  // launch); the version footer reopens it any time.
+  var NOTES_SEEN_KEY = 'headway-notes-seen-v1';
+  var changelogText = null; // cached CHANGELOG.md
+  function releaseNotesFor(md, version) {
+    if (!md || !version) return '';
+    var v = String(version).replace(/^v/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var m = String(md).replace(/\r\n?/g, '\n')
+      .match(new RegExp('^## ' + v + '(?=\\s|$)[^\\n]*\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))', 'm'));
+    return m ? m[1].trim() : '';
+  }
+  function loadChangelog() {
+    if (changelogText !== null) return Promise.resolve(changelogText);
+    if (typeof fetch !== 'function') return Promise.resolve('');
+    return fetch('CHANGELOG.md').then(function (r) { return r.ok ? r.text() : ''; })
+      .catch(function () { return ''; })
+      .then(function (t) { changelogText = t || ''; return changelogText; });
+  }
+  function releaseNotesModal(version, notes) {
+    var body = notes
+      ? (window.HeadwayAI && HeadwayAI.md ? HeadwayAI.md(notes) : '<pre>' + esc(notes) + '</pre>')
+      : '<p class="m-hint">No release notes for this version.</p>';
+    openModal(
+      '<div class="modal notes-modal" style="width:520px">' +
+      '<div class="m-head"><h2>What\u2019s new in Headway ' + esc(version) + '</h2><button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
+      '<div class="m-body"><div class="notes-md">' + body + '</div>' +
+      '<div class="m-hint notes-all"><a href="https://github.com/smo-key/headway/releases" target="_blank" rel="noopener">All releases on GitHub</a></div></div>' +
+      '<div class="m-foot"><button data-m="ok" class="primary">Got it</button></div></div>',
+      function (host) {
+        $('[data-m=x]', host).onclick = closeModal;
+        $('[data-m=ok]', host).onclick = closeModal;
+      });
+  }
+  // open the notes for the running version (md: optional preloaded text)
+  function openReleaseNotes(md) {
+    var v = appVersion();
+    if (!v) return;
+    var show = function (text) { releaseNotesModal(v, releaseNotesFor(text, v)); };
+    if (typeof md === 'string') show(md);
+    else loadChangelog().then(show);
+  }
+  // once per version: called by desktop.js when the app version is known
+  function maybeShowReleaseNotes(md) {
+    var v = appVersion();
+    if (!v) return false;
+    var seen = '';
+    try { seen = localStorage.getItem(NOTES_SEEN_KEY) || ''; } catch (e) { /* storage optional */ }
+    if (seen === v) return false;
+    try { localStorage.setItem(NOTES_SEEN_KEY, v); } catch (e) { /* storage optional */ }
+    var go = function (text) {
+      var notes = releaseNotesFor(text, v);
+      if (notes) releaseNotesModal(v, notes); // nothing to say → stay quiet
+    };
+    if (typeof md === 'string') go(md);
+    else loadChangelog().then(go);
+    return true;
+  }
+
   $('#startPage').addEventListener('click', function (e) {
     var drop = e.target.closest('[data-sp-drop]');
     if (drop) { dropRecent(drop.dataset.spDrop); renderStartPage(); return; }
     var open = e.target.closest('[data-sp-open]');
-    if (open) { openRecent(open.dataset.spOpen); return; }
+    if (open) { guardUnsaved(function () { openRecent(open.dataset.spOpen); }); return; }
     if (e.target.closest('[data-sp-continue]')) { enterEditor(); return; }
-    if (e.target.closest('[data-sp-new]')) { newProjectModal(); return; }
+    if (e.target.closest('[data-sp-new]')) { guardUnsaved(newProjectModal); return; }
     if (e.target.closest('[data-sp-opendlg]')) {
-      if (window.HeadwayDesktop) HeadwayDesktop.openDialog();
-      else $('#filePick').click();
+      guardUnsaved(function () {
+        if (window.HeadwayDesktop) HeadwayDesktop.openDialog();
+        else $('#filePick').click();
+      });
       return;
     }
     if (e.target.closest('[data-sp-openbundle]')) { openSharedRoadmap(); return; }
     if (e.target.closest('[data-sp-settings]')) { personalSettingsModal(); return; }
+    if (e.target.closest('[data-sp-update]')) { updateButtonClick(); return; }
+    if (e.target.closest('[data-sp-notes]')) { openReleaseNotes(); return; }
   });
   $('#startPage').addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -9873,26 +11428,90 @@
     if (docKind === 'bundle') flushBundle(); else doSave(false);
   });
 
-  function loadWorkbookBuffer(buf, name, quiet) {
+  // ------------------------------------------------- unsaved-work guard
+  // Anything that would drop the open document — closing the window (the
+  // desktop shell calls this from onCloseRequested), opening or creating
+  // another project — runs through here first. A shared bundle is never
+  // "unsaved" in the xlsx sense: its pending flush is awaited by
+  // beforeClose / closeBundleSession, so the question is never asked there.
+  function unsavedNow() { return docKind !== 'bundle' && sessionEdited && !docSaved; }
+  function guardUnsaved(proceed) {
+    flushPanelEdit(); // typing still in the field counts as an edit too
+    if (!unsavedNow()) { proceed(); return; }
+    // autosave already owns this doc's file: flush the pending write instead
+    // of asking a question the user has answered by turning autosave on
+    if (autoSave && window.HeadwayDesktop && HeadwayDesktop.currentPath()) {
+      clearTimeout(autoSaveTimer);
+      (doSave(false, true) || Promise.resolve()).then(function () {
+        if (docSaved) proceed();
+      });
+      return;
+    }
+    openModal(
+      '<div class="modal" style="width:440px">' +
+      '<div class="m-head"><h2>Unsaved changes</h2></div>' +
+      '<div class="m-body"><div style="font-size:13px;color:var(--ink-2);line-height:1.5">' +
+      '“' + esc(state.meta.title || 'This roadmap') + '” has changes that aren’t saved' +
+      (window.HeadwayDesktop ? ' to a file' : ' to an .xlsx file') + ' yet.</div></div>' +
+      '<div class="m-foot"><button data-m="gdiscard">Don’t save</button>' +
+      '<button data-m="cancel">Cancel</button>' +
+      '<button data-m="gsave" class="primary"><i data-lucide="download"></i>Save</button></div></div>',
+      function (host) {
+        $('[data-m=cancel]', host).onclick = closeModal;
+        $('[data-m=gdiscard]', host).onclick = function () { closeModal(); proceed(); };
+        $('[data-m=gsave]', host).onclick = function () {
+          closeModal();
+          (doSave(false) || Promise.resolve()).then(function () {
+            // a canceled Save dialog leaves the doc unsaved — stay put
+            if (docSaved) proceed();
+          });
+        };
+      });
+  }
+
+  // browser build: the tab is the app — closing it with unsaved work gets the
+  // native "leave site?" question (the desktop shell asks via onCloseRequested)
+  window.addEventListener('beforeunload', function (e) {
+    if (window.__TAURI__ || !unsavedNow()) return;
+    e.preventDefault();
+    e.returnValue = ''; // legacy engines need the assignment to show the prompt
+  });
+
+  // reload = the open file changed on disk underneath us: the DATA updates,
+  // the screen does not — view, prefs, selection, scroll offsets, open
+  // dialogs and the field being edited all stay exactly where they were
+  function loadWorkbookBuffer(buf, name, reload) {
     // an .xlsx is a standalone document, always — and the bundle session ends
     // (pending flush landed, folder left) BEFORE the workbook opens, so the
     // desktop's leave cannot tear down the watcher the xlsx open sets up
     return closeBundleSession().then(function () {
       return RMExcel.importWorkbook(buf);
     }).then(function (r) {
-      if (r.ui) applyUi(r.ui); // the file carries the browser prefs too
-      resumeInfo = null; docKind = 'xlsx'; // …but never a folder to re-link
+      resumeInfo = null; docKind = 'xlsx'; // a workbook never re-links a folder
       // the file's name IS the roadmap's title (minus .xlsx) — a rename on
       // disk or a differing embedded title resolves in the filename's favor
       if (name) r.state.meta.title = titleFromFileName(name);
-      replaceState('open', r.state);
-      docSaved = true; // fresh from disk — matches its file
+      if (reload) {
+        // keep whatever selection still exists in the new document
+        var keepSel = selectedId && RM.itemById(r.state, selectedId) ? selectedId : null;
+        var keepStory = keepSel && selStory && storyById(RM.itemById(r.state, keepSel), selStory) ? selStory : null;
+        var keepMulti = multiSel ? multiSel.filter(function (id) { return !!RM.itemById(r.state, id); }) : null;
+        selectedId = keepSel;
+        selStory = keepStory;
+        reloadingDoc = true;
+        try { adoptState(r.state); } finally { reloadingDoc = false; }
+        if (keepMulti && keepMulti.length > 1) { multiSel = keepMulti; render(); }
+        updateSaveBtn();
+        return;
+      }
+      if (r.ui) applyUi(r.ui); // the file carries the browser prefs too
+      adoptState(r.state); // fresh from disk — matches its file
       updateSaveBtn();
       selectedId = null;
       enterEditor(); // opening a file always lands in the editor
       // a clean tool-state load needs no announcement; parsing a foreign
       // template layout is worth a note
-      if (!quiet && r.source !== 'tool') {
+      if (r.source !== 'tool') {
         toast('Parsed “' + name + '” from the template layout');
       }
     });
@@ -9915,6 +11534,8 @@
     loadBuffer: loadWorkbookBuffer,
     saveFileName: saveFileName,
     save: doSave,
+    unsavedNow: unsavedNow,
+    guardUnsaved: guardUnsaved,
     menuItems: menuItems,
     noteRecent: noteRecent,
     renderStartPage: renderStartPage,
@@ -9929,7 +11550,77 @@
     editingIds: editingIds,
     flushBundle: flushBundle,
     closeBundleSession: closeBundleSession,
-    userId: userId
+    userId: userId,
+    maybeShowReleaseNotes: maybeShowReleaseNotes,
+    openReleaseNotes: openReleaseNotes,
+    openModal: openModal,
+    closeModal: closeModal,
+    openDropdown: openDropdown,
+    openSetup: function (tab) { setupTab = tab; view = 'setup'; saveLocal(); render(); },
+    // hooks for the AI assistant (js/ai.js): reads are clones, every write
+    // goes through commit() so it lands in undo + Version history (as
+    // "<name> · AI")
+    ai: {
+      state: function () { return RM.clone(state); },
+      hasDoc: function () { return !!state && !document.body.classList.contains('start'); },
+      commit: function (label, mutate) {
+        aiActor = true;
+        try { commit(label, mutate); } finally { aiActor = false; }
+      },
+      validation: function () { return validation || RM.validate(state); },
+      userName: userName,
+      ui: function () {
+        var sel = selectedId ? RM.itemById(state, selectedId) : null;
+        return {
+          view: view, selectedNum: sel ? sel.num : null, theme: themePref, snapFeat: snapFeat, snapStory: snapStory,
+          deps: depsMode === 'on', crit: showCrit, cap: showCap, autoOrder: autoOrder,
+          groupWs: groupWs, groupEpic: groupEpic, autoSave: autoSave, detailMode: detailMode,
+          desktop: !!window.HeadwayDesktop, userName: userName()
+        };
+      },
+      setPref: function (key, val) {
+        if (key === 'theme') { if (['system', 'light', 'dark'].indexOf(val) !== -1) setTheme(val); return true; }
+        if (key === 'userName') { setUserName(val); return true; }
+        if (key === 'snapFeat' || key === 'snapStory') { if (SNAP_MODES.indexOf(val) === -1) return false; setSnapMode(key === 'snapStory' ? 'story' : 'feature', val); }
+        else if (key === 'deps') depsMode = val ? 'on' : 'none';
+        else if (key === 'crit') showCrit = !!val;
+        else if (key === 'cap') showCap = !!val;
+        else if (key === 'autoOrder') autoOrder = !!val; // view-only; render() below re-sorts
+        else if (key === 'groupWs') groupWs = !!val;
+        else if (key === 'groupEpic') groupEpic = !!val;
+        else if (key === 'colorBy') { if (RM.COLOR_MODES.indexOf(val) === -1) return false; setColorBy(val); }
+        else if (key === 'autoSave') { autoSave = !!val; if (autoSave) scheduleAutoSave(); }
+        else if (key === 'detailMode') { if (['feature', 'story'].indexOf(val) === -1) return false; detailMode = val; }
+        else return false;
+        saveLocal();
+        render();
+        return true;
+      },
+      setView: function (v) {
+        if (['planning', 'scoping', 'setup', 'budget', 'reports', 'history', 'prio', 'sprints'].indexOf(v) === -1) return false;
+        if (!RM.appEnabled(state, v)) return false; // switched off in Setup → Apps
+        flushPanelEdit();
+        view = v;
+        if (view === 'history') { vhSel = null; vhPick = []; vhTab = null; }
+        saveLocal();
+        render();
+        return true;
+      },
+      selectNum: function (num) {
+        var it = RM.itemByNum(state, num);
+        if (!it) return false;
+        if (view !== 'planning' && view !== 'scoping') { view = 'planning'; saveLocal(); }
+        select(it.id, true);
+        return true;
+      },
+      openSettings: function () {
+        setupTab = 'ai';
+        view = 'setup';
+        saveLocal();
+        render();
+      },
+      toast: toast
+    }
   };
 
   // ------------------------------------------------------------ keyboard
@@ -9949,27 +11640,46 @@
       if (!modalHost.hidden) { closeModal(); return; }
       if (inField) { document.activeElement.blur(); return; }
       if (selectedEdge) { selectedEdge = null; requestAnimationFrame(renderArrows); return; }
+      if (multiSel) { multiSel = null; render(); return; } // collapse to the anchor first
       if (selectedId) { select(null); return; }
-      if (presentMode) { setPresent(false); return; }
       return;
     }
     // on the start page only Escape (above, for its modals) applies
     if (document.body.classList.contains('start')) return;
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f' &&
-        (view === 'planning' || view === 'scoping')) {
+        (view === 'planning' || view === 'scoping' || view === 'prio' || view === 'sprints')) {
       e.preventDefault();
-      var ff = $('#rowFilter');
-      ff.focus(); ff.select();
+      var ff = view === 'prio' ? $('#prFilter') : view === 'sprints' ? $('#spFilter') : $('#rowFilter');
+      if (ff) { ff.focus(); ff.select(); }
       return;
     }
     if (inField) return;
     var mod = e.metaKey || e.ctrlKey;
+    // [ and ] fold the left pane / the right panel (never while typing — above)
+    if (!mod && !e.altKey && e.key === ']' && (view === 'planning' || view === 'scoping')) {
+      e.preventDefault(); togglePanel(); return;
+    }
+    if (!mod && !e.altKey && e.key === '[' && (view === 'planning' || view === 'scoping' || view === 'budget')) {
+      e.preventDefault(); toggleLeftPane(); return;
+    }
     if (mod && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       if (e.shiftKey) redo(); else undo();
       return;
     }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+    if (mod && e.key.toLowerCase() === 'a' && (view === 'planning' || view === 'scoping')) {
+      e.preventDefault();
+      var all = $$('#rows .row.item').map(function (r) { return r.dataset.id; });
+      if (all.length) {
+        flushPanelEdit();
+        if (!selectedId || all.indexOf(selectedId) === -1) selectedId = all[0];
+        multiSel = all;
+        selStory = null;
+        render();
+      }
+      return;
+    }
     if (mod && e.key.toLowerCase() === 's') {
       e.preventDefault(); $('#btnSave').click(); return;
     }
@@ -9980,6 +11690,17 @@
     }
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
       e.preventDefault();
+      var del = selIds();
+      if (del.length > 1) {
+        confirmBox('Delete ' + del.length + ' items?', 'Every selected item is removed.', 'Delete', function () {
+          commit('delete', function (s) {
+            s.items = s.items.filter(function (x) { return del.indexOf(x.id) === -1; });
+            selectedId = null;
+            multiSel = null;
+          });
+        }, true);
+        return;
+      }
       var it = RM.itemById(state, selectedId);
       if (it) {
         confirmBox('Delete #' + it.num + '?', esc(it.feature), 'Delete', function () {
@@ -9992,15 +11713,20 @@
       return;
     }
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && selectedId) {
-      var it2 = RM.itemById(state, selectedId);
-      if (it2 && isScheduled(it2) && !it2.locked) {
+      var nudgeIds = selIds().filter(function (id) {
+        var t = RM.itemById(state, id);
+        return t && isScheduled(t) && !t.locked;
+      });
+      if (nudgeIds.length) {
         e.preventDefault();
         var delta = (e.key === 'ArrowRight' ? 1 : -1) * (e.shiftKey ? 5 : 1);
         commit('nudge', function (s) {
-          var t = RM.itemById(s, selectedId);
-          var ns2 = Math.max(0, t.startDay + delta);
-          RM.shiftStories(t, ns2 - t.startDay);
-          t.startDay = ns2;
+          nudgeIds.forEach(function (id) {
+            var t = RM.itemById(s, id);
+            var ns2 = Math.max(0, t.startDay + delta);
+            RM.shiftStories(t, ns2 - t.startDay);
+            t.startDay = ns2;
+          });
         });
       }
     }
@@ -10018,20 +11744,6 @@
   });
 
   window.addEventListener('resize', function () { requestAnimationFrame(renderArrows); });
-
-  // timeline-only preview: hides the topbar and the frozen left pane; the
-  // floating minimize button (or Esc) restores the full UI
-  function setPresent(on) {
-    presentMode = on;
-    var pb = $('#btnPresent');
-    if (pb) {
-      pb.innerHTML = '<i data-lucide="' + (on ? 'minimize-2' : 'maximize-2') + '"></i>';
-      pb.title = on ? 'Exit expand (Esc)' : 'Expand \u2014 timeline-only view';
-      if (window.lucide) lucide.createIcons();
-    }
-    render();
-  }
-  $('#btnPresent').addEventListener('click', function () { setPresent(!presentMode); });
 
   // ------------------------------------------------------------ png export
   function exportModal() {
@@ -10074,9 +11786,11 @@
       '<button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
       '<div class="m-body">' +
       '<div class="m-sec"><label>Format</label><div class="p-row">' +
-      '<label class="p-check"><input type="radio" name="exFmt" id="exFmtPng"' + ck(pref.fmt !== 'pptx') + '> PNG image</label>' +
+      '<label class="p-check"><input type="radio" name="exFmt" id="exFmtPng"' + ck(pref.fmt !== 'pptx' && pref.fmt !== 'jira') + '> PNG image</label>' +
       '<label class="p-check"><input type="radio" name="exFmt" id="exFmtPptx"' + ck(pref.fmt === 'pptx') + '> PowerPoint (editable)</label>' +
+      '<label class="p-check"><input type="radio" name="exFmt" id="exFmtJira"' + ck(pref.fmt === 'jira') + '> Jira CSV</label>' +
       '</div></div>' +
+      '<div id="exTimeline"' + (pref.fmt === 'jira' ? ' hidden' : '') + '>' +
       '<div class="m-sec"><label>Date range</label><div class="p-grid2">' +
       '<div><label class="p-lab">From</label><select id="exFrom" style="width:100%">' + sprOpts(sprints[0].num) + '</select></div>' +
       '<div><label class="p-lab">To</label><select id="exTo" style="width:100%">' + sprOpts(sprints[sprints.length - 1].num) + '</select></div>' +
@@ -10105,6 +11819,8 @@
       '<label class="p-check"><input type="checkbox" id="exArrows"' + ck(pref.arrows) + '> Dependency arrows</label>' +
       '</div><div class="m-hint">The exported dates are bounded by the range AND the filtered bars — empty weeks at either end are trimmed.</div></div>' +
       '</div>' +
+      '<div id="exJira"' + (pref.fmt === 'jira' ? '' : ' hidden') + '>' + jiraOptionsHtml() + '</div>' +
+      '</div>' +
       '<div class="m-foot"><button data-m="cancel">Cancel</button>' +
       '<button id="exGo" class="primary"><i data-lucide="image"></i>Export</button></div></div>',
       function (host) {
@@ -10116,16 +11832,31 @@
         if (splitWsChk && groupWsChk) splitWsChk.addEventListener('change', function () {
           groupWsChk.disabled = splitWsChk.checked;
         });
-        // pixel scale only means something for the PNG raster
-        ['exFmtPng', 'exFmtPptx'].forEach(function (id) {
-          $('#' + id, host).addEventListener('change', function () {
-            $('#exScale', host).disabled = $('#exFmtPptx', host).checked;
-          });
+        // pixel scale only means something for the PNG raster; the Jira CSV
+        // has its own options and none of the timeline ones
+        function syncFmt() {
+          var jira = $('#exFmtJira', host).checked;
+          $('#exTimeline', host).hidden = jira;
+          $('#exJira', host).hidden = !jira;
+          $('#exScale', host).disabled = $('#exFmtPptx', host).checked;
+        }
+        ['exFmtPng', 'exFmtPptx', 'exFmtJira'].forEach(function (id) {
+          $('#' + id, host).addEventListener('change', syncFmt);
         });
         // restored settings get the same dependent-control states
         if (groupWsChk && splitWsChk) groupWsChk.disabled = splitWsChk.checked;
-        $('#exScale', host).disabled = $('#exFmtPptx', host).checked;
+        syncFmt();
         $('#exGo', host).onclick = function () {
+          if ($('#exFmtJira', host).checked) {
+            var jo = jiraOptionsOf(host);
+            if (!jo) return;
+            jiraPrefs = jo;
+            exportPrefs = Object.assign({}, exportPrefs || {}, { fmt: 'jira' });
+            saveLocal();
+            closeModal();
+            exportJiraTo(jo);
+            return;
+          }
           var exOpts = {
             fromSprint: parseInt($('#exFrom', host).value, 10),
             toSprint: parseInt($('#exTo', host).value, 10),
@@ -10155,11 +11886,50 @@
   }
   $('#btnExport').addEventListener('click', exportModal);
 
+  // Jira CSV: a file for Jira Cloud's user-level importer (work navigator →
+  // Import issues from CSV). Rows parent to the Jira keys typed into
+  // Headway; see export-jira.js. Lives in the Export dialog as a format.
+  function jiraOptionsHtml() {
+    var pref = jiraPrefs || {};
+    var d = RM_JIRA.DEFAULTS;
+    function ck(on) { return on ? ' checked' : ''; }
+    return '<div class="m-sec"><label>Rows</label><div class="p-row">' +
+      '<label class="p-check"><input type="checkbox" id="jxFeatures"' + ck(pref.features != null ? pref.features : d.features) + '> Features</label>' +
+      '<label class="p-check"><input type="checkbox" id="jxStories"' + ck(pref.stories != null ? pref.stories : d.stories) + '> Stories</label>' +
+      '</div><div class="m-hint">Without story rows, a feature’s stories become a checklist in its description.</div></div>' +
+      '<div class="m-sec"><label>Issue types</label><div class="p-grid2">' +
+      '<div><label class="p-lab">Features</label><input id="jxFeatureType" style="width:100%" value="' + esc(pref.featureType || d.featureType) + '"></div>' +
+      '<div><label class="p-lab">Stories</label><input id="jxStoryType" style="width:100%" value="' + esc(pref.storyType || d.storyType) + '"></div>' +
+      '</div><div class="m-hint">Sub-task rows need a parent: give each feature its Jira key first, or use a normal type.</div></div>' +
+      '<div class="m-sec"><label>In Jira</label><div class="m-hint">' +
+      'Work navigator → ⋯ → Import issues from CSV (needs the Create work items and Make bulk changes permissions). ' +
+      'Choose the date format <b>yyyy-MM-dd</b>. Parent and Blocked By carry the Jira keys entered in Headway; ' +
+      'rows with a Jira Key column value can be mapped as updates.</div></div>';
+  }
+  // reads the Jira options out of the dialog; false when nothing is selected
+  function jiraOptionsOf(host) {
+    var opts = {
+      features: $('#jxFeatures', host).checked,
+      stories: $('#jxStories', host).checked,
+      featureType: $('#jxFeatureType', host).value.trim(),
+      storyType: $('#jxStoryType', host).value.trim()
+    };
+    if (!opts.features && !opts.stories) { toast('Pick features, stories or both'); return false; }
+    return opts;
+  }
+  function exportJiraTo(opts) {
+    var csv = RM_JIRA.csv(state, opts);
+    saveExport({ blob: new Blob([csv], { type: 'text/csv' }), name: safeName(RM_JIRA.fileName(state)) }, CSV_KIND);
+  }
+  var CSV_KIND = { desc: 'CSV file', mime: 'text/csv', ext: 'csv' };
+  var exportSink = null; // tests intercept exports here instead of the save path
+
   // Where an exported file lands: desktop asks for a destination via the
   // native save dialog and OPENS the file afterwards; browsers with a
   // save-file picker let the user choose the folder; anything else falls
   // back to a download. `kind` = { desc, mime, ext }.
   function saveExport(r, kind) {
+    if (exportSink) return Promise.resolve(exportSink(r, kind));
     if (window.HeadwayDesktop && window.HeadwayDesktop.saveFileAndOpen) {
       return window.HeadwayDesktop.saveFileAndOpen(r.blob, r.name, kind.desc, kind.ext).then(function (p) {
         if (p) toast('Exported ' + p.replace(/^.*[\\/]/, ''));
@@ -10276,6 +12046,10 @@
         pendingHistory: pendingHistory.length, renderCount: renderCount, userId: readUser().id || null,
         flushing: flushing, planGone: planGone, deferred: deferredExternal.length,
         localAt: RM.clone(localAt), lastEnv: RM.clone(lastEnv) };
-    }
+    },
+    releaseNotesFor: releaseNotesFor,
+    maybeShowReleaseNotes: maybeShowReleaseNotes,
+    openReleaseNotes: openReleaseNotes,
+    setExportSink: function (fn) { exportSink = typeof fn === 'function' ? fn : null; }
   };
 })();

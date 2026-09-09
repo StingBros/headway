@@ -118,7 +118,8 @@
             w: Math.max(6, (e - s) * dpx),
             color: '#' + RM.colorForItem(state, it),
             done: !!it.done,
-            ms: !!it.milestone
+            ms: !!it.milestone,
+            msStyle: RM.msStyleOf(it)
           }
         });
         y += ROW_H;
@@ -196,24 +197,15 @@
     // colors), default workstream last. Entry positions are precomputed with
     // an approximate glyph width so both renderers lay them out identically.
     var legend = [];
-    if (meta.workstreamsEnabled !== false) {
-      var seenWs = {}, wsOrder = [];
-      visPhases.forEach(function (v) {
-        v.items.forEach(function (it) {
-          var k = it.workstream || '';
-          if (!seenWs[k]) { seenWs[k] = true; wsOrder.push(k); }
-        });
-      });
-      if (wsOrder.indexOf('') !== -1) {
-        wsOrder = wsOrder.filter(function (k) { return k !== ''; }).concat(['']);
-      }
+    if (meta.workstreamsEnabled !== false || RM.colorMode() !== 'workstream') {
+      var legItems = [];
+      visPhases.forEach(function (v) { v.items.forEach(function (it) { legItems.push(it); }); });
       var width = LEFT_W + (w1 - w0) * weekPx;
       var lx = 10, ly = y + 8, LG_H = 18;
-      wsOrder.forEach(function (k) {
-        var name = k || RM.defaultWsName(state);
-        var w = 16 + name.length * 6.2 + 18; // swatch + gap + name + spacing
+      RM.colorLegend(state, legItems).forEach(function (e) {
+        var w = 16 + e.name.length * 6.2 + 18; // swatch + gap + name + spacing
         if (lx > 10 && lx + w > width - 10) { lx = 10; ly += LG_H; }
-        legend.push({ name: name, color: RM.colorForWs(state, k), x: lx, y: ly, h: LG_H });
+        legend.push({ name: e.name, color: e.color, x: lx, y: ly, h: LG_H });
         lx += w;
       });
       if (legend.length) y = ly + LG_H;
@@ -384,10 +376,19 @@
         // a diamond on the start day, like the live timeline
         var mcx = b.x + 6, mcy = r.y + r.h / 2, mr = 6.5;
         ctx.beginPath();
-        ctx.moveTo(mcx, mcy - mr);
-        ctx.lineTo(mcx + mr, mcy);
-        ctx.lineTo(mcx, mcy + mr);
-        ctx.lineTo(mcx - mr, mcy);
+        if (b.msStyle === 'circle') {
+          ctx.arc(mcx, mcy, mr, 0, Math.PI * 2);
+        } else if (b.msStyle === 'star') {
+          for (var sp = 0; sp < 10; sp++) {
+            var sr = sp % 2 ? mr * 0.45 : mr * 1.15, sa = -Math.PI / 2 + sp * Math.PI / 5;
+            ctx[sp ? 'lineTo' : 'moveTo'](mcx + Math.cos(sa) * sr, mcy + Math.sin(sa) * sr);
+          }
+        } else {
+          ctx.moveTo(mcx, mcy - mr);
+          ctx.lineTo(mcx + mr, mcy);
+          ctx.lineTo(mcx, mcy + mr);
+          ctx.lineTo(mcx - mr, mcy);
+        }
         ctx.closePath();
         ctx.fill();
         ctx.globalAlpha = 1;

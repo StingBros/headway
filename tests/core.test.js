@@ -489,8 +489,8 @@ var sOffMig = RM.normalizeState({
 });
 eq(sOffMig.team[0].weekHours['2026-08-03'], 0, 'offWeeks -> 0-hour week');
 ok(RM.memberOffWeek(sOffMig.meta, sOffMig.team[0], 1), 'memberOffWeek still answers via hours');
-// items default to 1 × Development
-eq(mkState([{ num: 1, feature: 'x' }]).items[0].teamType, 'Development', 'default work type');
+// items default to 1 × any role (empty) — a removed role leaves nothing behind
+eq(mkState([{ num: 1, feature: 'x' }]).items[0].teamType, '', 'default work type is none');
 
 // capacity factor: PE at 40h scales availability
 var sCf = mkState([], { team: [{ name: 'Half', type: 'Development', capacity: 0.5 }] });
@@ -529,11 +529,14 @@ eq(sEd2.meta.endDate, '2026-10-16', 'endDate normalizes to that week\'s Friday')
 section('scope columns');
 var sSc = mkState([{ num: 1, feature: 'a' }]);
 eq(sSc.meta.scopeCols.map(function (c) { return c.key; }),
-  ['description'], 'new documents start with Description only');
+  ['description', 'ac'], 'new documents start with Description and Acceptance criteria');
 // legacy docs without a saved column list surface built-ins that hold content
 var sScLegacy = mkState([{ num: 1, feature: 'a', enables: 'x', notes: 'y' }]);
 eq(sScLegacy.meta.scopeCols.map(function (c) { return c.key; }),
-  ['description', 'enables', 'notes'], 'legacy content infers its columns');
+  ['description', 'ac', 'enables', 'notes'], 'legacy content infers its columns');
+eq(sSc.meta.scopeCols[1].scope, 'story', 'Acceptance criteria defaults to stories only');
+eq(sSc.meta.scopeColOrder.indexOf('ac'), sSc.meta.scopeColOrder.indexOf('description') + 1, 'Acceptance criteria orders right after Description');
+RM.removeScopeCol(sSc, 'ac');
 var ck = RM.addScopeCol(sSc, 'Owner');
 eq(sSc.meta.scopeCols.length, 2, 'custom column appended');
 eq(RM.scopeColLabel(sSc.meta.scopeCols[1]), 'Owner', 'custom label kept');
@@ -562,7 +565,73 @@ eq(RM.scopeColLabel(sSc2.meta.scopeCols[0]), 'Field notes', 'built-in rename sur
 RM.renameScopeCol(sSc, 'notes', '');
 eq(RM.scopeColLabel(sSc.meta.scopeCols[0]), 'Notes', 'clearing a rename restores the canonical name');
 RM.setScopeValue(sSc.items[0], 'x9', 'keep');
+// a saved doc keeps its column list: removing Acceptance criteria sticks
+var sScNoAc = RM.normalizeState(RM.normalizeState(sSc));
+ok(!sScNoAc.meta.scopeCols.some(function (c) { return c.key === 'ac'; }), 'a removed Acceptance criteria column stays removed on reload');
+// pre-migration docs with a custom "Acceptance Criteria" column hand it over to the built-in
+var sAcMig = RM.normalizeState({
+  meta: { timelineStart: '2026-07-27', scopeCols: [{ key: 'description' }, { key: 'cx', label: 'Acceptance Criteria', scope: 'story' }, { key: 'notes' }],
+    scopeColOrder: ['description', 'notes', 'cx', 'epic'] },
+  phases: [{ id: 'p' }],
+  items: [{ num: 1, feature: 'a', custom: { cx: 'feat crit' }, stories: [{ title: 's', custom: { cx: '<ul><li>crit</li></ul>' } }] }]
+});
+eq(sAcMig.meta.scopeCols.map(function (c) { return c.key; }), ['description', 'ac', 'notes'], 'custom Acceptance Criteria column becomes the built-in in place');
+eq(sAcMig.meta.scopeCols[1].scope, 'story', 'migrated column keeps its scope');
+eq(sAcMig.meta.scopeColOrder.indexOf('ac'), sAcMig.meta.scopeColOrder.indexOf('notes') + 1, 'migrated column keeps its position');
+eq(sAcMig.items[0].stories[0].ac, '<ul><li>crit</li></ul>', 'story values move to story.ac');
+eq(sAcMig.items[0].stories[0].custom.cx, undefined, 'old custom story value removed');
+eq(sAcMig.items[0].ac, 'feat crit', 'feature values move to item.ac');
+eq(RM.storyScopeValue(sAcMig.items[0].stories[0], 'ac'), '<ul><li>crit</li></ul>', 'storyScopeValue reads ac as a story field');
+RM.setStoryScopeValue(sAcMig.items[0].stories[0], 'notes', 'n');
+eq(sAcMig.items[0].stories[0].custom.notes, 'n', 'other columns land in story.custom');
+// a doc saved before the built-in existed gets it after Description, stories only
+var sAcNew = RM.normalizeState({ meta: { timelineStart: '2026-07-27', scopeCols: [{ key: 'notes' }, { key: 'description' }], scopeColOrder: ['notes', 'description', 'epic'] }, phases: [{ id: 'p' }], items: [] });
+eq(sAcNew.meta.scopeCols.map(function (c) { return c.key; }), ['notes', 'description', 'ac'], 'existing docs gain Acceptance criteria after Description');
+eq(sAcNew.meta.scopeColOrder.slice(0, 3), ['notes', 'description', 'ac'], 'saved column order slots it after Description');
+RM.setScopeColScope(sAcNew, 'ac', 'both');
+eq(RM.normalizeState(sAcNew).meta.scopeCols[2].scope, 'both', 'choosing both for Acceptance criteria survives reload');
+ok(RM.scopeColShows({ key: 'ac', scope: 'both' }, 'feature'), 'an explicit both shows on features');
 eq(RM.normalizeState(sSc).items[0].custom.x9, 'keep', 'custom values survive normalize');
+
+// ------------------------------------------------------------- column scope
+section('column scope');
+var sCol = mkState([{ num: 1, feature: 'a' }]);
+RM.removeScopeCol(sCol, 'ac');
+RM.addScopeCol(sCol, null, 'notes');
+RM.addScopeCol(sCol, null, 'enables');
+sCol.meta.scopeCols[0].scope = 'story';
+sCol.meta.scopeCols[1].scope = 'bogus';
+var sCol2 = RM.normalizeState(sCol);
+eq(sCol2.meta.scopeCols[0].scope, 'story', 'a column scope survives normalize');
+eq(sCol2.meta.scopeCols[1].scope, undefined, 'an unknown scope drops back to both');
+eq(sCol2.meta.scopeCols[2].scope, undefined, 'missing scope stays absent (both)');
+eq(RM.scopeColShows({ key: 'x' }, 'feature'), true, 'no scope shows on features');
+eq(RM.scopeColShows({ key: 'x' }, 'story'), true, 'no scope shows on stories');
+eq(RM.scopeColShows({ key: 'x', scope: 'story' }, 'feature'), false, 'story-only hides on features');
+eq(RM.scopeColShows({ key: 'x', scope: 'story' }, 'story'), true, 'story-only shows on stories');
+eq(RM.scopeColShows({ key: 'x', scope: 'feature' }, 'story'), false, 'feature-only hides on stories');
+RM.setScopeColScope(sCol2, 'notes', 'feature');
+eq(sCol2.meta.scopeCols[1].scope, 'feature', 'setScopeColScope stores the scope');
+RM.setScopeColScope(sCol2, 'notes', 'both');
+eq(sCol2.meta.scopeCols[1].scope, undefined, 'both clears the scope');
+RM.setScopeColScope(sCol2, 'notes', 'nope');
+eq(sCol2.meta.scopeCols[1].scope, undefined, 'an unknown scope is ignored');
+
+// ------------------------------------------------------------- milestone styles
+section('milestone styles');
+eq(RM.MS_STYLES, ['diamond', 'star', 'circle'], 'three milestone styles');
+var sSty = mkState([
+  { num: 1, feature: 'star', milestone: true, startDay: 0, durDays: 0, msStyle: 'star' },
+  { num: 2, feature: 'odd', milestone: true, startDay: 0, durDays: 0, msStyle: 'hexagon' },
+  { num: 3, feature: 'plain', milestone: true, startDay: 0, durDays: 0 },
+  { num: 4, feature: 'bar', startDay: 0, durDays: 5, msStyle: 'circle' }
+]);
+eq(sSty.items[0].msStyle, 'star', 'star style survives normalize');
+eq(sSty.items[1].msStyle, undefined, 'an unknown style is dropped');
+eq(sSty.items[2].msStyle, undefined, 'no style stays absent');
+eq(sSty.items[3].msStyle, 'circle', 'a bar remembers its style for when it becomes a milestone');
+eq(RM.msStyleOf(sSty.items[0]), 'star', 'msStyleOf reads the style');
+eq(RM.msStyleOf(sSty.items[2]), 'diamond', 'msStyleOf defaults to diamond');
 
 // ------------------------------------------------------------- milestones
 section('milestones');
@@ -1174,6 +1243,17 @@ if (!ExcelJS) {
 }
 
 function finish() {
+section('apps switch');
+{
+  var ap = RM.normalizeState({ meta: { title: 'A', timelineStart: '2026-07-27', numWeeks: 8 }, phases: [], items: [] });
+  ok(RM.APPS.every(function (a) { return ap.meta.apps[a[0]] === true; }), 'a fresh document has every app on');
+  var ap2 = RM.normalizeState({ meta: { title: 'A', timelineStart: '2026-07-27', numWeeks: 8, apps: { scoping: false, planning: false, bogus: false } }, phases: [], items: [] });
+  eq([ap2.meta.apps.scoping, ap2.meta.apps.planning, ap2.meta.apps.prio, 'bogus' in ap2.meta.apps], [false, true, true, false],
+    'off flags stick, Planning is forced on, unknown keys drop');
+  eq([RM.appEnabled(ap2, 'scoping'), RM.appEnabled(ap2, 'planning'), RM.appEnabled(ap2, 'setup'), RM.appEnabled(ap2, 'history')], [false, true, true, true],
+    'appEnabled: off app, forced Planning, and non-apps always reachable');
+}
+
   console.log('\n' + passed + ' passed, ' + failed + ' failed' + (skipped ? ', ' + skipped + ' skipped' : ''));
   process.exit(failed ? 1 : 0);
 }
@@ -1196,6 +1276,15 @@ RM.setPriorityScheme(sPr, 'moscow');
 eq(RM.priorityOrderOf(sPr).join(''), 'MSCW', 'MoSCoW priority options');
 RM.setPriorityScheme(sPr, 'levels');
 eq(RM.priorityOrderOf(sPr).join(''), 'CHML', 'Critical/High/Medium/Low options');
+// every value maps to a color tier: critical red, high orange, medium green, low gray
+eq(['C', 'H', 'M', 'L'].map(function (v) { return RM.priorityTier(sPr, v); }).join(' '), 'crit high med low', 'levels ladder tiers');
+eq(RM.priorityTier(sPr, null), null, 'no value has no tier');
+eq(RM.priorityTier(sPr, 'W'), null, 'a value outside the scheme has no tier');
+RM.setPriorityScheme(sPr, 'moscow');
+eq(['M', 'S', 'C', 'W'].map(function (v) { return RM.priorityTier(sPr, v); }).join(' '), 'crit high med low', 'MoSCoW ladder tiers');
+sPr.items[0].priority = 'M';
+eq(RM.colorForPriority(sPr, sPr.items[0]), RM.PRIORITY_RAMP[0], 'Must paints the hottest ramp color');
+eq(RM.PRIORITY_RAMP.length, 4, 'four ramp colors, one per tier');
 // a doc saved when MoSCoW lived under Risk migrates its values across
 var sPrMig = RM.normalizeState({
   meta: { timelineStart: '2026-07-27', numWeeks: 8, riskScheme: 'moscow', holidaysV2026: true },
@@ -1668,13 +1757,16 @@ eq(impPlan.items.add.length, 1, 'the workbook item is an add');
 ok(impPlan.items.add[0].phaseId !== 'ph1', 'and it lands in the NEW phase, not the unrelated ph1 (' + impPlan.items.add[0].phaseId + ')');
 var impSame = RM.planImport(impHave, RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'ph1', name: 'MVP' }], items: [] }));
 eq(impSame.phases.add.length, 0, 'same id AND same name pairs by name');
-// teamType is always defaulted by normalizeState, so differing defaults are not a conflict
+// teamType is not an import field: an unset role is '' (= any role) on both
+// sides, and an explicit role in the workbook must never overwrite the
+// shared roadmap's choice — neither counts as a conflict
 var ttHave = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1' }], teamTypes: ['Development', 'Data'],
   items: [{ id: 'iTt000001-1-ccccc', num: 3, feature: 'Same', phaseId: 'p1' }] });
 var ttWant = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1' }], teamTypes: ['Data', 'Development'],
-  items: [{ id: 'iTt000001-1-ccccc', num: 3, feature: 'Same', phaseId: 'p1' }] });
-ok(ttHave.items[0].teamType !== ttWant.items[0].teamType, 'precondition: the two documents default teamType differently');
-eq(RM.planImport(ttHave, ttWant).items.conflicts, 0, 'a defaulted teamType difference is not counted as a conflict');
+  items: [{ id: 'iTt000001-1-ccccc', num: 3, feature: 'Same', phaseId: 'p1', teamType: 'Data' }] });
+eq(ttHave.items[0].teamType, '', 'precondition: an unset role normalizes to "" (any role)');
+eq(RM.planImport(ttHave, ttWant).items.conflicts, 0, 'a teamType difference is not counted as a conflict');
+eq(RM.planImport(ttHave, ttWant).items.fill.length, 0, 'and the workbook role is not filled in either');
 // the shared roadmap: three features in two phases, one story, one teammate
 var sImpBase = mkState([
   { id: 'iA', num: 1, feature: 'Alpha feature', phaseId: 'p1', notes: 'kept notes', enables: '', stories: [{ id: 'sA1', title: 'Story one', description: '' }] },
@@ -1790,3 +1882,123 @@ var planDeps = RM.planImport(sDeps, mkState([
 var fDeps = planDeps.items.fill.filter(function (f) { return f.id === 'q2'; })[0];
 eq(fDeps && fDeps.fields.deps, ['q1'], 'empty dep list filled with the resolvable dep');
 eq(fDeps && fDeps.fields.depsText, ['#77'], 'the unresolvable numbered dep lands in depsText');
+// ------------------------------------------------------------- jira keys
+section('jira keys');
+var sJk = mkState([{ num: 1, feature: 'a', epic: 'Login', jiraKey: ' hw-12 ',
+  stories: [{ title: 's', jiraKey: 'HW-13' }, { title: 't', jiraKey: 42 }] }],
+  { epicJira: { Login: 'HW-1', Stale: '', Junk: 7 } });
+eq(sJk.items[0].jiraKey, 'HW-12', 'item jira key trimmed and uppercased');
+eq(sJk.items[0].stories[0].jiraKey, 'HW-13', 'story jira key kept');
+eq(sJk.items[0].stories[1].jiraKey, null, 'non-string story jira key dropped');
+eq(sJk.epicJira, { Login: 'HW-1' }, 'epicJira keeps only non-empty string keys');
+var sJk2 = mkState([{ num: 1, feature: 'a' }]);
+eq(sJk2.items[0].jiraKey, null, 'item jira key defaults to null');
+eq(sJk2.epicJira, {}, 'epicJira defaults to an empty map');
+
+// ------------------------------------------------------------- jira csv export
+section('jira csv export');
+// ------------------------------------------------------------ sprint moves
+section('sprint moves');
+{
+  var sSp = mkState([
+    { id: 'a', num: 1, phaseId: 'p1', feature: 'A', size: 'M', startDay: 0, durDays: 5,
+      stories: [{ id: 'a1', title: 's1', startDay: 2, durDays: 3 }, { id: 'a2', title: 's2' }] },
+    { id: 'b', num: 2, phaseId: 'p1', feature: 'B', size: 'M', startDay: 0, durDays: 5 },
+    { id: 'c', num: 3, phaseId: 'p1', feature: 'C', size: 'L' },
+    { id: 'd', num: 4, phaseId: 'p2', feature: 'D', size: 'S', startDay: 20, durDays: 3 }
+  ]);
+  eq(RM.sprintStartDay(sSp.meta, 1), 0, 'sprint 1 starts on day 0');
+  eq(RM.sprintStartDay(sSp.meta, 3), 20, 'sprint 3 starts on day 20 (2-week sprints)');
+  eq(RM.sprintStartDay(sSp.meta, -5), 0, 'sprints before the timeline clamp to day 0');
+
+  RM.moveItemToSprint(sSp, 'a', 3, null);
+  var a = RM.itemById(sSp, 'a');
+  eq(a.startDay, 20, 'moving to sprint 3 lands the item on its first day');
+  eq(a.durDays, 5, 'the duration is kept');
+  eq(a.stories[0].startDay, 22, 'stories with a timeline ride along by the same delta');
+  ok(a.stories[1].startDay == null, 'stories without a timeline stay put');
+  eq(sSp.items.map(function (x) { return x.id; }), ['b', 'c', 'a', 'd'], 'no before-item: it moves to the end of its phase');
+
+  RM.moveItemToSprint(sSp, 'c', 2, 'a');
+  var c = RM.itemById(sSp, 'c');
+  eq(c.startDay, 10, 'an unscheduled item dropped in sprint 2 gets that start');
+  eq(c.durDays, RM.stretchSpan(sSp.meta, 10, RM.effortDays(sSp, c)), 'and a span from its size');
+  eq(sSp.items.map(function (x) { return x.id; }), ['b', 'c', 'a', 'd'], 'reordered before the given item');
+
+  RM.moveItemToSprint(sSp, 'b', 1, 'd');
+  var b = RM.itemById(sSp, 'b');
+  eq(b.phaseId, 'p2', 'dropping before an item in another phase adopts that phase');
+  eq(sSp.items.map(function (x) { return x.id; }), ['c', 'a', 'b', 'd'], 'and sits right before it');
+  eq(b.startDay, 0, 'same sprint: the start does not change');
+
+  RM.moveItemToSprint(sSp, 'd', null, null);
+  var d = RM.itemById(sSp, 'd');
+  ok(d.startDay == null && d.durDays == null, 'dropping on Unscheduled clears the timeline');
+
+  ok(RM.reorderItem(sSp, 'a', 'a') === false, 'reordering before itself is a no-op');
+  a.holdPos = true;
+  RM.reorderItem(sSp, 'a', 'c');
+  ok(!a.holdPos, 'a manual reorder clears holdPos');
+  eq(sSp.items.map(function (x) { return x.id; }), ['a', 'c', 'b', 'd'], 'reorder before another item');
+
+  RM.moveStoryToSprint(sSp, 'a', 'a2', 2, 'a1');
+  eq(a.stories.map(function (x) { return x.id; }), ['a2', 'a1'], 'story reorders before its sibling');
+  eq(a.stories[0].startDay, 10, 'story lands on the sprint start');
+  eq(a.stories[0].durDays, RM.sprintDays(sSp.meta), 'a story without a span gets one sprint');
+  RM.moveStoryToSprint(sSp, 'a', 'a2', null, null);
+  ok(a.stories[1].id === 'a2' && a.stories[1].startDay == null && a.stories[1].durDays == null,
+    'unscheduling a story clears its timeline and moves it last');
+}
+
+var RMJira = require('../js/export-jira.js');
+var sJc = mkState([
+  { num: 1, feature: 'Login page', epic: 'Login', workstream: 'Product', size: 'M',
+    startDay: 0, durDays: 5, deadline: '2026-09-04', jiraKey: 'HW-12',
+    description: '<p>Hi <b>there</b></p>', enables: 'Checkout', notes: '',
+    stories: [{ title: 's1', done: true }, { title: 's2', jiraKey: 'HW-13' }] },
+  { num: 2, feature: 'Search, "fast"', deps: [1], phaseId: 'p2' },
+  { num: 3, feature: 'Orphan', deps: [2] }
+], { epicJira: { Login: 'HW-1' } });
+eq(RMJira.fileName(sJc), 'T-jira.csv', 'jira csv filename');
+var jr = RMJira.rows(sJc, { features: true, stories: false });
+eq(jr.length, 3, 'features only: one row per feature');
+var r1 = jr[0];
+eq(r1['Summary'], 'Login page', 'summary is the feature name');
+eq(r1['Issue Type'], 'Story', 'feature issue type defaults to Story');
+eq(r1['Parent'], 'HW-1', 'parent is the epic jira key');
+eq(r1['Labels'], 'ws-product phase-alpha size-m', 'labels are slugged workstream, phase and size');
+eq(r1['Due Date'], '2026-09-04', 'due date is the deadline');
+eq(r1['Start Date'], '2026-07-27', 'start date from the schedule');
+eq(r1['End Date'], '2026-07-31', 'inclusive end date from the schedule');
+eq(r1['Jira Key'], 'HW-12', 'jira key column carries the existing key');
+ok(r1['Description'].indexOf('Hi there') === 0, 'description leads with the plain-text description');
+ok(r1['Description'].indexOf('[x] s1') !== -1 && r1['Description'].indexOf('[ ] s2') !== -1,
+  'stories render as a checklist when not exported as rows');
+ok(r1['Description'].indexOf('Enables:\nCheckout') !== -1, 'non-empty scope fields become sections');
+ok(r1['Description'].indexOf('Notes') === -1, 'empty scope fields are skipped');
+var r2 = jr[1];
+eq(r2['Parent'], '', 'no epic key: parent blank');
+eq(r2['Labels'], 'phase-next', 'no workstream or size: only the phase label');
+eq(r2['Blocked By'], 'HW-12', 'dependencies with keys list the key');
+eq(r2['Start Date'], '', 'unscheduled: blank dates');
+eq(jr[2]['Blocked By'], '', 'dependencies without keys are left out');
+
+var jrs = RMJira.rows(sJc, { features: true, stories: true, featureType: 'Task', storyType: 'Sub-task' });
+eq(jrs.length, 5, 'features and stories: a row per story too');
+eq(jrs[0]['Issue Type'], 'Task', 'custom feature issue type');
+ok(jrs[0]['Description'].indexOf('[x]') === -1, 'checklist omitted when stories are rows');
+eq(jrs[1]['Summary'], 's1', 'story row summary');
+eq(jrs[1]['Issue Type'], 'Sub-task', 'story issue type');
+eq(jrs[1]['Parent'], 'HW-12', 'story parents to the feature key');
+eq(jrs[1]['Labels'], 'feature-login-page ws-product phase-alpha', 'story labels name the feature');
+eq(jrs[2]['Jira Key'], 'HW-13', 'story jira key');
+var jro = RMJira.rows(sJc, { features: false, stories: true });
+eq(jro.length, 2, 'stories only');
+
+var csv = RMJira.csv(sJc, { features: true, stories: false });
+ok(csv.charCodeAt(0) === 0xFEFF, 'csv starts with a UTF-8 BOM');
+var lines = csv.slice(1).split('\r\n');
+eq(lines[0], 'Summary,Issue Type,Description,Parent,Labels,Priority,Due Date,Start Date,End Date,Blocked By,Jira Key', 'header row');
+ok(lines.some(function (l) { return l.indexOf('"Search, ""fast"""') === 0; }), 'commas and quotes are escaped');
+ok(/"Hi there\n/.test(csv), 'newlines stay inside a quoted cell');
+eq(RMJira.csv(mkState([]), { features: true }).slice(1).split('\r\n').length, 2, 'empty doc: header plus trailing newline');

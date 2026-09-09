@@ -154,7 +154,7 @@
           reloading = false;
           return;
         }
-        return app().loadBuffer(bytes.buffer, basename(p), true).then(function () {
+        return app().loadBuffer(bytes.buffer, basename(p), true /* reload in place */).then(function () {
           lastSig = sig;
           lastStateJson = json;
           app().toast('Reloaded “' + basename(p) + '” — changed on disk');
@@ -859,6 +859,40 @@
 
     currentPath: function () { return currentPath; },
     basename: basename,
+    // Claude Code process bridge for the AI assistant's "Claude subscription"
+    // provider (js/ai.js owns the stream-json protocol). One global event
+    // listener fans stdout/stderr/exit lines out to the live handles by pid.
+    claude: (function () {
+      var invoke = window.__TAURI__.core.invoke;
+      var handles = {};
+      var listening = false;
+      function ensureListener() {
+        if (listening) return;
+        listening = true;
+        window.__TAURI__.event.listen('ai-proc', function (ev) {
+          var p = ev.payload || {};
+          var h = handles[p.id];
+          if (!h) return;
+          if (p.kind === 'exit') { delete handles[p.id]; h.alive = false; }
+          try { h.onLine(p.kind, p.line); } catch (e) { /* handler error must not kill the pipe */ }
+        });
+      }
+      return {
+        // resolve the CLI binary (custom path wins); null when not installed
+        path: function (custom) { return invoke('ai_claude_path', { custom: custom || '' }); },
+        // spawn → handle { write(line), kill(), alive }
+        spawn: function (bin, args, onLine) {
+          ensureListener();
+          return invoke('ai_spawn', { bin: bin, args: args }).then(function (id) {
+            var h = { id: id, alive: true, onLine: onLine,
+              write: function (line) { return invoke('ai_write', { id: id, line: line }); },
+              kill: function () { h.alive = false; delete handles[id]; return invoke('ai_kill', { id: id }); } };
+            handles[id] = h;
+            return h;
+          });
+        }
+      };
+    })(),
     appVersion: '' // filled asynchronously below
   };
 
@@ -879,6 +913,8 @@
       if (document.body.classList.contains('start') && app() && app().renderStartPage) {
         app().renderStartPage();
       }
+      // first launch on a new version → "What's new" (once per version)
+      if (app() && app().maybeShowReleaseNotes) app().maybeShowReleaseNotes();
     }).catch(function () { /* fine without it */ });
   }
 
@@ -924,17 +960,32 @@
     win.onResized(syncFullscreen);
     syncFullscreen();
 
-    // closing the window: let the app flush and drop its presence file first
-    // (needs core:window:allow-destroy). Absent in jsdom/tests.
+    // closing the window (caption ✕, Alt+F4, the red traffic light) — ONE
+    // handler, two duties in order:
+    //   1. unsaved .xlsx work asks first — app.js owns the Save / Don't save /
+    //      Cancel dialog (guardUnsaved) and flushes silently when autosave
+    //      already owns the file. A shared bundle is never "unsaved" that
+    //      way (unsavedNow is false for it), so it skips straight to 2.
+    //   2. beforeClose(): the app lands its pending bundle flush and drops
+    //      its presence file; the window is destroyed once that settles
+    //      (CLOSE_HOOK_MS cap). destroy() raises no second close-requested
+    //      event, so an approved close cannot re-prompt (needs
+    //      core:window:allow-destroy). Absent in jsdom/tests.
     if (typeof win.onCloseRequested === 'function') {
       win.onCloseRequested(function (ev) {
         ev.preventDefault();
-        var a = app(), p = null;
-        try { p = (a && typeof a.beforeClose === 'function') ? a.beforeClose() : null; } catch (e) { p = null; }
-        Promise.race([
-          Promise.resolve(p).catch(function () { /* still close */ }),
-          new Promise(function (res) { setTimeout(res, CLOSE_HOOK_MS); })
-        ]).then(function () { return win.destroy(); }).catch(function () { /* window gone */ });
+        var a = app();
+        function finish() {
+          var p = null;
+          try { p = (a && typeof a.beforeClose === 'function') ? a.beforeClose() : null; } catch (e) { p = null; }
+          Promise.race([
+            Promise.resolve(p).catch(function () { /* still close */ }),
+            new Promise(function (res) { setTimeout(res, CLOSE_HOOK_MS); })
+          ]).then(function () { return win.destroy(); }).catch(function () { /* window gone */ });
+        }
+        if (a && typeof a.guardUnsaved === 'function' && typeof a.unsavedNow === 'function' && a.unsavedNow()) {
+          a.guardUnsaved(finish); // Cancel keeps the window: finish never runs
+        } else finish();
       });
     }
     if (isMac) return;
@@ -1015,6 +1066,19 @@
       m.fn();
     }
 
+    // NativeIcon names that AppKit exposes as *Template images (see muda's
+    // macOS NativeIcon → NSImageName table); everything else is a coloured
+    // pictogram (Folder, Info, MultipleDocuments, User, Trash…).
+    var TEMPLATE_ICONS = {};
+    ['Add', 'Remove', 'Share', 'Refresh', 'RefreshFreestanding', 'StopProgress',
+      'StopProgressFreestanding', 'FollowLinkFreestanding', 'RevealFreestanding',
+      'InvalidDataFreestanding', 'GoLeft', 'GoRight', 'LeftFacingTriangle',
+      'RightFacingTriangle', 'Home', 'Bookmarks', 'Bluetooth', 'ColumnView',
+      'FlowView', 'IconView', 'ListView', 'EnterFullScreen', 'ExitFullScreen',
+      'IChatTheater', 'LockLocked', 'LockUnlocked', 'MenuMixedState',
+      'MenuOnState', 'Path', 'QuickLook', 'Slideshow', 'SmartBadge'
+    ].forEach(function (n) { TEMPLATE_ICONS[n] = true; });
+
     function toNative(items) {
       return Promise.all(items.map(function (m) {
         if (m.sep) return menu.PredefinedMenuItem.new({ item: 'Separator' });
@@ -1027,8 +1091,10 @@
         if ('checked' in m) {
           return menu.CheckMenuItem.new(Object.assign({ checked: !!m.checked }, opts));
         }
-        // macOS template icons where the app names one; plain item otherwise
-        if (m.nativeIcon && menu.IconMenuItem && menu.NativeIcon && menu.NativeIcon[m.nativeIcon]) {
+        // macOS template icons where the app names one; plain item otherwise.
+        // Only template images (monochrome, tinted by the menu) are allowed —
+        // the other NativeIcon names are full-colour pictograms that clash.
+        if (m.nativeIcon && TEMPLATE_ICONS[m.nativeIcon] && menu.IconMenuItem && menu.NativeIcon && menu.NativeIcon[m.nativeIcon]) {
           return menu.IconMenuItem.new(Object.assign({ icon: menu.NativeIcon[m.nativeIcon] }, opts))
             .catch(function () { return menu.MenuItem.new(opts); });
         }
@@ -1112,46 +1178,89 @@
   })();
 
   // ------------------------------------------------------- auto-update
-  // Check on launch, download in the background, then flash an Update
-  // button on the right of the header; clicking it installs and relaunches.
+  // One updater shared by the header's flashing Update button and the start
+  // page's Check-for-updates button. Checks 4s after launch and then every
+  // hour; a found update downloads in the background and the buttons flip to
+  // "Update to x.y.z". Clicking installs and relaunches.
   (function autoUpdate() {
     var up = window.__TAURI__.updater;
     var proc = window.__TAURI__.process;
     if (!up || !proc) return;
 
-    function showUpdateButton(update) {
+    var CHECK_EVERY = 60 * 60 * 1000;
+    var U = {
+      state: 'idle',   // idle | checking | downloading | ready | installing
+      version: '',     // the downloaded update's version (state ready/installing)
+      error: '',       // last manual-check failure, for the start page
+      checkedAt: 0,
+      update: null,
+      listeners: []
+    };
+    function set(patch) {
+      Object.keys(patch).forEach(function (k) { U[k] = patch[k]; });
+      U.listeners.forEach(function (fn) { try { fn(U); } catch (e) { /* listener */ } });
+      // the start page renders the updater's state into its button
+      if (document.body.classList.contains('start') && app() && app().renderStartPage) app().renderStartPage();
+    }
+    U.onChange = function (fn) { U.listeners.push(fn); };
+
+    // manual: surface "up to date" / failures; automatic: silent
+    U.check = function (manual) {
+      if (U.state === 'ready' || U.state === 'installing') return Promise.resolve(U.update);
+      if (U.state === 'checking' || U.state === 'downloading') return Promise.resolve(null);
+      set({ state: 'checking', error: '' });
+      return up.check().then(function (update) {
+        if (!update) {
+          set({ state: 'idle', checkedAt: Date.now() });
+          if (manual && app()) app().toast('Headway ' + (window.HeadwayDesktop.appVersion || '') + ' is up to date');
+          return null;
+        }
+        set({ state: 'downloading', version: update.version, checkedAt: Date.now() });
+        return update.download().then(function () {
+          set({ state: 'ready', update: update });
+          showHeaderButton();
+          return update;
+        });
+      }).catch(function (err) {
+        // offline, dev build, or no release yet — silent unless asked for
+        var msg = (err && err.message) || String(err || 'unknown error');
+        set({ state: 'idle', error: manual ? msg : '' });
+        if (manual && app()) app().toast('Could not check for updates — ' + msg, 'err');
+        return null;
+      });
+    };
+
+    U.install = function () {
+      if (U.state !== 'ready' || !U.update) return Promise.resolve();
+      set({ state: 'installing' });
+      return U.update.install().then(function () {
+        return proc.relaunch(); // NSIS on Windows exits/relaunches itself
+      }).catch(function (err) {
+        set({ state: 'ready' });
+        if (app()) app().toast('Update failed: ' + (err && err.message || err), 'err');
+      });
+    };
+
+    function showHeaderButton() {
       if (document.getElementById('btnUpdate')) return;
       var right = document.querySelector('.tb-right');
       if (!right) return;
       var b = document.createElement('button');
       b.id = 'btnUpdate';
-      b.title = 'Version ' + update.version + ' downloaded — click to restart and update';
+      b.title = 'Version ' + U.version + ' downloaded';
       b.innerHTML = '<i data-lucide="refresh-cw"></i>Update';
-      b.addEventListener('click', function () {
-        b.disabled = true;
-        b.textContent = 'Updating…';
-        update.install().then(function () {
-          return proc.relaunch(); // NSIS on Windows exits/relaunches itself
-        }).catch(function (err) {
-          b.disabled = false;
-          b.innerHTML = '<i data-lucide="refresh-cw"></i>Update';
-          if (window.lucide) lucide.createIcons();
-          app().toast('Update failed: ' + (err && err.message || err), 'err');
-        });
+      b.addEventListener('click', function () { U.install(); });
+      U.onChange(function (u) {
+        b.disabled = u.state === 'installing';
+        b.innerHTML = u.state === 'installing' ? 'Updating…' : '<i data-lucide="refresh-cw"></i>Update';
+        if (window.lucide) lucide.createIcons();
       });
       right.insertBefore(b, right.firstChild);
       if (window.lucide) lucide.createIcons();
     }
 
-    setTimeout(function () {
-      up.check().then(function (update) {
-        if (!update) return;
-        return update.download().then(function () {
-          showUpdateButton(update);
-        });
-      }).catch(function () {
-        // offline, dev build, or no release yet — silently fine
-      });
-    }, 4000);
+    window.HeadwayDesktop.updater = U;
+    setTimeout(function () { U.check(false); }, 4000);
+    setInterval(function () { U.check(false); }, CHECK_EVERY);
   })();
 })();

@@ -9,7 +9,7 @@ const dist = join(root, 'dist');
 
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist);
-for (const entry of ['index.html', 'css', 'js']) {
+for (const entry of ['index.html', 'CHANGELOG.md', 'css', 'js']) {
   cpSync(join(root, entry), join(dist, entry), {
     recursive: true,
     filter: (src) => !/\.DS_Store$/.test(src),

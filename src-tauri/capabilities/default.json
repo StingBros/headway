@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Headway main window: native open/save dialogs plus read, write and watch of user-chosen workbook paths anywhere on disk (documents live in arbitrary folders, including OneDrive).",
+  "description": "Headway main window: native open/save dialogs plus read, write and watch of user-chosen workbook paths anywhere on disk (documents live in arbitrary folders, including OneDrive). Outbound HTTPS is allowed for the Jira sync (any host, so self-hosted sites work too).",
   "windows": [
     "main"
   ],
@@ -12,8 +12,8 @@
     "core:window:allow-minimize",
     "core:window:allow-maximize",
     "core:window:allow-close",
-    "core:window:allow-is-maximized",
     "core:window:allow-destroy",
+    "core:window:allow-is-maximized",
     "updater:default",
     "process:default",
     "dialog:default",
@@ -28,6 +28,14 @@
         },
         {
           "path": "$HOME/**"
+        }
+      ]
+    },
+    {
+      "identifier": "http:default",
+      "allow": [
+        {
+          "url": "https://*:*/*"
         }
       ]
     },

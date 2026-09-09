@@ -52,44 +52,63 @@
     }
   };
   RM.SIZE_SCHEME_ORDER = ['tshirt', 'fibonacci', 'points5', 'none'];
-  RM.sizeOrderOf = function (state) {
+  // Features and stories size on SEPARATE scales: features under
+  // meta.sizeScheme / sizeOrder / sizeDays, stories under the story* twins.
+  // Every helper takes an optional kind ('feature' default | 'story').
+  RM.DEFAULT_STORY_SIZE_SCHEME = 'fibonacci';
+  RM.DEFAULT_STORY_PRIORITY_SCHEME = 'levels';
+  function sizeKeys(kind) {
+    return kind === 'story'
+      ? { scheme: 'storySizeScheme', order: 'storySizeOrder', days: 'storySizeDays' }
+      : { scheme: 'sizeScheme', order: 'sizeOrder', days: 'sizeDays' };
+  }
+  RM.sizeKeys = sizeKeys;
+  // walk every sized thing of a kind (features, or every story)
+  function eachOfKind(state, kind, fn) {
+    (state.items || []).forEach(function (it) {
+      if (kind === 'story') (it.stories || []).forEach(fn);
+      else fn(it);
+    });
+  }
+  RM.sizeOrderOf = function (state, kind) {
     var m = state.meta || state;
-    return m.sizeOrder || RM.SIZE_ORDER;
+    var k = sizeKeys(kind);
+    return m[k.order] || (kind === 'story' ? RM.SIZE_SCHEMES[RM.DEFAULT_STORY_SIZE_SCHEME].sizes : RM.SIZE_ORDER);
   };
-  RM.sizingEnabled = function (state) {
+  RM.sizingEnabled = function (state, kind) {
     var m = state.meta || state;
-    return m.sizeScheme !== 'none' && RM.sizeOrderOf(state).length > 0;
+    return m[sizeKeys(kind).scheme] !== 'none' && RM.sizeOrderOf(state, kind).length > 0;
   };
-  RM.setSizeScheme = function (state, scheme) {
+  RM.setSizeScheme = function (state, scheme, kind) {
     var def = RM.SIZE_SCHEMES[scheme];
     if (!def || scheme === 'custom') return;
-    var m = state.meta;
-    m.sizeScheme = scheme;
-    m.sizeOrder = def.sizes.slice();
-    m.sizeDays = RM.clone(def.days);
+    var m = state.meta, k = sizeKeys(kind);
+    m[k.scheme] = scheme;
+    m[k.order] = def.sizes.slice();
+    m[k.days] = RM.clone(def.days);
   };
-  RM.renameSizeOption = function (state, oldLabel, newLabel) {
-    var m = state.meta;
-    if (!newLabel || oldLabel === newLabel || m.sizeOrder.indexOf(newLabel) !== -1) return;
-    m.sizeOrder = m.sizeOrder.map(function (l) { return l === oldLabel ? newLabel : l; });
-    m.sizeDays[newLabel] = m.sizeDays[oldLabel];
-    delete m.sizeDays[oldLabel];
-    state.items.forEach(function (it) { if (it.size === oldLabel) it.size = newLabel; });
-    m.sizeScheme = 'custom';
+  RM.renameSizeOption = function (state, oldLabel, newLabel, kind) {
+    var m = state.meta, k = sizeKeys(kind);
+    if (!newLabel || oldLabel === newLabel || m[k.order].indexOf(newLabel) !== -1) return;
+    m[k.order] = m[k.order].map(function (l) { return l === oldLabel ? newLabel : l; });
+    m[k.days][newLabel] = m[k.days][oldLabel];
+    delete m[k.days][oldLabel];
+    eachOfKind(state, kind, function (o) { if (o.size === oldLabel) o.size = newLabel; });
+    m[k.scheme] = 'custom';
   };
-  RM.addSizeOption = function (state, label, days) {
-    var m = state.meta;
-    if (!label || m.sizeOrder.indexOf(label) !== -1) return;
-    m.sizeOrder.push(label);
-    m.sizeDays[label] = isFinite(+days) && +days > 0 ? +days : 5;
-    m.sizeScheme = 'custom';
+  RM.addSizeOption = function (state, label, days, kind) {
+    var m = state.meta, k = sizeKeys(kind);
+    if (!label || m[k.order].indexOf(label) !== -1) return;
+    m[k.order].push(label);
+    m[k.days][label] = isFinite(+days) && +days > 0 ? +days : 5;
+    m[k.scheme] = 'custom';
   };
-  RM.removeSizeOption = function (state, label) {
-    var m = state.meta;
-    m.sizeOrder = m.sizeOrder.filter(function (l) { return l !== label; });
-    delete m.sizeDays[label];
-    state.items.forEach(function (it) { if (it.size === label) it.size = null; });
-    m.sizeScheme = 'custom';
+  RM.removeSizeOption = function (state, label, kind) {
+    var m = state.meta, k = sizeKeys(kind);
+    m[k.order] = m[k.order].filter(function (l) { return l !== label; });
+    delete m[k.days][label];
+    eachOfKind(state, kind, function (o) { if (o.size === label) o.size = null; });
+    m[k.scheme] = 'custom';
   };
   RM.RISK_ORDER = ['L', 'M', 'H']; // low / medium / high (severity, not a size)
 
@@ -110,6 +129,22 @@
   };
   RM.RISK_SCHEME_ORDER = ['none', 'risk', 'auto', 'confidence'];
 
+  // the header apps, in tab order: [key, name, icon, what it does]
+  RM.APPS = [
+    ['scoping', 'Scoping', 'table-properties', 'Spreadsheet of descriptions and scope'],
+    ['prio', 'Prioritizing', 'square-kanban', 'Kanban of features and stories'],
+    ['planning', 'Planning', 'chart-gantt', 'Timeline, dependencies and capacity (always on)'],
+    ['sprints', 'Sprinting', 'calendar-range', 'Sprint-by-sprint list'],
+    ['budget', 'Budgeting', 'wallet', 'Rates, costs and role hours'],
+    ['reports', 'Reporting', 'chart-pie', 'Project reporting dashboard']
+  ];
+  RM.appEnabled = function (state, key) {
+    var a = state && state.meta && state.meta.apps;
+    if (key === 'planning') return true;
+    if (!RM.APPS.some(function (x) { return x[0] === key; })) return true; // not an app (setup, history)
+    return !a || a[key] !== false;
+  };
+
   // Priority is its own column (risk measures uncertainty; priority ranks
   // importance): MoSCoW or Critical/High/Medium/Low ladders.
   RM.PRIORITY_SCHEMES = {
@@ -117,23 +152,31 @@
     moscow: { name: 'MoSCoW', label: 'Priority', order: ['M', 'S', 'C', 'W'],
       desc: 'Must / Should / Could / Won’t — classic scope-negotiation priority.' },
     levels: { name: 'Critical / High / Medium / Low', label: 'Priority', order: ['C', 'H', 'M', 'L'],
-      desc: 'A severity ladder — Critical, High, Medium, Low.' }
+      desc: 'A severity ladder — Critical, High, Medium, Low.' },
+    // computed from the item's four RICE inputs; there is no picked value
+    rice: { name: 'RICE score', label: 'RICE', computed: true,
+      desc: 'Reach × Impact × Confidence ÷ Effort — evidence-based scoring.' }
   };
-  RM.PRIORITY_SCHEME_ORDER = ['none', 'moscow', 'levels'];
-  RM.prioritySchemeOf = function (state) {
-    var s = state && state.meta && state.meta.priorityScheme;
+  RM.PRIORITY_SCHEME_ORDER = ['none', 'moscow', 'levels', 'rice'];
+  // stories carry no RICE inputs, so their scheme list stops at the ladders
+  RM.STORY_PRIORITY_SCHEME_ORDER = ['none', 'moscow', 'levels'];
+  function prioKey(kind) { return kind === 'story' ? 'storyPriorityScheme' : 'priorityScheme'; }
+  RM.prioritySchemeOf = function (state, kind) {
+    var s = state && state.meta && state.meta[prioKey(kind)];
+    if (kind === 'story' && s === 'rice') return 'none';
     return RM.PRIORITY_SCHEMES[s] ? s : 'none';
   };
-  RM.priorityEnabled = function (state) { return RM.prioritySchemeOf(state) !== 'none'; };
-  RM.priorityOrderOf = function (state) {
-    return (RM.PRIORITY_SCHEMES[RM.prioritySchemeOf(state)].order || []).slice();
+  RM.priorityEnabled = function (state, kind) { return RM.prioritySchemeOf(state, kind) !== 'none'; };
+  RM.priorityOrderOf = function (state, kind) {
+    return (RM.PRIORITY_SCHEMES[RM.prioritySchemeOf(state, kind)].order || []).slice();
   };
-  RM.setPriorityScheme = function (state, key) {
+  RM.setPriorityScheme = function (state, key, kind) {
     if (!RM.PRIORITY_SCHEMES[key]) return;
-    state.meta.priorityScheme = key;
+    if (kind === 'story' && key === 'rice') return;
+    state.meta[prioKey(kind)] = key;
     var order = RM.PRIORITY_SCHEMES[key].order || [];
-    state.items.forEach(function (it) {
-      if (it.priority && order.indexOf(it.priority) === -1) it.priority = null;
+    eachOfKind(state, kind, function (o) {
+      if (o.priority && order.indexOf(o.priority) === -1) o.priority = null;
     });
   };
   RM.riskSchemeOf = function (state) {
@@ -153,88 +196,20 @@
     var order = RM.RISK_SCHEMES[key].order || [];
     state.items.forEach(function (it) {
       if (it.risk && order.indexOf(it.risk) === -1) it.risk = null;
+      (it.stories || []).forEach(function (st) {
+        if (st.risk && order.indexOf(st.risk) === -1) st.risk = null;
+      });
     });
   };
 
-  // workflow statuses — features and stories carry separate lists; the
-  // LAST status of a list means done (kept in sync with the done flag)
-  RM.DEFAULT_STATUSES = {
-    feature: ['Not started', 'In progress', 'Blocked', 'Done'],
-    story: ['To do', 'In progress', 'Done']
+  // RICE: reach × impact × confidence% ÷ effort. Null until every input is
+  // in — a partial score would sort above honestly-unscored work.
+  RM.riceScore = function (it) {
+    var r = it && it.rice;
+    if (!r || r.reach == null || r.impact == null || r.confidence == null || !r.effort) return null;
+    return r.reach * r.impact * (r.confidence / 100) / r.effort;
   };
-  RM.statusesOf = function (state, kind) {
-    var st = state.meta && state.meta.statuses;
-    var list = st && Array.isArray(st[kind]) ? st[kind] : null;
-    return list && list.length ? list.slice() : RM.DEFAULT_STATUSES[kind].slice();
-  };
-  // effective status: explicit value, else done -> last, else first
-  RM.statusOf = function (state, obj, kind) {
-    var list = RM.statusesOf(state, kind);
-    if (obj.status && list.indexOf(obj.status) !== -1) return obj.status;
-    return obj.done ? list[list.length - 1] : list[0];
-  };
-  // status color: user-assigned (meta.statusColors, keyed by name) or a
-  // sensible default from the status's position (todo gray, doing blue,
-  // last-is-done green). Returns a 6-hex string, no '#'.
-  RM.statusColor = function (state, kind, name) {
-    var sc = (state.meta && state.meta.statusColors) || {};
-    if (typeof sc[name] === 'string' && /^[0-9a-fA-F]{6}$/.test(sc[name])) return sc[name];
-    var list = RM.statusesOf(state, kind);
-    var i = list.indexOf(name);
-    if (i === list.length - 1) return '08875B';
-    if (i <= 0) return '6E7883';
-    return '0057B8';
-  };
-  RM.setStatus = function (state, obj, kind, status) {
-    var list = RM.statusesOf(state, kind);
-    if (list.indexOf(status) === -1) return;
-    obj.status = status;
-    obj.done = status === list[list.length - 1];
-  };
-  RM.renameStatus = function (state, kind, oldName, newName) {
-    newName = String(newName || '').trim();
-    var list = RM.statusesOf(state, kind);
-    var i = list.indexOf(oldName);
-    if (!newName || i === -1 || list.indexOf(newName) !== -1) return false;
-    list[i] = newName;
-    state.meta.statuses = state.meta.statuses || {};
-    state.meta.statuses[kind] = list;
-    var fix = function (o) { if (o.status === oldName) o.status = newName; };
-    state.items.forEach(function (it) {
-      if (kind === 'feature') fix(it);
-      else (it.stories || []).forEach(fix);
-    });
-    // an assigned color follows the status through its rename
-    var sc = state.meta.statusColors;
-    if (sc && sc[oldName] != null) {
-      sc[newName] = sc[oldName];
-      delete sc[oldName];
-    }
-    return true;
-  };
-  RM.addStatus = function (state, kind, name) {
-    name = String(name || '').trim();
-    var list = RM.statusesOf(state, kind);
-    if (!name || list.indexOf(name) !== -1) return false;
-    // new statuses land before the done (last) column
-    list.splice(Math.max(0, list.length - 1), 0, name);
-    state.meta.statuses = state.meta.statuses || {};
-    state.meta.statuses[kind] = list;
-    return true;
-  };
-  RM.removeStatus = function (state, kind, name) {
-    var list = RM.statusesOf(state, kind);
-    if (list.length <= 2 || list.indexOf(name) === -1) return false;
-    list = list.filter(function (x) { return x !== name; });
-    state.meta.statuses = state.meta.statuses || {};
-    state.meta.statuses[kind] = list;
-    var fix = function (o) { if (o.status === name) o.status = null; };
-    state.items.forEach(function (it) {
-      if (kind === 'feature') fix(it);
-      else (it.stories || []).forEach(fix);
-    });
-    return true;
-  };
+
   // weeks [w0, w1) of a numbered sprint
   RM.sprintRange = function (meta, num) {
     var si = RM.sprintInfo(meta);
@@ -249,7 +224,6 @@
   };
 
   RM.DEFAULT_TEAM_TYPES = ['Software Engineer', 'Product Designer', 'Product Manager', 'Data Scientist', 'QA Engineer'];
-  RM.DEFAULT_WORK_TYPE = 'Software Engineer';
   RM.WEEK_HOURS = 40; // one person's full week
   RM.HISTORY_MAX = 300; // version-history entries kept per document
   RM.OPTIONS_MAX = 12;  // parked alternate-plan options kept per document
@@ -261,18 +235,27 @@
   // ('c…' keys) store their text in item.custom.
   RM.SCOPE_BUILTIN_LABELS = {
     description: 'Description',
+    ac: 'Acceptance criteria',
     enables: 'Enables',
     outOfScope: 'Out of scope',
     extDeps: 'External dependencies',
     notes: 'Notes'
   };
-  // New documents start with Description only; the rest stay available in
-  // the add-column menu. Legacy docs infer their list from actual content.
-  RM.DEFAULT_SCOPE_COLS = ['description'];
-  RM.SCOPE_BUILTIN_ORDER = ['description', 'enables', 'outOfScope', 'extDeps', 'notes'];
+  // New documents start with Description and Acceptance criteria; the rest
+  // stay available in the add-column menu. Legacy docs infer their list from
+  // actual content.
+  RM.DEFAULT_SCOPE_COLS = ['description', 'ac'];
+  RM.SCOPE_BUILTIN_ORDER = ['description', 'ac', 'enables', 'outOfScope', 'extDeps', 'notes'];
+  // built-ins that restrict to one row kind unless the user says otherwise
+  RM.SCOPE_BUILTIN_SCOPE = { ac: 'story' };
   // fixed (chip) scoping columns and the canonical full-order template
+  // milestone marker shapes; the first is the default
+  RM.MS_STYLES = ['diamond', 'star', 'circle'];
+  RM.msStyleOf = function (it) {
+    return RM.MS_STYLES.indexOf(it && it.msStyle) > 0 ? it.msStyle : 'diamond';
+  };
   RM.SCOPE_FIXED_KEYS = ['assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream', 'epic'];
-  RM.SCOPE_DEFAULT_ORDER = ['description', 'epic', 'assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream'];
+  RM.SCOPE_DEFAULT_ORDER = ['description', 'ac', 'epic', 'assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream'];
 
   // 2026 US holiday calendar (company observance table). Merged once into a
   // document's holidays (meta.holidaysV2026 flags the merge so user deletions
@@ -331,8 +314,124 @@
     var c = state && state.wsColors ? resolveColor(state.wsColors[ws]) : null;
     return c || RM.PALETTE.neutral;
   };
+  // What bar colors follow. The mode is a UI preference the app sets on
+  // load; every renderer and export reads colorForItem, so they all agree.
+  RM.COLOR_MODES = ['workstream', 'epic', 'assignee', 'priority'];
+  var colorMode = 'workstream';
+  RM.setColorMode = function (mode) { colorMode = RM.COLOR_MODES.indexOf(mode) !== -1 ? mode : 'workstream'; };
+  RM.colorMode = function () { return colorMode; };
+  // a spread of distinct hues for names without a chosen color (epics)
+  RM.HASH_PALETTE = ['3273BD', 'C25E0E', '08875B', 'A14FBF', '2A7F8E', 'B8336A', '5B6ABF', '8A7B1E', 'C2402E', '3E8E41'];
+  function hashOf(s) {
+    var h = 0;
+    s = String(s || '');
+    for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return h;
+  }
+  function hslToHex(h, s, l) {
+    s /= 100; l /= 100;
+    var k = function (n) { return (n + h / 30) % 12; };
+    var a = s * Math.min(l, 1 - l);
+    var f = function (n) { return l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))); };
+    return [f(0), f(8), f(4)].map(function (v) { return ('0' + Math.round(v * 255).toString(16)).slice(-2); }).join('').toUpperCase();
+  }
+  // Epics without a chosen color share the hash palette; the document's
+  // epics are assigned together (alphabetically) so two epics never land on
+  // the same swatch while a free one exists, and adding an epic does not
+  // recolor the others unless it collides.
+  function epicColorTable(state) {
+    var names = {};
+    ((state && state.items) || []).forEach(function (it) { if (it.epic) names[it.epic] = true; });
+    var chosen = state && state.epicColors ? state.epicColors : {};
+    var taken = {}, table = {};
+    Object.keys(names).sort().forEach(function (e) {
+      var c = resolveColor(chosen[e]);
+      if (c) { table[e] = c; taken[c] = true; }
+    });
+    Object.keys(names).sort().forEach(function (e) {
+      if (table[e]) return;
+      var n = RM.HASH_PALETTE.length;
+      var i = ((hashOf(e) * 2654435761) >>> 0) % n;
+      for (var k = 0; k < n; k++) {
+        var col = RM.HASH_PALETTE[(i + k) % n];
+        if (!taken[col]) { table[e] = col; taken[col] = true; return; }
+      }
+      table[e] = RM.HASH_PALETTE[i]; // more epics than swatches: colors repeat
+    });
+    return table;
+  }
+  RM.colorForEpic = function (state, epic) {
+    if (!epic) return RM.PALETTE.neutral;
+    var c = state && state.epicColors ? resolveColor(state.epicColors[epic]) : null;
+    if (c) return c;
+    var table = epicColorTable(state);
+    return table[epic] || RM.HASH_PALETTE[((hashOf(epic) * 2654435761) >>> 0) % RM.HASH_PALETTE.length];
+  };
+  RM.colorForMember = function (m) {
+    if (!m) return RM.PALETTE.neutral;
+    return hslToHex(hashOf(RM.memberLabel(m)) % 360, 52, 42);
+  };
+  // priority: a fixed ladder from hottest to coolest across the scheme's order
+  // (critical = bright red, high = orange, medium = green, low = gray)
+  RM.PRIORITY_RAMP = ['E0261B', 'EF8A1F', '2E9E52', '8A929B'];
+  RM.PRIORITY_TIERS = ['crit', 'high', 'med', 'low'];
+  // which of the four tiers a picked value sits in — Must/Critical are 'crit',
+  // Won't/Low are 'low'; null for no value or a scheme without a ladder
+  RM.priorityTier = function (state, value, kind) {
+    if (!value) return null;
+    var order = RM.priorityOrderOf(state, kind);
+    var idx = order.indexOf(value);
+    if (idx === -1) return null;
+    return RM.PRIORITY_TIERS[Math.min(3, Math.floor(idx * 4 / order.length))];
+  };
+  RM.colorForPriority = function (state, it) {
+    var sch = RM.prioritySchemeOf(state);
+    if (sch === 'none') return RM.PALETTE.neutral;
+    if (sch === 'rice') {
+      // relative: quartiles of the scored items
+      var mine = RM.riceScore(it);
+      if (!(mine > 0)) return RM.PALETTE.neutral;
+      var scores = state.items.map(RM.riceScore).filter(function (x) { return x > 0; }).sort(function (a, b) { return b - a; });
+      var rank = scores.indexOf(mine);
+      return RM.PRIORITY_RAMP[Math.min(3, Math.floor(rank * 4 / scores.length))];
+    }
+    var order = RM.priorityOrderOf(state);
+    var idx = order.indexOf(it.priority);
+    if (idx === -1) return RM.PALETTE.neutral;
+    return RM.PRIORITY_RAMP[Math.min(3, Math.floor(idx * 4 / order.length))];
+  };
   RM.colorForItem = function (state, it) {
+    if (colorMode === 'epic') return RM.colorForEpic(state, it.epic);
+    if (colorMode === 'assignee') {
+      var id = (it.assignees || [])[0];
+      var m = id ? (state.team || []).filter(function (x) { return x.id === id; })[0] : null;
+      return RM.colorForMember(m);
+    }
+    if (colorMode === 'priority') return RM.colorForPriority(state, it);
     return RM.colorForWs(state, it.workstream);
+  };
+  // legend entries for a set of items under the active color mode:
+  // [{ name, color }], in first-seen order (workstreams: default last)
+  RM.colorLegend = function (state, items) {
+    var seen = {}, out = [];
+    function add(name, color) { if (!seen[name]) { seen[name] = true; out.push({ name: name, color: color }); } }
+    items.forEach(function (it) {
+      if (colorMode === 'epic') add(it.epic || 'No epic', RM.colorForEpic(state, it.epic));
+      else if (colorMode === 'assignee') {
+        var id = (it.assignees || [])[0];
+        var m = id ? (state.team || []).filter(function (x) { return x.id === id; })[0] : null;
+        add(m ? RM.memberLabel(m) : 'Unassigned', RM.colorForMember(m));
+      } else if (colorMode === 'priority') {
+        var sch = RM.prioritySchemeOf(state);
+        var lbl = sch === 'none' ? 'No priority' : sch === 'rice' ? 'RICE' : (it.priority || 'No priority');
+        add(lbl, RM.colorForPriority(state, it));
+      } else add(it.workstream || RM.defaultWsName(state), RM.colorForWs(state, it.workstream));
+    });
+    if (colorMode === 'workstream') {
+      var dn = RM.defaultWsName(state);
+      out = out.filter(function (e) { return e.name !== dn; }).concat(out.filter(function (e) { return e.name === dn; }));
+    }
+    return out;
   };
   // profile avatars: initials + a deterministic color from the name
   RM.initialsOf = function (name) {
@@ -800,6 +899,19 @@
     m.holidayRanges.sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
     RM.syncHolidayDates(m);
   };
+  // edit one range in place: patch = { name?, start?, end? }; a start past
+  // the end (or vice versa) swaps them so the range stays valid
+  RM.updateHolidayRange = function (m, idx, patch) {
+    var r = (m.holidayRanges || [])[idx];
+    if (!r) return false;
+    if (patch.name != null) r.name = String(patch.name).trim();
+    if (patch.start) r.start = patch.start;
+    if (patch.end) r.end = patch.end;
+    if (r.end < r.start) { var t = r.start; r.start = r.end; r.end = t; }
+    m.holidayRanges.sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : 0; });
+    RM.syncHolidayDates(m);
+    return true;
+  };
   RM.removeHolidayRange = function (m, idx) {
     m.holidayRanges.splice(idx, 1);
     RM.syncHolidayDates(m);
@@ -861,12 +973,27 @@
     return { wps: wps, anchorWeek: anchorWeek, firstNum: meta.sprintAnchorNum != null ? meta.sprintAnchorNum : 1 };
   };
 
+  // working-day slots in one sprint (one week when sprints are off) — the
+  // default length of a newly scheduled story or unsized feature
+  RM.sprintDays = function (metaOrState) {
+    var m = metaOrState && metaOrState.meta ? metaOrState.meta : metaOrState;
+    return RM.slotsOf(m) * RM.sprintInfo(m).wps;
+  };
+
   RM.sprintNumForWeek = function (meta, week) {
     var si = RM.sprintInfo(meta);
     return si.firstNum + Math.floor((week - si.anchorWeek) / si.wps);
   };
 
   // plain-text projection of stored rich text (tooltips, Excel cells, search)
+  // Jira issue key ("HW-12") typed in by hand after a CSV import so later
+  // exports can parent rows and update existing issues; null when unset.
+  RM.jiraKeyOf = function (v) {
+    if (typeof v !== 'string') return null;
+    var k = v.trim().toUpperCase();
+    return k ? k : null;
+  };
+
   RM.htmlToText = function (html) {
     if (!html) return '';
     var t = String(html)
@@ -879,9 +1006,18 @@
     return t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   };
 
-  RM.sizeDays = function (state, size) {
-    var map = (state.meta && state.meta.sizeDays) || RM.DEFAULT_SIZE_DAYS;
+  RM.sizeDays = function (state, size, kind) {
+    var k = sizeKeys(kind);
+    var map = (state.meta && state.meta[k.days]) || (kind === 'story' ? RM.SIZE_SCHEMES[RM.DEFAULT_STORY_SIZE_SCHEME].days : RM.DEFAULT_SIZE_DAYS);
     return size && map[size] != null ? map[size] : null;
+  };
+  // Effective working days for a story: its size, else its own span, else
+  // one sprint
+  RM.storyEffortDays = function (state, st) {
+    var sd = RM.sizeDays(state, st.size, 'story');
+    if (sd != null) return sd;
+    if (st.durDays != null) return st.durDays;
+    return RM.sprintDays(state.meta);
   };
 
   // Nearest size option for a working-day count (ties resolve to the smaller size).
@@ -967,6 +1103,8 @@
     state.meta = state.meta || {};
     var m = state.meta;
     m.title = m.title || 'Roadmap';
+    // Prioritizing view: the product vision line every card ladders up to
+    m.vision = typeof m.vision === 'string' ? m.vision : '';
     m.timelineStart = m.timelineStart || '2026-07-27';
     // work week shape: first day of week + which weekdays work (≤5).
     // Legacy daysPerWeek (3/4/5 from Monday) migrates to an explicit list.
@@ -980,6 +1118,11 @@
     // capacity feature switch — roster-based scheduling constraints and the
     // capacity header row. OFF by default; enabled per-document in Setup.
     m.capacityEnabled = !!m.capacityEnabled;
+    // apps switch (Setup → Apps): which header tabs this project shows. All
+    // on by default; Planning is the home view and can never go off.
+    var apps = (m.apps && typeof m.apps === 'object') ? m.apps : {};
+    m.apps = {};
+    RM.APPS.forEach(function (a) { m.apps[a[0]] = a[0] === 'planning' ? true : apps[a[0]] !== false; });
     // the saved project end date (last working day) wins over numWeeks
     if (m.endDate && /^\d{4}-\d{2}-\d{2}$/.test(m.endDate)) {
       var endWeeks = Math.floor((RM.parseISO(m.endDate) - RM.parseISO(m.timelineStart)) / (7 * 86400000)) + 1;
@@ -1038,17 +1181,26 @@
     var inheritedCols = m.scopeCols;
     if (!inheritedCols) {
       inheritedCols = RM.SCOPE_BUILTIN_ORDER.filter(function (k) {
-        return k === 'description' || (state.items || []).some(function (it) { return it && it[k]; });
+        return RM.DEFAULT_SCOPE_COLS.indexOf(k) !== -1 || (state.items || []).some(function (it) { return it && it[k]; });
       }).map(function (k) { return { key: k }; });
     }
     m.scopeCols = inheritedCols
       .map(function (c) {
         if (typeof c === 'string') c = { key: c };
         if (!c || typeof c.key !== 'string' || !c.key) return null;
+        var col;
         if (RM.SCOPE_BUILTIN_LABELS[c.key]) {
-          return c.label ? { key: c.key, label: String(c.label) } : { key: c.key };
+          col = c.label ? { key: c.key, label: String(c.label) } : { key: c.key };
+        } else {
+          col = { key: c.key, label: String(c.label || 'Column') };
         }
-        return { key: c.key, label: String(c.label || 'Column') };
+        // which rows show the column: 'feature' / 'story'; absent = both.
+        // Built-ins with a default scope store an explicit 'both' so the
+        // user's choice sticks across loads.
+        var defScope = RM.SCOPE_BUILTIN_SCOPE[c.key];
+        if (c.scope === 'feature' || c.scope === 'story') col.scope = c.scope;
+        else if (defScope) col.scope = c.scope === 'both' ? 'both' : defScope;
+        return col;
       })
       .filter(function (c) {
         if (!c || seenCol[c.key]) return false;
@@ -1062,6 +1214,36 @@
       if (!seenCol.description) {
         var descAt = m.scopeCols.findIndex(function (c) { return c.key === 'enables'; });
         m.scopeCols.splice(descAt === -1 ? 0 : descAt, 0, { key: 'description' });
+      }
+    }
+    // one-time migration: Acceptance criteria became a built-in (stories
+    // only by default) right after Description. A custom column by that
+    // name takes over the built-in key — its values move to item/story .ac
+    // and its position and scope are kept — so nothing shows up twice.
+    if (!m.scopeAcV1) {
+      m.scopeAcV1 = true;
+      if (!seenCol.ac) {
+        var acAt = m.scopeCols.findIndex(function (c) {
+          return !RM.SCOPE_BUILTIN_LABELS[c.key] && /^acceptance\s+criteria$/i.test(String(c.label || '').trim());
+        });
+        if (acAt !== -1) {
+          var oldKey = m.scopeCols[acAt].key, oldScope = m.scopeCols[acAt].scope;
+          m.scopeCols[acAt] = { key: 'ac', scope: oldScope || 'both' };
+          if (Array.isArray(m.scopeColOrder)) {
+            m.scopeColOrder = m.scopeColOrder.map(function (k) { return k === oldKey ? 'ac' : k; });
+          }
+          (state.items || []).forEach(function (it) {
+            if (!it) return;
+            if (it.custom && it.custom[oldKey] != null) { it.ac = it.custom[oldKey]; delete it.custom[oldKey]; }
+            (it.stories || []).forEach(function (s) {
+              if (s && s.custom && s.custom[oldKey] != null) { s.ac = s.custom[oldKey]; delete s.custom[oldKey]; }
+            });
+          });
+        } else {
+          var afterDesc = m.scopeCols.findIndex(function (c) { return c.key === 'description'; });
+          m.scopeCols.splice(afterDesc === -1 ? 0 : afterDesc + 1, 0, { key: 'ac', scope: 'story' });
+        }
+        seenCol.ac = true;
       }
     }
     // full column order across FIXED and text columns (user-reorderable).
@@ -1079,6 +1261,11 @@
       if (savedOrder.length && savedOrder.indexOf('deadline') === -1) {
         var atStart = savedOrder.indexOf('start');
         savedOrder.splice(atStart === -1 ? savedOrder.length : atStart + 1, 0, 'deadline');
+      }
+      // likewise Acceptance criteria slots right after Description (when
+      // Description itself is unsaved both come from the default order)
+      if (savedOrder.indexOf('ac') === -1 && savedOrder.indexOf('description') !== -1) {
+        savedOrder.splice(savedOrder.indexOf('description') + 1, 0, 'ac');
       }
       savedOrder.forEach(take);
       RM.SCOPE_DEFAULT_ORDER.forEach(take);
@@ -1107,6 +1294,39 @@
         m.sizeDays[l] = schemeDays[l] || 5;
       }
     });
+    // the story scale: a doc from before it existed hands stories the
+    // feature scale when any story is already sized (so those sizes keep
+    // meaning); otherwise stories start on story points
+    if (m.storySizeScheme == null) {
+      var anyStorySize = (state.items || []).some(function (it) {
+        return (it && it.stories || []).some(function (st) { return st && st.size; });
+      });
+      if (anyStorySize) {
+        m.storySizeScheme = m.sizeScheme;
+        m.storySizeOrder = m.sizeOrder.slice();
+        m.storySizeDays = RM.clone(m.sizeDays);
+      } else {
+        m.storySizeScheme = RM.DEFAULT_STORY_SIZE_SCHEME;
+      }
+    }
+    m.storySizeScheme = RM.SIZE_SCHEMES[m.storySizeScheme] ? m.storySizeScheme : RM.DEFAULT_STORY_SIZE_SCHEME;
+    if (Array.isArray(m.storySizeOrder)) {
+      var seenSs = {};
+      m.storySizeOrder = m.storySizeOrder.map(String).filter(function (l) {
+        if (!l || seenSs[l]) return false;
+        seenSs[l] = true;
+        return true;
+      });
+    } else {
+      m.storySizeOrder = (RM.SIZE_SCHEMES[m.storySizeScheme].sizes || []).slice();
+    }
+    var storySchemeDays = RM.SIZE_SCHEMES[m.storySizeScheme].days || {};
+    m.storySizeDays = m.storySizeDays && typeof m.storySizeDays === 'object' ? m.storySizeDays : {};
+    m.storySizeOrder.forEach(function (l) {
+      if (!isFinite(+m.storySizeDays[l]) || +m.storySizeDays[l] <= 0) {
+        m.storySizeDays[l] = storySchemeDays[l] || 5;
+      }
+    });
     // workstream feature switch — ON unless the project turned it off
     m.workstreamsEnabled = m.workstreamsEnabled !== false;
     // the default (null) workstream: user-visible name + color
@@ -1116,31 +1336,20 @@
       var hex = String(m.defaultWsColor || '').replace(/^#/, '').toUpperCase();
       return /^[0-9A-F]{6}$/.test(hex) ? hex : RM.PALETTE.neutral;
     })();
-    // workflow statuses (feature + story lists may differ)
-    m.statuses = (function () {
-      var out = {};
-      ['feature', 'story'].forEach(function (kind) {
-        var raw = m.statuses && Array.isArray(m.statuses[kind]) ? m.statuses[kind] : null;
-        var seenS = {}, list = [];
-        (raw || RM.DEFAULT_STATUSES[kind]).forEach(function (x) {
-          x = String(x || '').trim();
-          if (x && !seenS[x]) { seenS[x] = true; list.push(x); }
-        });
-        out[kind] = list.length >= 2 ? list : RM.DEFAULT_STATUSES[kind].slice();
-      });
-      // user-assigned status colors: name -> 6-hex
-      var sc = {};
-      if (m.statusColors && typeof m.statusColors === 'object') {
-        Object.keys(m.statusColors).forEach(function (nm) {
-          var hex = String(m.statusColors[nm] || '').replace(/^#/, '');
-          if (/^[0-9a-fA-F]{6}$/.test(hex)) sc[String(nm).slice(0, 60)] = hex.toUpperCase();
-        });
-      }
-      m.statusColors = sc;
-      return out;
-    })();
     // priority column scheme (own column, separate from risk)
     m.priorityScheme = RM.PRIORITY_SCHEMES[m.priorityScheme] ? m.priorityScheme : 'none';
+    // stories rank on their own scheme. A doc from before story schemes
+    // existed keeps the feature scheme for stories that already carry a
+    // priority; otherwise stories start on the severity ladder.
+    var anyStoryPri = (state.items || []).some(function (it) {
+      return (it && it.stories || []).some(function (st) { return st && st.priority; });
+    });
+    if (m.storyPriorityScheme == null) {
+      m.storyPriorityScheme = anyStoryPri && m.priorityScheme !== 'rice' ? m.priorityScheme : RM.DEFAULT_STORY_PRIORITY_SCHEME;
+    }
+    if (!RM.PRIORITY_SCHEMES[m.storyPriorityScheme] || m.storyPriorityScheme === 'rice') {
+      m.storyPriorityScheme = RM.DEFAULT_STORY_PRIORITY_SCHEME;
+    }
     // a doc saved while MoSCoW lived under Risk migrates to the Priority column
     if (m.riskScheme === 'moscow') {
       m.riskScheme = 'none';
@@ -1198,8 +1407,7 @@
 
     var riskOrder = RM.RISK_SCHEMES[m.riskScheme].order || RM.RISK_ORDER;
     var prioOrder = RM.PRIORITY_SCHEMES[m.priorityScheme].order || [];
-    var firstType = state.teamTypes && state.teamTypes.length
-      ? state.teamTypes[0] : RM.DEFAULT_WORK_TYPE;
+    var storyPrioOrder = RM.PRIORITY_SCHEMES[m.storyPriorityScheme].order || [];
     state.items = (state.items || []).map(function (it) {
       return {
         id: it.id || RM.uid('i'),
@@ -1208,6 +1416,7 @@
         phaseId: phaseIds[it.phaseId] ? it.phaseId : fallbackPhase,
         feature: it.feature || '',
         description: it.description || '',
+        ac: it.ac || '',
         workstream: it.workstream || '',
         epic: it.epic || '',
         enables: it.enables || '',
@@ -1243,10 +1452,13 @@
         // hard deadline: a calendar date (ISO), so it survives work-week edits
         deadline: /^\d{4}-\d{2}-\d{2}$/.test(String(it.deadline || '')) ? String(it.deadline) : null,
         headcount: it.headcount != null && it.headcount > 0 ? it.headcount : 1,
-        // role is descriptive metadata (capacity is role-agnostic)
-        teamType: it.teamType != null && it.teamType !== '' ? it.teamType : firstType,
+        // role is descriptive metadata (capacity is role-agnostic); empty = any role
+        teamType: it.teamType != null && it.teamType !== '' ? String(it.teamType) : '',
         // milestones are fixed dates: zero-duration diamonds on the timeline
         milestone: !!it.milestone,
+        // milestone marker shape; absent = diamond (kept on bars so a
+        // feature converted back and forth remembers its choice)
+        msStyle: RM.MS_STYLES.indexOf(it.msStyle) > 0 ? it.msStyle : undefined,
         startDay: it.startDay != null && isFinite(it.startDay) ? it.startDay : null,
         durDays: it.durDays != null && isFinite(it.durDays)
           ? Math.max(it.milestone ? 0 : 1, it.durDays) : null,
@@ -1263,12 +1475,18 @@
           }
           return out;
         })(),
+        // RICE inputs (reach / impact / confidence % / effort) — feed the
+        // computed score when the RICE priority scheme is active
+        rice: (function () {
+          var r = it.rice || {};
+          function num(v) { return v != null && isFinite(v) && +v >= 0 ? +v : null; }
+          return { reach: num(r.reach), impact: num(r.impact), confidence: num(r.confidence), effort: num(r.effort) };
+        })(),
         colorOverride: it.colorOverride || null,
+        jiraKey: RM.jiraKeyOf(it.jiraKey),
         // team-member ids working on this feature (validated against the
         // roster once the team is normalized below)
         assignees: Array.isArray(it.assignees) ? it.assignees.map(String) : [],
-        // workflow status; null = derived from done (last) / first
-        status: it.status && m.statuses.feature.indexOf(it.status) !== -1 ? it.status : null,
         done: !!it.done,
         stories: (it.stories || []).map(function (s) {
           // stories may carry their own little timeline (startDay/durDays);
@@ -1277,10 +1495,13 @@
           return {
             id: s.id || RM.uid('s'), title: s.title || '', done: !!s.done,
             order: typeof s.order === 'string' && s.order ? s.order : null,
-            status: s.status && m.statuses.story.indexOf(s.status) !== -1 ? s.status : null,
+            jiraKey: RM.jiraKeyOf(s.jiraKey),
             size: s.size || null,
-            priority: s.priority && prioOrder.indexOf(String(s.priority).toUpperCase()) !== -1
+            priority: s.priority && storyPrioOrder.indexOf(String(s.priority).toUpperCase()) !== -1
               ? String(s.priority).toUpperCase() : null,
+            // stories rate risk on the document's risk scheme, like features
+            risk: s.risk && riskOrder.indexOf(String(s.risk).toUpperCase()) !== -1
+              ? String(s.risk).toUpperCase() : null,
             assignees: Array.isArray(s.assignees) ? s.assignees.map(String) : [],
             // stories carry their own hard deadline, same shape as items
             deadline: /^\d{4}-\d{2}-\d{2}$/.test(String(s.deadline || '')) ? String(s.deadline) : null,
@@ -1321,6 +1542,15 @@
     state.epicColors = state.epicColors || {}; // legacy — display now keys off workstream
     state.wsColors = state.wsColors && typeof state.wsColors === 'object' ? state.wsColors : {};
     state.epicIcons = state.epicIcons && typeof state.epicIcons === 'object' ? state.epicIcons : {};
+    // epic name -> Jira epic key (epics are strings on items, like epicIcons)
+    var epicJira = {};
+    if (state.epicJira && typeof state.epicJira === 'object') {
+      Object.keys(state.epicJira).forEach(function (ep) {
+        var k = RM.jiraKeyOf(state.epicJira[ep]);
+        if (k) epicJira[ep] = k;
+      });
+    }
+    state.epicJira = epicJira;
     // seed default colors/icons for well-known workstreams and epics
     state.items.forEach(function (it) {
       var w = it.workstream;
@@ -1575,9 +1805,9 @@
   // gains values for fields it left empty. Where both sides hold a value and
   // disagree the difference is counted, never applied — the shared roadmap
   // wins. planImport is pure; applyImport mutates (inside commit).
-  // teamType is not here: normalizeState always defaults it, so it is never
-  // empty and a difference would only ever be a false conflict
-  RM.IMPORT_FILL_FIELDS = ['enables', 'outOfScope', 'notes', 'extDeps', 'description', 'size', 'risk'];
+  // teamType is not here: an empty role means "any role" (a real value, not
+  // a gap), so a workbook must neither fill it nor count it as a conflict
+  RM.IMPORT_FILL_FIELDS = ['enables', 'outOfScope', 'notes', 'extDeps', 'description', 'ac', 'size', 'risk'];
   RM.IMPORT_STORY_FILL_FIELDS = ['description', 'ac'];
   function normTitle(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase(); }
   // Only an RM.uid-shaped id is identity across documents. Template imports
@@ -1822,6 +2052,32 @@
       else delete c.label; // empty (or canonical) restores the built-in name
     });
   };
+  // does a column show on rows of this kind ('feature' | 'story')?
+  RM.scopeColShows = function (col, kind) {
+    return !col.scope || col.scope === 'both' || col.scope === kind;
+  };
+  // 'feature' / 'story' restrict the column; 'both' (or anything else) clears
+  RM.setScopeColScope = function (state, key, scope) {
+    if (scope !== 'feature' && scope !== 'story' && scope !== 'both') return;
+    state.meta.scopeCols.forEach(function (c) {
+      if (c.key !== key) return;
+      if (scope !== 'both') c.scope = scope;
+      else if (RM.SCOPE_BUILTIN_SCOPE[key]) c.scope = 'both'; // explicit: overrides the default
+      else delete c.scope;
+    });
+  };
+  // stories keep Description and Acceptance criteria as own fields; every
+  // other column (built-in or custom) lives in story.custom
+  RM.STORY_FIELD_KEYS = { description: true, ac: true };
+  RM.storyScopeValue = function (st, key) {
+    if (RM.STORY_FIELD_KEYS[key]) return st[key] || '';
+    return (st.custom && st.custom[key]) || '';
+  };
+  RM.setStoryScopeValue = function (st, key, val) {
+    if (RM.STORY_FIELD_KEYS[key]) { st[key] = val; return; }
+    if (!st.custom) st.custom = {};
+    if (val) st.custom[key] = val; else delete st.custom[key];
+  };
   RM.scopeValue = function (it, key) {
     if (RM.SCOPE_BUILTIN_LABELS[key]) return it[key] || '';
     return (it.custom && it.custom[key]) || '';
@@ -1840,7 +2096,11 @@
   RM.addScopeCol = function (state, label, key) {
     var cols = state.meta.scopeCols;
     if (key && RM.SCOPE_BUILTIN_LABELS[key]) {
-      if (!cols.some(function (c) { return c.key === key; })) cols.push({ key: key });
+      if (!cols.some(function (c) { return c.key === key; })) {
+        var col = { key: key };
+        if (RM.SCOPE_BUILTIN_SCOPE[key]) col.scope = RM.SCOPE_BUILTIN_SCOPE[key];
+        cols.push(col);
+      }
       orderAppend(state.meta, key);
       return key;
     }
@@ -1874,7 +2134,7 @@
     var sd = RM.sizeDays(state, it.size);
     if (sd != null) return sd;
     if (it.durDays != null) return it.durDays;
-    return 5;
+    return RM.sprintDays(state.meta);
   };
 
   // End of an item INCLUDING its risk buffer — dependents plan around the
@@ -2528,6 +2788,61 @@
     });
   };
 
+  // ---- sprint view moves (pure; app.js wraps them in commits)
+  // first working-day index of a numbered sprint (never before the timeline)
+  RM.sprintStartDay = function (meta, num) {
+    return Math.max(0, RM.sprintRange(meta, num).w0 * RM.slotsOf(meta));
+  };
+  // reorder one item in document order: before another item (adopting its
+  // phase, like a row drop in Planning) or to the end of its own phase
+  RM.reorderItem = function (state, itemId, beforeId) {
+    var t = RM.itemById(state, itemId);
+    if (!t || beforeId === itemId) return false;
+    var before = beforeId ? RM.itemById(state, beforeId) : null;
+    // one order key changes (placeItem mirrors the move in the array)
+    RM.placeItem(state, itemId, before ? before.phaseId : t.phaseId, before ? before.id : null);
+    delete t.holdPos;
+    return true;
+  };
+  // Sprinting view drop: land the item in sprint `num` (null = unscheduled)
+  // keeping its duration, ride its stories along, then reorder it before
+  // `beforeId` (or to the end of its phase). Returns true when anything moved.
+  RM.moveItemToSprint = function (state, itemId, num, beforeId) {
+    var t = RM.itemById(state, itemId);
+    if (!t) return false;
+    var meta = state.meta;
+    if (num == null) {
+      if (t.startDay != null) { t.startDay = null; t.durDays = null; t.riskDays = 0; }
+    } else {
+      var day = RM.sprintStartDay(meta, num);
+      var was = t.startDay;
+      if (t.durDays == null) {
+        t.durDays = t.milestone ? 1 : RM.stretchSpan(meta, day, RM.effortDays(state, t) || RM.sprintDays(meta));
+      }
+      t.startDay = day;
+      if (was != null) RM.shiftStories(t, day - was);
+    }
+    RM.reorderItem(state, itemId, beforeId);
+    return true;
+  };
+  // story variant: a story gets its own timeline in sprint `num` (one sprint
+  // unless it already has a span), or loses it (num = null); reorders only
+  // inside its feature's story list (before `beforeStId`, else last)
+  RM.moveStoryToSprint = function (state, itemId, stId, num, beforeStId) {
+    var it = RM.itemById(state, itemId);
+    if (!it) return false;
+    var st = (it.stories || []).filter(function (x) { return x.id === stId; })[0];
+    if (!st) return false;
+    if (num == null) { st.startDay = null; st.durDays = null; }
+    else {
+      st.startDay = RM.sprintStartDay(state.meta, num);
+      if (st.durDays == null) st.durDays = RM.stretchSpan(state.meta, st.startDay, RM.storyEffortDays(state, st));
+    }
+    // before another story (else last): its order key follows the row
+    if (beforeStId !== stId) placeInList(it.stories, st, beforeStId || null, function () { return true; });
+    return true;
+  };
+
   // Rename a role everywhere it appears: the role list, people, items and
   // the rate card. Returns false when the new name is empty or taken.
   RM.renameRole = function (state, oldName, newName) {
@@ -2543,6 +2858,18 @@
       state.meta.rateCard[newName] = state.meta.rateCard[oldName];
       delete state.meta.rateCard[oldName];
     }
+    return true;
+  };
+
+  // Remove a role everywhere: people and features that had it are left with
+  // no role (empty), and its rate card entry goes with it.
+  RM.removeRole = function (state, name) {
+    var i = state.teamTypes.indexOf(name);
+    if (i === -1) return false;
+    state.teamTypes.splice(i, 1);
+    state.team.forEach(function (m) { if (m.type === name) m.type = ''; });
+    state.items.forEach(function (it) { if (it.teamType === name) it.teamType = ''; });
+    if (state.meta.rateCard) delete state.meta.rateCard[name];
     return true;
   };
 

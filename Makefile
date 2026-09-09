@@ -18,6 +18,8 @@ build:
 # core + headless UI smoke suites
 test:
 	NODE_PATH=./node_modules node tests/core.test.js
+	NODE_PATH=./node_modules node tests/jira.test.js
+	NODE_PATH=./node_modules node tests/ai.test.js
 	NODE_PATH=./node_modules node tests/smoke.test.js
 	NODE_PATH=./node_modules node tests/desktop.test.js
 	NODE_PATH=./node_modules node tests/wiring.test.js

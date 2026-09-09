@@ -26,7 +26,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 
 Both scripts fetch the latest [GitHub release](https://github.com/smo-key/headway/releases)
 (built by `.github/workflows/release.yml` on every `v*` tag). Re-run the same
-one-liner to update.
+one-liner to update, or let the app do it: it checks for a new release on
+launch and every hour, downloads it in the background, and offers an Update
+button (header and start page); the start page's **Check for updates** button
+checks on demand. Release notes live in `CHANGELOG.md` — one `## <version>`
+section per release, written as part of the release task — and become both the
+GitHub release body and the in-app "What's new" dialog, shown once after each
+update (click the version number on the start page to reopen it).
 
 In the desktop app, File → Open… / Save / Save As… use native dialogs and write
 straight to disk. On macOS the File / Edit / View menus live in the system menu
@@ -65,6 +71,8 @@ Switch with the tab group in the top center:
   header menu moves, renames (custom), or removes it. Columns — and the frozen
   left pane, per view — resize by dragging edges (remembered in the browser).
 
+Setup → **Apps** (right after Timeline) switches each of the header tabs on or off per project — hide Scoping or Budgeting for a plan that doesn't use them; Planning always stays. The data behind a hidden tab is kept.
+
 The menu bar (**File / Edit / View**) holds everything else; only **Save
 .xlsx**, the view switch, and the preflight (validation) chip stay as direct
 controls. Menus open on a 0.4s hover and switch instantly while one is open;
@@ -75,20 +83,28 @@ rows have right-click context menus; dropdowns share one list UI.
 | Area | How |
 |---|---|
 | Timeline | Biweekly-sprint grid (dates primary, sprint numbers secondary — numbering anchor configurable, e.g. S1 = Sep 7). Holidays are individual DATES drawn as day-level hatched segments; click a week header to toggle a whole week, single dates in Settings. Drag empty space to pan, `⌘scroll` to zoom |
-| Bars | One uniform duration per item (the work/risk split lives in the panel). Drag to move, edges resize; `⌘-drag` pushes all downstream dependents along. Snap grid in View → Snap (day / week / 2 weeks, default week). View → Auto-order (default on) re-sorts rows by start date after a move |
+| Bars | One uniform duration per item (the work/risk split lives in the panel). Drag to move, edges resize; `⌘-drag` pushes all downstream dependents along. Snap grids in View → Snap, one for features (default week) and one for stories (default sprint); day / week / sprint each. View → Auto-order (default on) re-sorts rows by start date after a move |
 | Sizes | Measured in weeks: XS 2d · S 1w · M 2w · L 4w · XL 8w (editable in Settings). Risk buffers use the same scale |
 | Risk | Per-item severity — None / L / M / H (legacy t-shirt values migrate). Shown in Scoping and the panel only; Planning rows carry no risk chip. The panel also shows a computed dependency-risk estimate with reasons |
 | Phases | Header phase lane: spans auto-derive from items, or pin explicit dates (phase modal, or drag the span — body moves, edges resize). Pinned spans show a white outline |
 | Budgeting & reports | Budgeting view for costs/rates/margins per role; a collapsible bottom **Reports** drawer (Budgeting only) rolls up effort and estimated cost by workstream, phase, or phase × workstream |
 | Capacity switch | Setup → Capacity: off by default. When off, capacity UI, validation and scheduling constraints all stand down |
-| Rows | Drag **anywhere on the left pane** to reorder or move between phases; dragging near the top/bottom edge auto-scrolls. Story chevron sits left of the ID; size/risk/hc chips align under their header labels |
-| Epics | Epic is a dropdown (with "＋ New epic…"); View → Group by epic groups rows under epic bands inside each phase (drops adopt the target group's epic) |
+| Rows | Drag **anywhere on the left pane** to reorder or move between phases; dragging near the top/bottom edge auto-scrolls. Story rows drag by their grip in Planning and Scoping alike — up/down inside a feature, or onto another feature. Story chevron sits left of the ID; size/risk/hc chips align under their header labels |
+| Prioritizing | Kanban with feature cards: columns are the phases, or pick **Priority**, **Size** or **Risk** from the Columns dropdown to lay features out by that field (plus Unset) and drag between them to set it. The **Story** level turns it into a story board: one card per story with its feature named above the title, in columns of one story field — **Priority** (default), **Size** or **Risk**, picked from the Columns dropdown — plus an Unset column. Drag a story to a column to set that field; the board keeps Group (by workstream / epic), Sort and the text / epic / workstream filters |
+| Sprinting | Sprint-by-sprint page: the sidebar lists every sprint (today's marked) with Unscheduled last, the main area is one scrolling list of sections with a row per feature — or per story, grouped under its feature (Features / Stories toggle). Drag a row to another sprint (a section or its sidebar entry) to start it on that sprint's first day with its span and stories riding along; drop it before another row to reorder — the order is the shared items order, so it changes in every view. Rows carry inline title, epic and size chips; the toolbar filters by text, phase, epic and workstream; each section ends with **Add feature** |
+| Detail panel | Right-hand panel for the selected feature or story. Its header row (number, milestone chip, collapse) stays pinned while the body scrolls; **Fields** follow the Scoping column order and show only the columns scoped to that kind of row; **Integrations** (Jira key) sits last. Stories get a **People** section for assignees. Enter in any single-line field (the title included) leaves the field and saves it; clicking out always saves. The B / I / list bar of a rich field appears only while it has focus |
+| Panes | Collapse the left pane from the button in its top-left corner and the right panel from its collapse button; each folds away completely, leaving only a reopen button in the same corner. Hotkeys `[` and `]` toggle them, never while typing |
+| Columns | Setup → Columns (or a column header's right-click menu) picks whether each text column shows on **features, stories, or both**: excluded rows grey the cell out in Scoping and drop the field from the panel. **Acceptance criteria** is a built-in column that sits after Description and shows on stories only by default |
+| Milestones | Zero-duration items pinned to a date. Each carries a marker style — **diamond** (default), **star** or **circle** — picked from the row's context menu or the panel's milestone chip; it shows on the timeline, row dots and in PNG, PowerPoint and Excel exports |
+| Epics | Epic is a dropdown (with "＋ New epic…"); View → Group by epic groups rows under epic bands inside each phase (drops adopt the target group's epic); every epic / workstream group ends with its own **Add feature** row that files the feature into that group, and Insert feature above/below inherits the anchor's epic and workstream |
 | Dependencies | Hover a bar → drag its edge **circles** onto another row (left = depends ON it, right = dependency FOR it; Esc cancels mid-draw). Curved arrows show every explicit dep when on; **critical path orange**, violations dashed amber. Click an arrow + Delete removes it. Panel search adds deps **by name** |
 | Headcount | `×N` chip on each row (click +1, ⇧-click −1); every item defaults to 1 × Development, work type adjustable per item. Item #s are editable in the panel (invalid/taken numbers pick the next available; deps follow) |
 | Team & resources | Roster with member types (reorderable). A **resizable, collapsible Resources panel** at the bottom is a spreadsheet of hours per person per week (default 40): click a cell to type, drag to fill. Weekly capacity = Σ hours ÷ 40 (people-equivalents); the capacity header row shows ≈ parallel work items for a selectable work type (default Development, or All) and everything schedules against it |
 | Auto mode | Edit → Auto-schedule: dependency order, earliest start with free capacity, bars stretch across holiday weeks, risk buffers appended, locked items stay put; per-item "Snap earliest" in the panel |
 | Validation | Preflight chip + report: cycles, unknown/self deps, starts inside a dependency's risk buffer, missing size, headcount vs roster, weekly over-capacity |
 | Excel | **Save .xlsx** writes a styled workbook in the source template's layout at WEEK granularity (one column per week, sprint numbers merged above; solid work + pale risk cells, Next/Future markers) + Stories + Team (incl. off weeks) + a hidden `_RoadmapTool` sheet with lossless state. **Open** loads tool files losslessly and parses template-shaped workbooks — weekly or legacy sprint columns, inferred from the header dates; the pale run at either end of a bar is read as the risk area |
+| Jira | **Export → Jira CSV** writes a file for Jira Cloud's user-level CSV importer (work navigator → ⋯ → Import issues from CSV; needs only Create work items + Make bulk changes). Rows are features and/or stories with the issue type names you choose; Parent and Blocked By carry the Jira keys typed into Headway (panel "Jira key" on features and stories, Edit epic… for epics), so the first import creates issues, you paste the keys back, and later exports parent stories and re-map as updates. Dates are ISO — pick `yyyy-MM-dd` in the wizard |
+| AI assistant | The **AI** toolbar button (⌘J) opens a chat drawer that answers questions about Headway, the open plan and project-management practice, and edits the document, your preferences or (when Setup → Jira is connected) Jira itself on request — every document edit is undoable and shows in Version history as “you · AI”. Set it up in Setup → Personal → AI assistant: a **LiteLLM gateway** (URL, API key, model picked from the gateway, optional extra headers) or, in the desktop app, your **Claude subscription** (runs `claude -p` from Claude Code, no API key). Pick the model and effort level in the drawer's compose bar (effort offers only what the gateway says the model supports, and hides for models without it); replies show their thinking; attach images, PDFs or text files with the paperclip, drag-drop or paste. Settings stay on this machine |
 | Safety | Undo/redo (⌘Z / ⇧⌘Z), localStorage autosave (full state + UI prefs; a blocked/full storage now shows "local save unavailable" instead of failing silently), seed restore (File menu). Saved .xlsx files carry the UI prefs too — opening one on another machine restores the exact browser state |
 
 ## Files
@@ -97,6 +113,8 @@ rows have right-click context menus; dropdowns share one list UI.
 - `js/core.js` — pure logic (calendar, deps, capacity, scheduler, risk, critical path); node-testable
 - `js/excel.js` — ExcelJS import/export
 - `js/app.js` — UI
+- `js/export-jira.js` — Jira CSV export (user-level importer shape)
+- `js/jira.js` — Jira Cloud sync
 - `js/desktop.js` — Tauri desktop bridge (native dialogs, disk save/load, file watching); no-op in a browser
 - `tests/seed.fixture.js` — sample document used by the test suites only
 - `js/vendor/exceljs.min.js`, `js/vendor/lucide.min.js` — vendored libraries

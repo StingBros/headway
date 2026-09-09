@@ -36,6 +36,16 @@ jobs:
 
       - run: npm install
 
+      # release body = this version's CHANGELOG.md section (fails if missing)
+      - id: notes
+        shell: bash
+        run: |
+          {
+            echo 'body<<HEADWAY_NOTES_EOF'
+            node scripts/release-notes.mjs "${{ github.ref_name }}"
+            echo 'HEADWAY_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -44,6 +54,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Headway ${{ github.ref_name }}
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
