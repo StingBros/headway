@@ -3338,7 +3338,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   // stories estimate on their own scale: story points + severity ladder by default
   ok(state().meta.storySizeScheme === 'fibonacci' && state().meta.storyPriorityScheme === 'levels',
     'stories default to story points and the severity ladder');
-  ok(window.RM.sizeOrderOf(state(), 'story').join(',') === '0.5,1,2,3,5,8,13' &&
+  ok(window.RM.sizeOrderOf(state(), 'story').join(',') === '0,0.5,1,2,3,5,8,13' &&
     window.RM.sizeOrderOf(state()).join(',') !== window.RM.sizeOrderOf(state(), 'story').join(','),
     'the story scale is separate from the feature scale');
   click(doc.querySelector('#btnSetup'));
@@ -3980,7 +3980,7 @@ ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'co
   click(doc.querySelector('#viewTabs [data-view="sprints"]'));
   const prev = JSON.parse(JSON.stringify({ s: state().meta.storySizeScheme, o: state().meta.storySizeOrder, d: state().meta.storySizeDays }));
   window.HeadwayApp.ai.commit('fib', (s) => { window.RM.setSizeScheme(s, 'fibonacci', 'story'); });
-  ok(state().meta.storySizeOrder[0] === '0.5', 'the Fibonacci story scale offers 0.5');
+  ok(state().meta.storySizeOrder.join(',') === '0,0.5,1,2,3,5,8,13', 'the Fibonacci story scale offers 0 and 0.5');
   const row = doc.querySelector('#sprintView .spv-sec:not([data-spsec="u"]) .spv-row');
   const id = row.dataset.spid, sec = row.dataset.spsec;
   const it = state().items.find(i => i.id === id);
@@ -4079,6 +4079,44 @@ let taggedForXlsx = null;
     // the tags stay on the document so the export chain below can round-trip them
     taggedForXlsx = { id: tagged.id, storyId: tagged.stories[0] && tagged.stories[0].id };
   });
+}
+
+// explicit 0-point stories: sized, worth nothing, offered in the size picker
+{
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  const prevZ = JSON.parse(JSON.stringify({ s: state().meta.storySizeScheme, o: state().meta.storySizeOrder, d: state().meta.storySizeDays }));
+  window.HeadwayApp.ai.commit('fib0', (s) => { window.RM.setSizeScheme(s, 'fibonacci', 'story'); });
+  const rowZ = doc.querySelector('#sprintView .spv-sec:not([data-spsec="u"]) .spv-row');
+  const idZ = rowZ.dataset.spid, secZ = rowZ.dataset.spsec;
+  // every story in this section: only the chosen feature's two get a size
+  window.HeadwayApp.ai.commit('zero', (s) => {
+    s.items.forEach((it) => (it.stories || []).forEach((st) => { st.size = ''; }));
+    const t = window.RM.itemById(s, idZ);
+    t.stories[0].size = '0';
+    if (t.stories[1]) t.stories[1].size = '0';
+  });
+  const hdZ = doc.querySelector('#sprintView .spv-sec[data-spsec="' + secZ + '"] .pr-lanect').textContent.trim();
+  ok(hdZ === '0 pt', 'a section of only 0-point stories reads "0 pt", not a count (' + hdZ + ')');
+  // the story size picker offers 0 (story level shows the per-story chips)
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find((b) => /Story/.test(b.textContent)));
+  const stId0 = state().items.find((i) => i.id === idZ).stories[0].id;
+  const stRow = doc.querySelector('#sprintView .spv-row[data-spst="' + stId0 + '"]');
+  const szBtn = stRow && stRow.querySelector('[data-spact="st-size"]');
+  ok(!!szBtn, 'the 0-point story shows a size chip');
+  if (szBtn) {
+    click(szBtn);
+    const opts = [...doc.querySelectorAll('#popover .menu-list button')].map((b) => b.textContent.trim());
+    ok(opts.some((o) => /^0\b/.test(o)), 'the story size picker offers 0 (' + opts.slice(0, 3).join(' | ') + ')');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  } else ok(window.RM.sizeOrderOf(state(), 'story')[0] === '0', 'the story size scale offers 0');
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find((b) => /Feature/.test(b.textContent)));
+  window.HeadwayApp.ai.commit('restore0', (s) => {
+    s.items.forEach((it) => (it.stories || []).forEach((st) => { st.size = ''; }));
+    s.meta.storySizeScheme = prevZ.s; s.meta.storySizeOrder = prevZ.o; s.meta.storySizeDays = prevZ.d;
+  });
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
 // NOTE: this export promise chain must stay LAST in this file — its .then /

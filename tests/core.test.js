@@ -1739,11 +1739,11 @@ eq(RMJira.csv(mkState([]), { features: true }).slice(1).split('\r\n').length, 2,
 // ------------------------------------------------------------ half points
 section('half points');
 {
-  eq(RM.SIZE_SCHEMES.fibonacci.sizes[0], '0.5', 'story points start at 0.5');
+  eq(RM.SIZE_SCHEMES.fibonacci.sizes.indexOf('0.5'), 1, 'story points offer 0.5 right after 0');
   eq(RM.SIZE_SCHEMES.fibonacci.days['0.5'], 0.5, '0.5 points = half a day');
   var sH = RM.normalizeState({ meta: { title: 'H', timelineStart: '2026-07-27', numWeeks: 8, storySizeScheme: 'fibonacci', storySizeOrder: ['1', '2', '3', '5', '8', '13'], storySizeDays: { 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 } },
     phases: [{ id: 'p', name: 'P' }], team: [], items: [{ id: 'x', num: 1, phaseId: 'p', feature: 'X', startDay: 0, durDays: 5, stories: [{ id: 's', title: 'S', size: '0.5' }] }] });
-  eq(RM.sizeOrderOf(sH, 'story')[0], '0.5', 'an older Fibonacci document gains the 0.5 option');
+  eq(RM.sizeOrderOf(sH, 'story').indexOf('0.5'), 1, 'an older Fibonacci document gains the 0.5 option');
   eq(RM.sizeDays(sH, '0.5', 'story'), 0.5, 'and its day value');
   eq(RM.storyEffortDays(sH, sH.items[0].stories[0]), 0.5, 'a 0.5-point story is half a day of effort');
   ok(RM.stretchSpan(sH.meta, 0, 0.5) >= 1, 'a half-day span still occupies one working day on the grid');
@@ -1761,4 +1761,50 @@ section('half points');
   ok(tr1[0]['Labels'].split(' ').indexOf('tech-debt') !== -1 && tr1[0]['Labels'].split(' ').indexOf('q3') !== -1,
     'feature labels include the slugged tags');
   ok(tr1[1]['Labels'].split(' ').indexOf('story-tag') !== -1, 'story labels include the slugged story tags');
+}
+
+// ------------------------------------------------------------ zero points
+section('zero points');
+{
+  eq(RM.SIZE_SCHEMES.fibonacci.sizes[0], '0', 'story points start at 0');
+  eq(RM.SIZE_SCHEMES.fibonacci.days['0'], 0, '0 points = no effort');
+  // features never gain the 0 step: picking Story points for the feature
+  // scale still starts at 0.5
+  var sZF = mkState([]);
+  RM.setSizeScheme(sZF, 'fibonacci', 'feature');
+  eq(RM.sizeOrderOf(sZF).join(','), '0.5,1,2,3,5,8,13', 'the feature Fibonacci scale skips 0');
+  eq(RM.sizeDays(sZF, '0'), null, 'and carries no day value for it');
+  RM.setSizeScheme(sZF, 'fibonacci', 'story');
+  eq(RM.sizeOrderOf(sZF, 'story').join(','), '0,0.5,1,2,3,5,8,13', 'the story Fibonacci scale offers 0');
+
+  // a size option may be worth zero days
+  var sZA = mkState([]);
+  RM.addSizeOption(sZA, '0', 0, 'story');
+  eq(RM.sizeDays(sZA, '0', 'story'), 0, 'addSizeOption stores a zero day value');
+
+  // a 0-point story: no effort, but still a day on the grid once scheduled
+  var sZ = RM.normalizeState({ meta: { title: 'Z', timelineStart: '2026-07-27', numWeeks: 8, storySizeScheme: 'fibonacci' },
+    phases: [{ id: 'p', name: 'P' }], team: [],
+    items: [{ id: 'x', num: 1, phaseId: 'p', feature: 'X', startDay: 0, durDays: 5, stories: [{ id: 's', title: 'S', size: '0' }] }] });
+  eq(RM.storyEffortDays(sZ, sZ.items[0].stories[0]), 0, 'a 0-point story is zero days of effort');
+  ok(RM.moveStoryToSprint(sZ, 'x', 's', 0), 'a 0-point story moves onto a sprint');
+  ok(sZ.items[0].stories[0].durDays >= 1, 'and occupies at least one working day (' + sZ.items[0].stories[0].durDays + ')');
+  var sZ2 = RM.normalizeState(sZ);
+  ok(sZ2.items[0].stories[0].startDay != null && sZ2.items[0].stories[0].durDays >= 1,
+    'the 0-point story survives normalize still scheduled');
+
+  // migration: the Task 15 default gains 0; the pre-0.5 default gains both
+  var sZ15 = RM.normalizeState({ meta: { title: 'Z15', timelineStart: '2026-07-27', numWeeks: 8, storySizeScheme: 'fibonacci', storySizeOrder: ['0.5', '1', '2', '3', '5', '8', '13'], storySizeDays: { '0.5': 0.5, 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 } },
+    phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
+  eq(RM.sizeOrderOf(sZ15, 'story').join(','), '0,0.5,1,2,3,5,8,13', 'a 0.5-era document gains the 0 option');
+  eq(RM.sizeDays(sZ15, '0', 'story'), 0, 'and its zero day value survives normalize');
+  var sZOld = RM.normalizeState({ meta: { title: 'ZO', timelineStart: '2026-07-27', numWeeks: 8, storySizeScheme: 'fibonacci', storySizeOrder: ['1', '2', '3', '5', '8', '13'], storySizeDays: { 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 } },
+    phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
+  eq(RM.sizeOrderOf(sZOld, 'story').join(','), '0,0.5,1,2,3,5,8,13', 'a pre-0.5 document gains both 0 and 0.5');
+  var sZC = RM.normalizeState({ meta: { title: 'ZC', timelineStart: '2026-07-27', numWeeks: 8, storySizeScheme: 'custom', storySizeOrder: ['0.5', '1', '2', '3', '5', '8', '13'], storySizeDays: { '0.5': 0.5, 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 } },
+    phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
+  eq(RM.sizeOrderOf(sZC, 'story').indexOf('0'), -1, 'a custom story scale is left alone');
+  var sZFO = RM.normalizeState({ meta: { title: 'ZF', timelineStart: '2026-07-27', numWeeks: 8, sizeScheme: 'fibonacci', sizeOrder: ['1', '2', '3', '5', '8', '13'], sizeDays: { 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 } },
+    phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
+  eq(RM.sizeOrderOf(sZFO).join(','), '0.5,1,2,3,5,8,13', 'an older feature Fibonacci scale gains 0.5 only');
 }

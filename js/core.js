@@ -29,8 +29,11 @@
     fibonacci: {
       name: 'Story points',
       hint: 'Fibonacci scale (Scrum) — uncertainty grows with size',
-      sizes: ['0.5', '1', '2', '3', '5', '8', '13'],
-      days: { '0.5': 0.5, 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 }
+      sizes: ['0', '0.5', '1', '2', '3', '5', '8', '13'],
+      days: { '0': 0, '0.5': 0.5, 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 },
+      // a 0-point estimate is a story-level idea (a placeholder, a spike
+      // already done, tracking-only work): features never offer it
+      storyOnly: ['0']
     },
     points5: {
       name: 'Points 1–5',
@@ -83,9 +86,13 @@
     var def = RM.SIZE_SCHEMES[scheme];
     if (!def || scheme === 'custom') return;
     var m = state.meta, k = sizeKeys(kind);
+    var skip = (kind !== 'story' && def.storyOnly) || [];
     m[k.scheme] = scheme;
-    m[k.order] = def.sizes.slice();
-    m[k.days] = RM.clone(def.days);
+    m[k.order] = def.sizes.filter(function (l) { return skip.indexOf(l) === -1; });
+    m[k.days] = {};
+    Object.keys(def.days).forEach(function (l) {
+      if (skip.indexOf(l) === -1) m[k.days][l] = def.days[l];
+    });
   };
   RM.renameSizeOption = function (state, oldLabel, newLabel, kind) {
     var m = state.meta, k = sizeKeys(kind);
@@ -100,7 +107,7 @@
     var m = state.meta, k = sizeKeys(kind);
     if (!label || m[k.order].indexOf(label) !== -1) return;
     m[k.order].push(label);
-    m[k.days][label] = isFinite(+days) && +days > 0 ? +days : 5;
+    m[k.days][label] = isFinite(+days) && +days >= 0 ? +days : 5;
     m[k.scheme] = 'custom';
   };
   RM.removeSizeOption = function (state, label, kind) {
@@ -110,18 +117,29 @@
     eachOfKind(state, kind, function (o) { if (o.size === label) o.size = null; });
     m[k.scheme] = 'custom';
   };
-  // Documents saved before Fibonacci gained its half point pick it up, as long
-  // as they still hold the untouched old default order (an edited scale is the
-  // project's own — leave it be; Setup can add 0.5 by hand).
+  // Documents saved before Fibonacci grew its small steps pick them up, as
+  // long as they still hold an untouched old default order (an edited scale is
+  // the project's own — leave it be; Setup can add the steps by hand).
+  // Features get 0.5 only; the 0 step is story-scale work.
   RM.FIB_PRE_HALF_ORDER = ['1', '2', '3', '5', '8', '13'];
-  function addHalfPoint(m, k) {
+  RM.FIB_PRE_ZERO_ORDER = ['0.5', '1', '2', '3', '5', '8', '13'];
+  function sameOrder(o, want) {
+    if (o.length !== want.length) return false;
+    for (var i = 0; i < o.length; i++) if (o[i] !== want[i]) return false;
+    return true;
+  }
+  function addSmallFibSteps(m, k, kind) {
     if (m[k.scheme] !== 'fibonacci' || !Array.isArray(m[k.order])) return;
     var o = m[k.order];
-    if (o.length !== RM.FIB_PRE_HALF_ORDER.length) return;
-    for (var i = 0; i < o.length; i++) if (o[i] !== RM.FIB_PRE_HALF_ORDER[i]) return;
-    o.unshift('0.5');
+    var steps = [];
+    if (sameOrder(o, RM.FIB_PRE_HALF_ORDER)) steps = kind === 'story' ? ['0.5', '0'] : ['0.5'];
+    else if (kind === 'story' && sameOrder(o, RM.FIB_PRE_ZERO_ORDER)) steps = ['0'];
+    if (!steps.length) return;
     m[k.days] = m[k.days] || {};
-    m[k.days]['0.5'] = 0.5;
+    steps.forEach(function (l) {
+      o.unshift(l);
+      m[k.days][l] = RM.SIZE_SCHEMES.fibonacci.days[l];
+    });
   }
 
   RM.RISK_ORDER = ['L', 'M', 'H']; // low / medium / high (severity, not a size)
@@ -1340,11 +1358,11 @@
     } else {
       m.sizeOrder = (RM.SIZE_SCHEMES[m.sizeScheme].sizes || RM.SIZE_ORDER).slice();
     }
-    addHalfPoint(m, sizeKeys('feature'));
+    addSmallFibSteps(m, sizeKeys('feature'), 'feature');
     var schemeDays = RM.SIZE_SCHEMES[m.sizeScheme].days || {};
     m.sizeOrder.forEach(function (l) {
-      if (!isFinite(+m.sizeDays[l]) || +m.sizeDays[l] <= 0) {
-        m.sizeDays[l] = schemeDays[l] || 5;
+      if (!isFinite(+m.sizeDays[l]) || +m.sizeDays[l] < 0) {
+        m.sizeDays[l] = schemeDays[l] != null ? schemeDays[l] : 5;
       }
     });
     // the story scale: a doc from before it existed hands stories the
@@ -1374,11 +1392,11 @@
       m.storySizeOrder = (RM.SIZE_SCHEMES[m.storySizeScheme].sizes || []).slice();
     }
     m.storySizeDays = m.storySizeDays && typeof m.storySizeDays === 'object' ? m.storySizeDays : {};
-    addHalfPoint(m, sizeKeys('story'));
+    addSmallFibSteps(m, sizeKeys('story'), 'story');
     var storySchemeDays = RM.SIZE_SCHEMES[m.storySizeScheme].days || {};
     m.storySizeOrder.forEach(function (l) {
-      if (!isFinite(+m.storySizeDays[l]) || +m.storySizeDays[l] <= 0) {
-        m.storySizeDays[l] = storySchemeDays[l] || 5;
+      if (!isFinite(+m.storySizeDays[l]) || +m.storySizeDays[l] < 0) {
+        m.storySizeDays[l] = storySchemeDays[l] != null ? storySchemeDays[l] : 5;
       }
     });
     // workstream feature switch — ON unless the project turned it off
@@ -1541,7 +1559,9 @@
         stories: (it.stories || []).map(function (s) {
           // stories may carry their own little timeline (startDay/durDays);
           // both null = no timeline (the default)
-          var sched = s.startDay != null && isFinite(s.startDay) && s.durDays > 0;
+          // a scheduled story always spans at least one day — a 0-point story
+          // saved with durDays 0 stays on the timeline rather than vanishing
+          var sched = s.startDay != null && isFinite(s.startDay) && s.durDays != null && isFinite(s.durDays) && s.durDays >= 0;
           return {
             id: s.id || RM.uid('s'), title: s.title || '', done: !!s.done,
             type: RM.itemType(state, s.type) ? s.type : RM.defaultTypeFor(state, 'story'),
@@ -1573,7 +1593,7 @@
             startDay: sched ? Math.max(0, Math.round(s.startDay)) : null,
             // an unscheduled story may still carry a duration (used when it
             // lands on the timeline, shown in the scoping grid)
-            durDays: sched ? Math.round(s.durDays)
+            durDays: sched ? Math.max(1, Math.round(s.durDays))
               : (s.durDays != null && isFinite(s.durDays) && s.durDays > 0 ? Math.round(s.durDays) : null)
           };
         })
@@ -2629,7 +2649,8 @@
     if (num == null) { st.startDay = null; st.durDays = null; }
     else {
       st.startDay = RM.sprintStartDay(state.meta, num);
-      if (st.durDays == null) st.durDays = RM.stretchSpan(state.meta, st.startDay, RM.storyEffortDays(state, st));
+      // a 0-effort (0-point) story still occupies one working day on the grid
+      if (st.durDays == null) st.durDays = RM.stretchSpan(state.meta, st.startDay, Math.max(1, RM.storyEffortDays(state, st)));
     }
     if (beforeStId !== stId) {
       it.stories = it.stories.filter(function (x) { return x.id !== stId; });

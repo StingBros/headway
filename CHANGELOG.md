@@ -15,7 +15,7 @@ Format: short sections, bullets, one bold title per notable change —
 - Jira: sync and CSV export use each type's Jira issue type; the three fixed type fields in Setup → Jira are replaced by a per-type table. Existing documents keep their previous names.
 - AI assistant can set and read item types.
 - Type glyphs: the colored square left of every title is now the item's type icon (Feature keeps the filled square; Story is a bookmark) in the active color. **View → Color by item type** colors bars by type; each type's color lives in Setup → Hierarchy.
-- Story points: the Fibonacci scale starts at 0.5; sizes accept half-day values.
+- Story points: the story Fibonacci scale starts at 0 and 0.5; sizes accept zero- and half-day values. A 0-point story is real work with no effort (a placeholder, a spike already done, tracking-only) — it counts 0 toward sprint totals but still takes a day on the timeline.
 - Prioritizing: milestones no longer appear on the board.
 - Sprinting: a row belongs only to the sprint it starts in (an ⓘ glyph says how many sprints it carries over), wears its sprint number, epic, workstream and assignees, and drops the duration, date range and phase columns; story-view headings show priority, size and duration; empty sprints at either end are hidden; right-click for **Move to sprint…** (features and stories) and **Assign…**.
 - Settings → Jira: issue-type icons match the rest of the UI.
