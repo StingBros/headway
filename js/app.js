@@ -136,6 +136,7 @@
   var prioSort = 'priority'; // Prioritizing order: 'priority' | 'doc' | 'title' | 'size'
   var prioFEpic = null;     // Prioritizing epic filter: null = all, '' = no epic, else the epic
   var prioFWs = null;       // Prioritizing workstream filter: null = all, '' = default, else the stream
+  var prioFPhase = null;    // Prioritizing phase filter: null = all, else a phase id
   var sprFPhase = null;     // Sprinting phase filter: null = all, else a phase id
   var sprFEpic = null;      // Sprinting epic filter: null = all, '' = no epic, else the epic
   var sprFWs = null;        // Sprinting workstream filter: null = all, '' = default, else the stream
@@ -1991,6 +1992,7 @@
   function prMatches(it) {
     if (it.milestone) return false; // milestones are dates, not work to rank
     if (!matchesFilter(it)) return false;
+    if (prioFPhase != null && it.phaseId !== prioFPhase) return false;
     if (prioFEpic != null && (it.epic || '') !== prioFEpic) return false;
     if (prioFWs != null && (it.workstream || '') !== prioFWs) return false;
     return true;
@@ -2000,8 +2002,8 @@
   var PR_CHIPS = { size: 'Size', priority: 'Priority', risk: 'Risk', dur: 'Duration', epic: 'Epic', ws: 'Workstream' };
   function prChipAvail(k) {
     if (k === 'size') return RM.sizingEnabled(state) && prioFeatCol !== 'size';
-    if (k === 'priority') return RM.priorityEnabled(state) && prioFeatCol !== 'priority';
-    if (k === 'risk') return RM.riskEnabled(state) && prioFeatCol !== 'risk';
+    if (k === 'priority') return RM.priorityEnabled(state);
+    if (k === 'risk') return RM.riskEnabled(state);
     if (k === 'epic') return prioGroup !== 'epic'; // the swimlane already names the epic
     if (k === 'ws') return !!state.meta.workstreamsEnabled && prioGroup !== 'ws';
     return true; // dur
@@ -2085,6 +2087,7 @@
   // a story shows when its feature passes the dropdowns and either the story
   // title or the feature itself matches the text filter
   function prStoryMatches(it, st) {
+    if (prioFPhase != null && it.phaseId !== prioFPhase) return false;
     if (prioFEpic != null && (it.epic || '') !== prioFEpic) return false;
     if (prioFWs != null && (it.workstream || '') !== prioFWs) return false;
     if (!filterText) return true;
@@ -2119,7 +2122,7 @@
   function prStoryCardHtml(it, st) {
     var wsColor = it.workstream ? RM.colorForWs(state, it.workstream) : RM.defaultWsColor(state);
     var chips = ['size', 'pri', 'risk', 'dur'].filter(function (k) {
-      return !(k === 'pri' && prioStoryCol === 'priority') && !(k === 'size' && prioStoryCol === 'size') && !(k === 'risk' && prioStoryCol === 'risk');
+      return !(k === 'size' && prioStoryCol === 'size');
     }).map(function (k) { return storyChipHtml(k, st, 'data-prstact'); }).join('');
     return '<div class="sp-card pr-card pr-stcard' + (st.done ? ' done' : '') + '" data-prcard="' + it.id + '" data-prst="' + st.id + '" style="--ws-c:#' + wsColor + '">' +
       '<div class="pr-stfeat" title="Feature"><span class="r-num">#' + it.num + '</span>' +
@@ -2181,6 +2184,7 @@
     if (storyMode && stKinds.indexOf(prioStoryCol) === -1 && stKinds.length) prioStoryCol = stKinds[0];
     var ftKinds = storyMode ? [] : prFeatColKinds();
     if (!storyMode && ftKinds.indexOf(prioFeatCol) === -1) prioFeatCol = 'phase';
+    if (prioFPhase != null && !state.phases.some(function (p) { return p.id === prioFPhase; })) prioFPhase = null;
     var phases = state.phases;
     var grouped = prioGroup !== 'none';
     // columns: phases (or a feature field's ladder) for features, a story field's ladder for stories
@@ -2238,6 +2242,11 @@
     }
     // an active filter wears what it picked: the epic's own icon, the
     // workstream's color dot, and a blue outline
+    var fPhP = prioFPhase == null ? null : state.phases.filter(function (p) { return p.id === prioFPhase; })[0];
+    var phaseFilterDd = state.phases.length > 1
+      ? '<button class="dd-btn' + (fPhP ? ' pr-on' : '') + '" data-prdd="fphase" title="Filter by phase">' +
+        '<span class="dd-label"><i data-lucide="milestone"></i>' + (fPhP ? esc(fPhP.name) : 'All phases') + '</span>' +
+        '<i data-lucide="chevron-down"></i></button>' : '';
     var epicFilterDd = allEpics().length
       ? '<button class="dd-btn' + (prioFEpic == null ? '' : ' pr-on') + '" data-prdd="fepic" title="Filter by epic">' +
         '<span class="dd-label">' + (prioFEpic == null ? '<i data-lucide="tag"></i>All epics'
@@ -2261,7 +2270,7 @@
       '<span class="filter-wrap pr-filter"><i data-lucide="search" class="filter-ico" aria-hidden="true"></i>' +
       '<input id="prFilter" type="search" placeholder="Filter cards" aria-label="Filter cards" value="' + esc(filterText) + '">' +
       '<kbd class="kbd filter-kbd" aria-hidden="true">⌘F</kbd></span>' +
-      epicFilterDd + wsFilterDd +
+      phaseFilterDd + epicFilterDd + wsFilterDd +
       '<div class="pr-settings">' +
       colsDd +
       '<span class="pr-lab">Group</span>' +
@@ -2382,6 +2391,11 @@
             if (prioFeatCol !== k) { prioFeatCol = k; saveLocal(); render(); }
           } };
         }));
+      } else if (kind === 'fphase') {
+        openDropdown(dd, [{ label: '<i>All phases</i>', checked: prioFPhase == null, fn: function () { prioFPhase = null; render(); } }]
+          .concat(state.phases.map(function (p) {
+            return { label: esc(p.name), checked: prioFPhase === p.id, fn: function () { prioFPhase = p.id; render(); } };
+          })));
       } else if (kind === 'fepic') {
         openDropdown(dd, [{ label: '<i>All epics</i>', checked: prioFEpic == null, fn: function () { prioFEpic = null; render(); } },
           { label: '<i>— no epic —</i>', checked: prioFEpic === '', fn: function () { prioFEpic = ''; render(); } }]

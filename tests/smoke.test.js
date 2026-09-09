@@ -1996,8 +1996,8 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     const feat0 = state().items.find(i => i.id === fid);
     ok(!!card0.querySelector('.pr-stfeat') && card0.querySelector('.pr-stfeat').textContent.indexOf(feat0.feature) !== -1,
       'each story card names its feature');
-    ok(!card0.querySelector('[data-prstact="st-pri"]') && !!card0.querySelector('[data-prstact="st-size"]'),
-      'the column field\'s own chip is dropped from the card');
+    ok(!!card0.querySelector('[data-prstact="st-pri"]') && !!card0.querySelector('[data-prstact="st-size"]'),
+      'Priority and Risk chips stay on the card even when the columns are that field');
     ok(!doc.querySelector('#prFieldsBtn') && !doc.querySelector('#prioView .pr-add') && !doc.querySelector('#prioView [data-prstadd]'),
       'Fields, Add and Add story leave in story mode');
     const stIn = card0.querySelector('input[data-prstf="title"]');
@@ -3649,6 +3649,41 @@ window.RMExcel.exportWorkbook(state()).then((buf) => {
     window.HeadwayAI.runTool('navigate', { view: 'scoping', num: state().items.find((i) => i.id === rowIds[0]).num }, window.HeadwayApp);
     ok(!!doc.querySelector('#panel .seg button.pt-crit.on'), 'the panel picker lights Must in tier crit');
     ok(!!doc.querySelector('#panel .seg button.pt-high'), 'Should sits in tier high');
+    // prioritizing: Priority/Risk chips stay available whatever the columns are; phase filter
+    {
+      click(doc.querySelector('#viewTabs [data-view="prio"]'));
+      const pick = re => click([...doc.querySelectorAll('#popover .menu-list button')].find(b => re.test(b.textContent)));
+      // columns by priority: the Fields menu still offers Priority and Risk, and cards show them
+      click(doc.querySelector('#prioView [data-prdd="cols"]'));
+      pick(/^Priority$/);
+      click(doc.querySelector('#prFieldsBtn'));
+      const labels = [...doc.querySelectorAll('#popover .menu-list button')].map(b => b.textContent.trim());
+      ok(labels.indexOf('Priority') !== -1 && labels.indexOf('Risk') !== -1, 'Fields menu offers Priority and Risk even when the columns are by priority');
+      click(doc.querySelector('#prioView'));
+      ok(!!doc.querySelector('#prioView .pr-card [data-pract="priority"]') && !!doc.querySelector('#prioView .pr-card [data-pract="risk"]'),
+        'cards show the priority and risk chips in the priority columns');
+      click(doc.querySelector('#prioView [data-prdd="cols"]'));
+      pick(/^Phase$/);
+      // phase filter, same as Sprinting
+      const cardsOf = () => [...doc.querySelectorAll('#prioView .pr-card[data-prcard]')];
+      const itemOf = c => state().items.find(i => i.id === c.dataset.prcard);
+      const before = cardsOf().length;
+      const ph = state().phases[1];
+      const fph = doc.querySelector('#prioView [data-prdd="fphase"]');
+      ok(!!fph, 'the prioritizing toolbar offers a phase filter');
+      click(fph);
+      pick(new RegExp('^' + ph.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'));
+      ok(cardsOf().length > 0 && cardsOf().length < before && cardsOf().every(c => itemOf(c).phaseId === ph.id),
+        'the phase filter narrows the cards to that phase');
+      const fph2 = doc.querySelector('#prioView [data-prdd="fphase"]');
+      ok(fph2.classList.contains('pr-on') && fph2.textContent.indexOf(ph.name) !== -1, 'an active phase filter lights up and names the phase');
+      click(fph2); pick(/All phases/);
+      ok(cardsOf().length === before && !doc.querySelector('#prioView [data-prdd="fphase"]').classList.contains('pr-on'),
+        'clearing the phase filter restores every card');
+      click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+      ok(!doc.querySelector('#sprintView [data-spdd="fphase"].pr-on'), 'the prioritizing phase filter does not leak into Sprinting');
+      click(doc.querySelector('#viewTabs [data-view="planning"]'));
+    }
   }).then(() => {
   // opening a file is not an edit: no version-history entry, nothing unsaved
   const tpl = window.__headway.templateState();
