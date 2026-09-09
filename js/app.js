@@ -120,8 +120,8 @@
   function uiSnapshot() {
     return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy };
   }
-  var COLOR_MODES = [['workstream', 'Workstream'], ['epic', 'Epic'], ['assignee', 'Assignee'], ['priority', 'Priority']];
-  var colorBy = 'workstream'; // what bar colors follow: 'workstream' | 'epic' | 'assignee' | 'priority'
+  var COLOR_MODES = [['workstream', 'Workstream'], ['epic', 'Epic'], ['assignee', 'Assignee'], ['priority', 'Priority'], ['type', 'Item type']];
+  var colorBy = 'workstream'; // what bar colors follow: 'workstream' | 'epic' | 'assignee' | 'priority' | 'type'
   function setColorBy(mode) {
     colorBy = RM.COLOR_MODES.indexOf(mode) !== -1 ? mode : 'workstream';
     RM.setColorMode(colorBy);
@@ -1311,10 +1311,21 @@
     var t = RM.typeOf(state, obj, kind);
     return '<button class="p-typechip" data-act="' + act + '" title="Type"><i data-lucide="' + esc(t.icon) + '"></i> ' + esc(t.label) + '</button>';
   }
-  function typeIconHtml(obj, kind) {
+  // Lucide icons drawn filled rather than stroked when used as a type glyph
+  var TYPE_FILL_ICONS = { bookmark: 1 };
+  // the glyph left of a title: the item's type icon in the active color-mode
+  // color. The Feature default (`square`) is the filled rounded square the
+  // rows always had; milestones keep their diamond/star/circle mask.
+  // `owner` is the feature a story belongs to (stories borrow its color
+  // except in the type color mode).
+  function typeGlyphHtml(obj, kind, owner) {
+    var it = owner || obj;
     var t = RM.typeOf(state, obj, kind);
-    if (t.key === RM.defaultTypeFor(state, kind)) return '';
-    return '<span class="r-type" title="' + esc(t.label) + '"><i data-lucide="' + esc(t.icon) + '"></i></span>';
+    var color = '#' + (kind === 'story' && RM.colorMode() === 'type' ? RM.colorForType(state, t.key) : RM.colorForItem(state, it));
+    var title = ' title="' + esc(t.label) + '"';
+    if (kind !== 'story' && it.milestone) return '<span class="r-dot msdot ' + RM.msStyleOf(it) + '" style="background:' + color + '"' + title + '></span>';
+    if (t.icon === 'square') return '<span class="r-dot" style="background:' + color + '"' + title + '></span>';
+    return '<span class="r-type' + (TYPE_FILL_ICONS[t.icon] ? ' fill' : '') + '" style="color:' + color + '"' + title + '><i data-lucide="' + esc(t.icon) + '"></i></span>';
   }
   function typeIconMenu(anchor, key) {
     var t = RM.itemType(state, key);
@@ -2024,8 +2035,8 @@
         '<button class="pr-st-add" data-prstadd="1"><i data-lucide="plus"></i>' + esc('Add ' + lvl('story')) + '</button></div>'
       : '';
     return '<div class="sp-card pr-card" data-prcard="' + it.id + '" style="--ws-c:#' + wsColor + '">' +
-      typeIconHtml(it, 'feature') +
-      '<input class="pr-title" data-prf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
+      '<div class="pr-head">' + typeGlyphHtml(it, 'feature') +
+      '<input class="pr-title" data-prf="feature" placeholder="Name" value="' + esc(it.feature) + '"></div>' +
       fields + stories +
       '<div class="pr-chips">' +
       (prChipOn('size') // the column field's chip is redundant; hidden chips come from the Fields menu
@@ -2117,8 +2128,8 @@
       '<div class="pr-stfeat" title="Feature"><span class="r-num">#' + it.num + '</span>' +
       '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' +
       '<span class="pr-stfeatname">' + esc(it.feature || '(untitled)') + '</span></div>' +
-      typeIconHtml(st, 'story') +
-      '<input class="pr-title pr-st-title" data-prstf="title" placeholder="Story" value="' + esc(st.title || '') + '">' +
+      '<div class="pr-head">' + typeGlyphHtml(st, 'story', it) +
+      '<input class="pr-title pr-st-title" data-prstf="title" placeholder="Story" value="' + esc(st.title || '') + '"></div>' +
       '<div class="pr-chips">' + chips + '</div></div>';
   }
   function prStoryColHtml(col, pairs, laneAttr) {
@@ -2669,13 +2680,11 @@
     return p ? p.name : '';
   }
   function sprRowHtml(it, num) {
-    var color = '#' + RM.colorForItem(state, it);
     return '<div class="spv-row' + (isSel(it.id) ? ' sel' : '') + (it.done ? ' done' : '') +
       '" data-spid="' + it.id + '" data-spsec="' + sprSecKey(num) + '">' +
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
       '<span class="r-num">#' + it.num + '</span>' +
-      '<span class="r-dot' + (it.milestone ? ' msdot ' + RM.msStyleOf(it) : '') + '" style="background:' + color + '"></span>' +
-      typeIconHtml(it, 'feature') +
+      typeGlyphHtml(it, 'feature') +
       '<input class="spv-title" data-spf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
       sprTag(it, num) +
       '<span class="spv-chip" tabindex="0" role="button" data-spact="epic" title="Epic">' +
@@ -2690,7 +2699,7 @@
     return '<div class="spv-row spv-st' + (isSel(it.id) && selStory === st.id ? ' sel' : '') + (st.done ? ' done' : '') +
       '" data-spid="' + it.id + '" data-spst="' + st.id + '" data-spsec="' + sprSecKey(num) + '">' +
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
-      typeIconHtml(st, 'story') +
+      typeGlyphHtml(st, 'story', it) +
       '<input class="spv-title" data-spf="story" placeholder="Story" value="' + esc(st.title || '') + '">' +
       (own ? sprTag(st, num) : (num == null ? '' : '<span class="spv-tag" title="No timeline of its own">with feature</span>')) +
       '<span class="spv-est">' + ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-spact'); }).join('') + '</span>' +
@@ -2703,7 +2712,7 @@
       body = sec.feats.map(function (f) {
         return '<div class="spv-feat" data-spfeat="' + f.it.id + '">' +
           '<span class="r-num">#' + f.it.num + '</span>' +
-          '<span class="r-dot" style="background:#' + RM.colorForItem(state, f.it) + '"></span>' +
+          typeGlyphHtml(f.it, 'feature') +
           '<span class="spv-featname">' + esc(f.it.feature || '(untitled)') + '</span>' +
           '<span class="spv-phase">' + esc(sprPhaseName(f.it)) + '</span></div>' +
           f.stories.map(function (st) { return sprStoryRowHtml(f.it, st, sec.num); }).join('');
@@ -3517,11 +3526,10 @@
         : '<span class="r-chev' + (expanded[it.id] ? ' open' : '') + '" data-act="stories" title="Stories (' + it.stories.length + ')">' +
           (it.stories.length ? '<i data-lucide="chevron-right"></i>' : '<span style="opacity:.35"><i data-lucide="chevron-right"></i></span>') + '</span>') +
       '<span class="r-num">' + it.num + '</span>' +
-      '<span class="r-dot' + (it.milestone ? ' msdot ' + RM.msStyleOf(it) : '') + '" style="background:' + color + '"></span>' +
       '<div class="r-main">' +
       (it.locked ? '<span class="r-lock"><i data-lucide="lock"></i></span>' : '') +
       (it.done ? '<span class="r-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
-      typeIconHtml(it, 'feature') +
+      typeGlyphHtml(it, 'feature') +
       (view === 'scoping'
         // scoping: the title is a full-height editable cell in the tab ring,
         // top-aligned and wrapping like every other cell
@@ -3562,7 +3570,7 @@
           '" data-story="' + st.id + '" data-id="' + it.id + '">' +
           '<div class="row-left"><span class="st-pad"><span class="st-grip" title="Drag to reorder or move to another feature"><i data-lucide="grip-vertical"></i></span></span>' +
           (st.done ? '<span class="r-doneck st-doneck" title="Done"><i data-lucide="circle-check"></i></span>' : '') +
-          typeIconHtml(st, 'story') +
+          typeGlyphHtml(st, 'story', it) +
           (view === 'scoping'
             // scoping: the story title edits in place like the feature titles
             ? '<div class="st-title st-name' + (st.done ? ' done' : '') + '" contenteditable="true" spellcheck="false" aria-label="Story title">' + esc(st.title) + '</div>'
@@ -4381,7 +4389,7 @@
   var EPIC_ICONS = ['tag', 'star', 'flag', 'rocket', 'target', 'layers', 'database', 'shield',
     'zap', 'globe', 'users', 'wrench', 'chart-line', 'box', 'lightbulb', 'compass',
     'cpu', 'plug', 'bot', 'flask-conical', 'map', 'workflow', 'network', 'building',
-    'bug', 'check-square', 'list-tree', 'rows-3', 'corner-down-right'];
+    'bug', 'check-square', 'list-tree', 'rows-3', 'corner-down-right', 'square', 'bookmark'];
   function epicEditModal(epicName) {
     var setting = state.epicIcons[epicName] || null;
     var count = state.items.filter(function (x) { return x.epic === epicName; }).length;
@@ -8897,7 +8905,8 @@
         '<div class="su-hchips">' + chips + '</div></div>';
     }).join('');
     var typeRows2 = RM.itemTypes(state).map(function (t) {
-      return '<tr><td><button class="su-hicon" data-suhticon="' + esc(t.key) + '" title="Icon"><i data-lucide="' + esc(t.icon) + '"></i></button></td>' +
+      return '<tr><td><button class="su-hicon" data-suhticon="' + esc(t.key) + '" title="Icon"><i data-lucide="' + esc(t.icon) + '"></i></button>' +
+        '<input type="color" class="su-hcolor" data-suhtcolor="' + esc(t.key) + '" value="#' + esc(t.color) + '" title="Color (Color by item type)"></td>' +
         '<td><input data-suhtlabel="' + esc(t.key) + '" value="' + esc(t.label) + '" aria-label="Type label"></td>' +
         '<td><input data-suhtjira="' + esc(t.key) + '" value="' + esc(t.jira) + '" placeholder="Jira issue type" aria-label="Jira issue type"></td>' +
         '<td class="hol-x"><button data-suhtrm="' + esc(t.key) + '" title="Remove type"><i data-lucide="x"></i></button></td></tr>';
@@ -9147,6 +9156,7 @@
     }
     if (t.dataset.suhlabel) { var hk2 = t.dataset.suhlabel, hv = t.value; commit('level label', function (s2) { RM.setLevelLabel(s2, hk2, hv); }); return; }
     if (t.dataset.suhtlabel) { var tk2 = t.dataset.suhtlabel, tlv2 = t.value; commit('rename type', function (s2) { RM.renameItemType(s2, tk2, tlv2); }); return; }
+    if (t.dataset.suhtcolor) { var tk4 = t.dataset.suhtcolor, cv = t.value; commit('type color', function (s2) { RM.setItemTypeColor(s2, tk4, cv); }); return; }
     if (t.dataset.suhtjira) { var tk3 = t.dataset.suhtjira, jv = t.value; commit('type jira name', function (s2) { RM.setItemTypeJira(s2, tk3, jv); }); return; }
     if (t.id === 'suHierAny') { var anyOn = t.checked; commit('any type at any level', function (s2) { RM.setAnyTypeAnyLevel(s2, anyOn); }); return; }
     if (t.dataset.suapp) {

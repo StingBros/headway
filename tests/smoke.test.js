@@ -3468,8 +3468,10 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     click(bug);
     ok(state().items.find(i => i.id === first.id).type === 'bug', 'picking Bug sets the item type');
     ok(!!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-type'), 'a non-default type shows its icon on the row');
+    ok(!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-dot'), 'the type icon replaces the colored square');
     window.__headway.setItemType(first.id, 'feature');
-    ok(!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-type'), 'the default type shows no icon');
+    ok(!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-type') &&
+      !!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-dot'), 'the default Feature type draws the filled square');
 
     // a type label containing markup renders as text, not HTML, in the
     // panel dropdown (typeMenuItems must esc() the label)
@@ -3506,6 +3508,59 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
       const bugType = s.meta.itemTypes.find(t => t.key === 'bug');
       bugType.icon = 'bug';
     });
+  }
+
+  // type glyphs everywhere + color by item type
+  {
+    const firstRow = doc.querySelector('#rows .row.item[data-id]');
+    const first = state().items.find(i => i.id === firstRow.dataset.id);
+    window.__headway.setItemType(first.id, 'bug');
+    const glyph = doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-type');
+    ok(glyph && glyph.querySelector('[data-lucide="bug"]') && /color:\s*#/.test(glyph.getAttribute('style') || ''),
+      'a Bug row draws the bug icon in a color');
+    ok(/#/.test(glyph.getAttribute('style')) && glyph.getAttribute('style').toUpperCase().indexOf(window.RM.colorForItem(state(), first).toUpperCase()) !== -1,
+      'the glyph wears the item color of the active color mode');
+    // a story row draws the bookmark, filled
+    window.HeadwayApp.ai.commit('story', (s) => { const it = window.RM.itemById(s, first.id); it.stories = it.stories || []; it.stories.unshift({ id: 'glyph-st', title: 'Glyph story' }); });
+    window.HeadwayApp.ai.setView('planning');
+    click(doc.querySelector('#rows .row.item[data-id="' + first.id + '"] [data-act="stories"]'));
+    const stGlyph = doc.querySelector('#rows .row.story[data-story="glyph-st"] .r-type');
+    ok(stGlyph && stGlyph.classList.contains('fill') && stGlyph.querySelector('[data-lucide="bookmark"]'), 'a story row draws the filled bookmark glyph');
+    // prioritizing cards carry the glyph in a head row beside the title
+    click(doc.querySelector('#viewTabs [data-view="prio"]'));
+    const card = doc.querySelector('#prioView .pr-card[data-prcard="' + first.id + '"]');
+    ok(card && card.querySelector('.pr-head .r-type [data-lucide="bug"]') && card.querySelector('.pr-head .pr-title'),
+      'a prioritizing card shows the type glyph beside its title');
+    // sprinting rows and story-view headings
+    click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+    ok(!!doc.querySelector('#sprintView .spv-row[data-spid="' + first.id + '"] .r-type [data-lucide="bug"]'), 'a sprinting row shows the type glyph');
+    ok(!doc.querySelector('#sprintView .spv-row .r-dot:not(.msdot) + .r-type'), 'sprinting rows no longer stack a square before the glyph');
+    window.__headway.setItemType(first.id, 'feature');
+    ok(!!doc.querySelector('#sprintView .spv-row[data-spid="' + first.id + '"] .r-dot'), 'a Feature sprinting row draws the square');
+    // View menu offers Color by item type; picking it recolors the glyph by type
+    click(doc.querySelector('#viewTabs [data-view="planning"]'));
+    click(doc.querySelector('.menu-btn[data-menu="view"]'));
+    const cbt = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Color by item type/.test(b.textContent));
+    ok(!!cbt, 'View menu offers Color by item type');
+    click(cbt);
+    ok(window.RM.colorMode() === 'type', 'picking it switches the color mode');
+    const sq = doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-dot');
+    ok(sq && sq.getAttribute('style').toUpperCase().indexOf(window.RM.colorForType(state(), 'feature')) !== -1, 'the square takes the Feature type color');
+    // prefs segment carries the mode too
+    click(doc.querySelector('#btnSetup'));
+    click(doc.querySelector('#setupView [data-sutab="prefs"]'));
+    ok(!!doc.querySelector('#setupView [data-pref-color="type"]'), 'Settings offers Color bars by item type');
+    click(doc.querySelector('#setupView [data-pref-color="workstream"]'));
+    ok(window.RM.colorMode() === 'workstream', 'the prefs segment switches back');
+    // Hierarchy card: a color input per type commits the type color
+    click(doc.querySelector('#btnSetup'));
+    click(doc.querySelector('#setupView [data-sutab="workstreams"]'));
+    const cin = doc.querySelector('#setupView input[type="color"][data-suhtcolor="bug"]');
+    ok(!!cin, 'Hierarchy types table has a color input per type');
+    cin.value = '#112233';
+    cin.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(state().meta.itemTypes.find(t => t.key === 'bug').color === '112233', 'changing the color input sets the type color');
+    window.HeadwayApp.ai.setView('planning');
   }
 }
 
