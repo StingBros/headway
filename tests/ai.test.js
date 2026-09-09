@@ -270,6 +270,23 @@ console.log('— targeted apply');
   eq(st.meta.vision, 'Ship it', 'update_project applies a meta change');
   ok(st.items[0] === alphaObj, '…without touching items');
   ok(/navigate/.test(AI.GUIDE) && /in place/.test(AI.GUIDE), 'the guide tells the model edits show in place and not to navigate uninvited');
+
+  // numbers are one pool: a story the tool numbers while the user adds a
+  // feature with that number is moved to the next free number
+  var stN = freshState();
+  var AN = fakeApp(stN);
+  var snapN = AN.ai.state;
+  AN.ai.state = function () {
+    var c = snapN();
+    var taken = RM.nextNum(stN); // what the tool will hand its new story
+    stN.items.push(RM.normalizeState({ meta: stN.meta, phases: stN.phases, items: [{ id: 'user-new', num: taken, phaseId: 'p1', feature: 'User added', stories: [] }] }).items[0]);
+    return c;
+  };
+  AI.runTool('update_items', { updates: [{ num: 1, fields: { addStories: [{ title: 'Tool added' }] } }] }, AN);
+  var allNums = [];
+  stN.items.forEach(function (i) { allNums.push(i.num); (i.stories || []).forEach(function (x) { allNums.push(x.num); }); });
+  ok(allNums.every(function (n, i) { return n != null && allNums.indexOf(n) === i; }), 'no two features/stories share a number after a concurrent add (' + allNums.join(',') + ')');
+  throws(function () { AI.runTool('update_items', { updates: [{ num: 1, fields: { num: 50 } }] }, AN); }, /assigned by Headway/, 'the AI cannot set numbers directly');
 }
 
 console.log('— jira sync tool');

@@ -479,6 +479,8 @@
       } else if (k === 'deps') {
         target.deps = (Array.isArray(v) ? v : [v]).map(Number).filter(function (n) { return !isNaN(n); });
         changed.push('deps');
+      } else if (k === 'num' || k === 'id') {
+        throw new Error(k + ' is assigned by Headway and cannot be set — the user renumbers in the panel');
       } else if (k === 'type') {
         var want = String(v).trim().toLowerCase();
         var hit = RM.itemTypes({ meta: meta }).filter(function (t) { return t.key.toLowerCase() === want || t.label.toLowerCase() === want; })[0];
@@ -552,6 +554,20 @@
       }
       if (sameJson(b, it)) return; // untouched: the user's copy stays
       if (liveIdx[it.id] != null) live[liveIdx[it.id]] = it; // (deleted by the user meanwhile: stays deleted)
+    });
+    // numbers are one pool across features and stories: a number the tool
+    // handed a new story (or feature) may meanwhile have gone to something
+    // the user added — later occurrences move to the next free number
+    var seenNum = {};
+    live.forEach(function (it) {
+      if (seenNum[it.num]) it.num = RM.nextNum(s);
+      seenNum[it.num] = true;
+    });
+    live.forEach(function (it) {
+      (it.stories || []).forEach(function (st) {
+        if (st.num == null || seenNum[st.num]) st.num = RM.nextNum(s);
+        seenNum[st.num] = true;
+      });
     });
     // order: follow the tool only when it reordered something
     var baseOrder = baseItems.map(function (it) { return it.id; }).filter(function (id) { return nextById[id]; });
