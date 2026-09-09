@@ -206,6 +206,46 @@ console.log('— item types');
   ok(/"type":"task"/.test(line), 'itemLine reports a non-default type');
 }
 
+console.log('— targeted apply');
+{
+  // The model thinks for seconds between reading the project and writing;
+  // meanwhile the user keeps editing. A write must touch only what the tool
+  // changed and leave every other item exactly as the user left it.
+  var st = freshState();
+  var A = fakeApp(st);
+  var snap = A.ai.state;
+  A.ai.state = function () {
+    var c = snap();
+    // user edits landing after the snapshot was taken
+    st.items[0].feature = 'Alpha (user typed)';
+    st.items[0].stories[0].title = 'Story one (user typed)';
+    st.meta.title = 'Renamed by user';
+    return c;
+  };
+  var alphaObj = st.items[0];
+  AI.runTool('update_items', { updates: [{ num: 2, fields: { feature: 'Beta 2', size: 'S' } }] }, A);
+  eq(st.items[1].feature, 'Beta 2', 'the edited feature is updated');
+  eq(st.items[1].size, 'S', '…with every changed field');
+  eq(st.items[0].feature, 'Alpha (user typed)', 'an untouched feature keeps the user’s concurrent edit');
+  eq(st.items[0].stories[0].title, 'Story one (user typed)', '…and so do its stories');
+  ok(st.items[0] === alphaObj, 'untouched items keep their object identity (no wholesale replace)');
+  eq(st.meta.title, 'Renamed by user', 'untouched meta keeps the user’s concurrent edit');
+
+  var added = AI.runTool('add_items', { phase: 'Scale', items: [{ feature: 'Gamma' }] }, A);
+  eq(st.items.length, 3, 'add_items appends the new feature');
+  eq(st.items[2].feature, 'Gamma', '…at the end');
+  ok(st.items[0] === alphaObj, 'adding does not rewrite existing items');
+
+  AI.runTool('update_items', { updates: [{ num: 2, delete: true }] }, A);
+  eq(st.items.map(function (i) { return i.num; }).join(','), '1,3', 'deleting removes just that feature');
+  ok(st.items[0] === alphaObj, 'deleting does not rewrite the others');
+
+  AI.runTool('update_project', { ops: [{ op: 'set', path: 'meta/vision', value: 'Ship it' }] }, A);
+  eq(st.meta.vision, 'Ship it', 'update_project applies a meta change');
+  ok(st.items[0] === alphaObj, '…without touching items');
+  ok(/navigate/.test(AI.GUIDE) && /in place/.test(AI.GUIDE), 'the guide tells the model edits show in place and not to navigate uninvited');
+}
+
 console.log('— jira sync tool');
 {
   var JR = require('../js/jira.js');

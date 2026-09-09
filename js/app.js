@@ -4314,7 +4314,6 @@
 
       sec('fields', 'Fields', '', fieldEds) +
 
-      sec('tags', 'Tags', (it.tags || []).length ? String(it.tags.length) : '', tagsBody(it)) +
 
       sec('details', 'Details', '',
         '<div class="p-grid2">' +
@@ -4355,6 +4354,7 @@
           ? ddButton('assign', '+ Assign\u2026', null, 'Assign people from the roster')
           : '<div class="m-hint">Add people in the Resources panel to assign them.</div>')) +
 
+      sec('tags', 'Tags', (it.tags || []).length ? String(it.tags.length) : '', tagsBody(it)) +
       sec('deps', 'Dependencies', '',
         '<label class="p-lab">Depends on</label>' +
         '<div class="chips">' + depChips + depTextChips + (depChips || depTextChips ? '' : '<span class="p-none">none</span>') + '</div>' +
@@ -4458,7 +4458,7 @@
       '</div><div class="m-hint">Stories inherit workstream and epic from their feature.</div></div></div>' +
 
       sec2('fields', 'Fields', fieldEds) +
-      sec2('tags', 'Tags', tagsBody(st)) +
+      (estimate ? sec2('estimate', 'Estimate', estimate) : '') +
       sec2('people', 'People',
         '<label class="p-lab">Assignees</label>' +
         '<div class="chips">' +
@@ -4472,7 +4472,7 @@
         (state.team.length
           ? ddButton('stassign', '+ Assign\u2026', null, 'Assign people from the roster')
           : '<div class="m-hint">Add people in the Resources panel to assign them.</div>')) +
-      (estimate ? sec2('estimate', 'Estimate', estimate) : '') +
+      sec2('tags', 'Tags', tagsBody(st)) +
       sec2('schedule', 'Timeline', timeline) +
       sec2('integrations', 'Integrations',
         '<label class="p-lab">Jira key</label>' +
@@ -4920,6 +4920,15 @@
       if (stForType) openDropdown(stChip, typeMenuItems('story', stForType.type, function (k) { setStoryType(it.id, selStory, k); }));
       return;
     }
+    // story estimate buttons (size / priority / risk segs in the story panel)
+    var stBtn = e.target.closest('button[data-stf][data-v]');
+    if (stBtn && selStory) {
+      var stv = stBtn.dataset.v || null, stk = stBtn.dataset.stf;
+      if (stk === 'size') setStorySize(it.id, selStory, stv);
+      else if (stk === 'priority') withStory('story priority', it.id, selStory, function (st2) { st2.priority = stv; });
+      else if (stk === 'risk') setStoryRisk(it.id, selStory, stv);
+      return;
+    }
     // story-panel controls
     var stf = e.target.closest('[data-stf]');
     if (stf && selStory) {
@@ -4935,15 +4944,6 @@
       return; // title/done/dates commit on change
     }
 
-    // story estimate buttons (size / priority / risk segs in the story panel)
-    var stBtn = e.target.closest('button[data-stf][data-v]');
-    if (stBtn && selStory) {
-      var stv = stBtn.dataset.v || null, stk = stBtn.dataset.stf;
-      if (stk === 'size') setStorySize(it.id, selStory, stv);
-      else if (stk === 'priority') withStory('story priority', it.id, selStory, function (st2) { st2.priority = stv; });
-      else if (stk === 'risk') setStoryRisk(it.id, selStory, stv);
-      return;
-    }
     var btn = e.target.closest('[data-f]');
     var dep = e.target.closest('[data-deprm]');
     var depTxt = e.target.closest('[data-deptxtrm]');

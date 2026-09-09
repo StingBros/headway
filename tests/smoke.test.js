@@ -3054,6 +3054,39 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(bu.defaultPrevented, 'beforeunload is blocked while work is unsaved');
 }
 
+// ---------------------------------------------------------------- story panel estimate buttons
+// Size / Priority / Risk in the story panel are buttons with data-stf AND
+// data-v; the generic data-stf handler must not swallow them.
+{
+  const hostIt = state().items.find(i => !i.milestone);
+  window.HeadwayApp.ai.commit('estimate probe story', (s) => {
+    const f = window.RM.itemById(s, hostIt.id);
+    f.stories = f.stories || [];
+    f.stories.push({ id: 'st_est_probe', title: 'estimate probe', done: false });
+  });
+  window.__headway.selectItem(hostIt.id);
+  click(doc.querySelector('#panel [data-pst-edit="st_est_probe"]'));
+  const stOf = () => window.RM.itemById(state(), hostIt.id).stories.find(x => x.id === 'st_est_probe');
+  const sizeBtn = Array.from(doc.querySelectorAll('#panel button[data-stf="size"][data-v]')).find(b => b.dataset.v);
+  ok(!!sizeBtn, 'story panel offers size buttons');
+  if (sizeBtn) {
+    click(sizeBtn);
+    ok(stOf().size === sizeBtn.dataset.v, 'clicking a story size button sets the story size (' + sizeBtn.dataset.v + ')');
+  }
+  const riskBtn = Array.from(doc.querySelectorAll('#panel button[data-stf="risk"][data-v]')).find(b => b.dataset.v);
+  ok(!!riskBtn, 'story panel offers risk buttons');
+  if (riskBtn) {
+    click(riskBtn);
+    ok(stOf().risk === riskBtn.dataset.v, 'clicking a story risk button sets the story risk (' + riskBtn.dataset.v + ')');
+  }
+  click(doc.querySelector('#panel button[data-stf="size"][data-v=""]'));
+  ok(!stOf().size, 'the — button clears the story size');
+  window.HeadwayApp.ai.commit('estimate probe cleanup', (s) => {
+    const f = window.RM.itemById(s, hostIt.id);
+    f.stories = f.stories.filter(x => x.id !== 'st_est_probe');
+  });
+}
+
 // ---------------------------------------------------------------- jira csv in the export dialog
 {
   window.eval("document.querySelector('#btnExport').click()");

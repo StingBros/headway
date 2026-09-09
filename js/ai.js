@@ -514,11 +514,59 @@
   }
   AI.textToHtml = textToHtml;
 
-  function commitState(A, label, next, extra) {
-    A.ai.commit(label, function (s) {
-      Object.keys(s).forEach(function (k) { if (k !== 'history') delete s[k]; });
-      Object.keys(next).forEach(function (k) { if (k !== 'history') s[k] = next[k]; });
+  // Apply only what the tool changed. The model thinks for seconds between
+  // reading the project (base) and writing (next) while the user keeps
+  // editing the live document; items and sections the tool left alone stay
+  // exactly as the user has them — object identity included — so the screen
+  // updates in place instead of reloading.
+  function sameJson(a, b) { return JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b); }
+  function applyItemChanges(s, baseItems, nextItems) {
+    var live = Array.isArray(s.items) ? s.items : (s.items = []);
+    var baseById = {}, nextById = {}, liveIdx = {}, liveNums = {};
+    baseItems.forEach(function (it) { baseById[it.id] = it; });
+    nextItems.forEach(function (it) { nextById[it.id] = it; });
+    // deleted by the tool
+    for (var i = live.length - 1; i >= 0; i--) if (baseById[live[i].id] && !nextById[live[i].id]) live.splice(i, 1);
+    live.forEach(function (it, idx) { liveIdx[it.id] = idx; liveNums[it.num] = true; });
+    nextItems.forEach(function (it) {
+      var b = baseById[it.id];
+      if (!b) { // added
+        if (liveIdx[it.id] != null) return;
+        if (liveNums[it.num]) it.num = RM.nextNum(s); // the user added a feature meanwhile
+        live.push(it); liveIdx[it.id] = live.length - 1; liveNums[it.num] = true;
+        return;
+      }
+      if (sameJson(b, it)) return; // untouched: the user's copy stays
+      if (liveIdx[it.id] != null) live[liveIdx[it.id]] = it; // (deleted by the user meanwhile: stays deleted)
     });
+    // order: follow the tool only when it reordered something
+    var baseOrder = baseItems.map(function (it) { return it.id; }).filter(function (id) { return nextById[id]; });
+    var nextOrder = nextItems.map(function (it) { return it.id; }).filter(function (id) { return baseById[id]; });
+    if (baseOrder.join('\n') !== nextOrder.join('\n')) {
+      var rank = {};
+      nextItems.forEach(function (it, i) { rank[it.id] = i; });
+      live.sort(function (a, b) {
+        var ra = rank[a.id], rb = rank[b.id];
+        if (ra == null && rb == null) return 0;
+        if (ra == null) return 1;
+        if (rb == null) return -1;
+        return ra - rb;
+      });
+    }
+  }
+  function applyChanges(s, base, next) {
+    Object.keys(next).forEach(function (k) {
+      if (k === 'history') return;
+      if (k === 'items') { applyItemChanges(s, base.items || [], next.items || []); return; }
+      if (!sameJson(base[k], next[k])) s[k] = next[k];
+    });
+    Object.keys(base).forEach(function (k) {
+      if (k !== 'history' && k !== 'items' && !(k in next)) delete s[k];
+    });
+  }
+  AI.applyChanges = applyChanges;
+  function commitState(A, label, base, next, extra) {
+    A.ai.commit(label, function (s) { applyChanges(s, base, next); });
     var v = A.ai.validation();
     var out = { ok: true, validation: v.counts };
     var errs = [];
@@ -606,7 +654,7 @@
         made.push({ num: it.num, feature: it.feature });
       });
       var norm = RM.normalizeState(next);
-      return commitState(A, args.label || ('add ' + (made.length === 1 ? '#' + made[0].num + ' ' + made[0].feature : made.length + ' features')), norm, { created: made });
+      return commitState(A, args.label || ('add ' + (made.length === 1 ? '#' + made[0].num + ' ' + made[0].feature : made.length + ' features')), state, norm, { created: made });
     }
     if (name === 'update_items') {
       var ups = Array.isArray(args.updates) ? args.updates : [];
@@ -636,12 +684,12 @@
         report.push({ target: label, changed: ch });
       });
       var lbl = args.label || (report.length === 1 ? 'edit ' + report[0].target : 'edit ' + report.length + ' items');
-      return commitState(A, lbl, RM.normalizeState(st2), { updated: report });
+      return commitState(A, lbl, state, RM.normalizeState(st2), { updated: report });
     }
     if (name === 'update_project') {
       var res = AI.applyOps(state, args.ops);
       var lbl2 = args.label || (res.changes.length === 1 ? res.changes[0].op + ' ' + res.changes[0].path : res.changes.length + ' changes');
-      return commitState(A, lbl2, res.state, { changes: res.changes.map(function (c) { return c.op + ' ' + c.path; }) });
+      return commitState(A, lbl2, state, res.state, { changes: res.changes.map(function (c) { return c.op + ' ' + c.path; }) });
     }
     if (name === 'sync_jira') return syncJira(A, state, !!args.dryRun);
     throw new Error('tool "' + name + '" is not implemented');
@@ -715,6 +763,7 @@
     '',
     '## How to work',
     '- Read before you write: call get_project (summary) first in a conversation, then get_project items for the features you will touch. Never guess numbers, names or scheme values.',
+    '- Edits show up in place in whatever view the user is on; only the items you changed are touched. Do not call navigate after a write unless the user asked to see something — never switch views on your own.',
     '- Make the smallest edit that does the job, in one tool call when possible. Every write is undoable and shows in Version history as "<user> · AI" — mention that briefly after edits.',
     '- Dates are ISO (YYYY-MM-DD) and must fall inside the timeline. Durations are working days. A feature that gets a start but no duration gets 5 days.',
     '- When a request is ambiguous (which phase, which of two similar features), ask instead of picking.',
