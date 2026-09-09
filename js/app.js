@@ -1674,17 +1674,13 @@
     return (RM.sprintsEnabled(meta) ? 'Sprint ' + n + ' \u00B7 ' : 'Week of ') + RM.fmtShort(d);
   }
   function itemsInSprint(num) {
-    var meta = state.meta;
-    var r = RM.sprintRange(meta, num);
     return state.items.filter(function (it) {
-      return RM.itemInWeeks(meta, it, r.w0, r.w1) && matchesFilter(it);
+      return it.startDay != null && sprFirstNum(it) === num && matchesFilter(it);
     });
   }
   // stories ride along: their own schedule decides sprint membership when
   // set, otherwise they follow their feature
   function storiesInSprint(num, items) {
-    var meta = state.meta;
-    var r = RM.sprintRange(meta, num);
     var inIds = {};
     items.forEach(function (it) { inIds[it.id] = true; });
     var out = [];
@@ -1692,7 +1688,7 @@
       if (!matchesFilter(it)) return;
       (it.stories || []).forEach(function (st) {
         var own = st.startDay != null && st.durDays != null;
-        if (own ? RM.itemInWeeks(meta, st, r.w0, r.w1) : inIds[it.id]) out.push({ it: it, st: st });
+        if (own ? sprFirstNum(st) === num : inIds[it.id]) out.push({ it: it, st: st });
       });
     });
     return out;
@@ -2612,12 +2608,21 @@
   function sprSecKey(num) { return num == null ? 'u' : String(num); }
   function sprSecNum(key) { return key === 'u' ? null : Number(key); }
   function sprHasOwn(st) { return st.startDay != null && st.durDays != null; }
+  // the sprint an item or story starts in / ends in (numbers, timeline-clamped)
+  function sprFirstNum(x) {
+    var meta = state.meta;
+    return RM.sprintNumForWeek(meta, Math.max(0, Math.min(meta.numWeeks - 1, Math.floor(x.startDay / SPW()))));
+  }
+  function sprLastNum(x) {
+    var meta = state.meta, end = RM.itemEnd(x);
+    if (end == null) return sprFirstNum(x);
+    return RM.sprintNumForWeek(meta, Math.max(0, Math.min(meta.numWeeks - 1, Math.ceil(end / SPW()) - 1)));
+  }
   // stories of one feature that belong to sprint `num` (null = unscheduled):
   // a story's own timeline decides when it has one, else it follows the feature
   function sprStoriesOf(it, num, featIn) {
-    var meta = state.meta, r = num == null ? null : RM.sprintRange(meta, num);
     return (it.stories || []).filter(function (st) {
-      if (sprHasOwn(st)) return r ? RM.itemInWeeks(meta, st, r.w0, r.w1) : false;
+      if (sprHasOwn(st)) return num != null && sprFirstNum(st) === num;
       return num == null ? it.startDay == null : featIn;
     });
   }
@@ -2633,7 +2638,7 @@
   function sprSections() {
     var meta = state.meta;
     var nums = sprintNums().concat([null]); // Unscheduled trails the timeline
-    return nums.map(function (n) {
+    var secs = nums.map(function (n) {
       var items = n == null
         ? state.items.filter(function (it) { return it.startDay == null && sprMatches(it); })
         : itemsInSprint(n).filter(sprMatches);
@@ -2660,25 +2665,25 @@
           ? feats.reduce(function (a, f) { return a + f.stories.length; }, 0) : items.length
       };
     });
+    var cur = RM.sprintsEnabled(meta) ? currentSprintNum() : null;
+    var keep = function (s) { return s.num == null || s.num === cur || s.items.length || s.feats.length; };
+    var first = -1, last = -1;
+    secs.forEach(function (s, i) { if (s.num != null && keep(s)) { if (first === -1) first = i; last = i; } });
+    var un = secs[secs.length - 1];
+    return (first === -1 ? [] : secs.slice(first, last + 1)).concat([un]);
   }
-  function sprTag(it, num) {
-    if (num == null || !isScheduled(it)) return '';
-    var meta = state.meta, r = RM.sprintRange(meta, num), S = SPW();
-    var s0 = RM.sprintNumForWeek(meta, Math.floor(it.startDay / S));
-    var s1 = RM.sprintNumForWeek(meta, Math.max(0, Math.ceil(RM.itemEnd(it) / S) - 1));
-    var out = '';
-    if (it.startDay < r.w0 * S) out += '<span class="spv-tag" title="Started in an earlier sprint">from ' + (RM.sprintsEnabled(meta) ? 'S' + s0 : 'W' + s0) + '</span>';
-    if (RM.itemEnd(it) > r.w1 * S) out += '<span class="spv-tag" title="Continues into a later sprint">to ' + (RM.sprintsEnabled(meta) ? 'S' + s1 : 'W' + s1) + '</span>';
-    return out;
+  // the sprint-number tag every row in a sprint section wears
+  function sprNumTag(num) {
+    if (num == null) return '';
+    return '<span class="spv-tag spv-snum" title="' + esc(sprintLabel(num)) + '">' + (RM.sprintsEnabled(state.meta) ? 'S' : 'W') + num + '</span>';
   }
-  function sprDates(x) {
+  // rows whose span runs past their sprint get an info glyph saying how far
+  function sprCarryHtml(x) {
     if (!isScheduled(x)) return '';
-    return RM.fmtShort(RM.dayToDate(state.meta, x.startDay)) + ' → ' +
-      RM.fmtShort(RM.spanEndDate(state.meta, x.startDay, RM.itemSpan(x)));
-  }
-  function sprPhaseName(it) {
-    var p = state.phases.filter(function (x) { return x.id === it.phaseId; })[0];
-    return p ? p.name : '';
+    var s0 = sprFirstNum(x), s1 = sprLastNum(x);
+    if (s1 <= s0) return '';
+    var n = s1 - s0, unit = RM.sprintsEnabled(state.meta) ? 'sprint' : 'week';
+    return '<span class="spv-info" title="Expecting to carryover for ' + n + ' ' + unit + (n === 1 ? '' : 's') + ' (through ' + unit + ' ' + s1 + ')"><i data-lucide="info"></i></span>';
   }
   function sprRowHtml(it, num) {
     return '<div class="spv-row' + (isSel(it.id) ? ' sel' : '') + (it.done ? ' done' : '') +
@@ -2687,12 +2692,10 @@
       '<span class="r-num">#' + it.num + '</span>' +
       typeGlyphHtml(it, 'feature') +
       '<input class="spv-title" data-spf="feature" placeholder="Name" value="' + esc(it.feature) + '">' +
-      sprTag(it, num) +
+      sprCarryHtml(it) + sprNumTag(num) +
       '<span class="spv-chip" tabindex="0" role="button" data-spact="epic" title="Epic">' +
       '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>' +
       '<span class="spv-est">' + ['size', 'pri', 'risk', 'dur'].map(function (k) { return itemChipHtml(k, it, 'data-spact'); }).join('') + '</span>' +
-      '<span class="spv-dates">' + esc(sprDates(it)) + '</span>' +
-      '<span class="spv-phase" title="Phase">' + esc(sprPhaseName(it)) + '</span>' +
       '</div>';
   }
   function sprStoryRowHtml(it, st, num) {
@@ -2702,9 +2705,8 @@
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
       typeGlyphHtml(st, 'story', it) +
       '<input class="spv-title" data-spf="story" placeholder="Story" value="' + esc(st.title || '') + '">' +
-      (own ? sprTag(st, num) : (num == null ? '' : '<span class="spv-tag" title="No timeline of its own">with feature</span>')) +
+      (own ? sprCarryHtml(st) : '') + sprNumTag(num) +
       '<span class="spv-est">' + ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-spact'); }).join('') + '</span>' +
-      '<span class="spv-dates">' + esc(own ? sprDates(st) : '') + '</span>' +
       '</div>';
   }
   function sprSectionHtml(sec) {
@@ -2714,8 +2716,7 @@
         return '<div class="spv-feat" data-spfeat="' + f.it.id + '">' +
           '<span class="r-num">#' + f.it.num + '</span>' +
           typeGlyphHtml(f.it, 'feature') +
-          '<span class="spv-featname">' + esc(f.it.feature || '(untitled)') + '</span>' +
-          '<span class="spv-phase">' + esc(sprPhaseName(f.it)) + '</span></div>' +
+          '<span class="spv-featname">' + esc(f.it.feature || '(untitled)') + '</span></div>' +
           f.stories.map(function (st) { return sprStoryRowHtml(f.it, st, sec.num); }).join('');
       }).join('');
     } else {

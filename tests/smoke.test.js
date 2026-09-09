@@ -3574,6 +3574,47 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     const css = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
     ok(/\.jr-types td svg\.lucide\s*\{[^}]*width:\s*14px[^}]*height:\s*14px/.test(css), 'Jira issue-type table icons are sized like every other icon');
   }
+
+  // sprinting: one sprint per row, carry-over glyph, sprint-number tag, trimmed ends
+  {
+    click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+    const meta = state().meta;
+    const nums = [...doc.querySelectorAll('#sprintView .spv-sec')].map(s => s.dataset.spsec).filter(k => k !== 'u').map(Number);
+    const startNum = nums[0];
+    const it = state().items.find(i => !i.milestone);
+    const perSprint = window.RM.sprintDays(meta);
+    window.HeadwayApp.ai.commit('span', (s) => {
+      const t = window.RM.itemById(s, it.id);
+      t.startDay = window.RM.sprintStartDay(s.meta, startNum); t.durDays = perSprint * 3; t.riskDays = 0; t.locked = false;
+    });
+    const rows = doc.querySelectorAll('#sprintView .spv-row[data-spid="' + it.id + '"]');
+    ok(rows.length === 1 && rows[0].dataset.spsec === String(startNum), 'a three-sprint item lists once, under the sprint it starts in');
+    const info = rows[0].querySelector('.spv-info');
+    ok(info && info.getAttribute('title') === 'Expecting to carryover for 2 sprints (through sprint ' + (startNum + 2) + ')',
+      'the carry-over glyph says how many sprints it runs on and the last one');
+    ok(!rows[0].querySelector('.spv-tag:not(.spv-snum)') && rows[0].querySelector('.spv-snum').textContent === 'S' + startNum,
+      'the from/to tags are gone; the slot shows the sprint number');
+    ok(!rows[0].querySelector('.spv-dates') && !rows[0].querySelector('.spv-phase'), 'rows carry no date range or phase column');
+    window.HeadwayApp.ai.commit('span', (s) => { const t = window.RM.itemById(s, it.id); t.durDays = perSprint; });
+    ok(!doc.querySelector('#sprintView .spv-row[data-spid="' + it.id + '"] .spv-info'), 'an item inside one sprint has no carry-over glyph');
+    // empty sprints at either end are hidden (the current sprint always stays)
+    const secs = [...doc.querySelectorAll('#sprintView .spv-sec')].filter(s => s.dataset.spsec !== 'u');
+    const sideKeys = [...doc.querySelectorAll('#sprintView .spv-sbtn')].map(b => b.dataset.spside);
+    const nonEmpty = s => s.querySelectorAll('.spv-row').length > 0 || doc.querySelector('.spv-sbtn.today[data-spside="' + s.dataset.spsec + '"]');
+    ok(nonEmpty(secs[0]) && nonEmpty(secs[secs.length - 1]), 'the first and last sprint sections shown have rows (or are today)');
+    ok(sideKeys.length === secs.length + 1 && sideKeys[sideKeys.length - 1] === 'u', 'the sidebar mirrors the trimmed sections plus Unscheduled');
+    // push one item far out: the tail extends only to that sprint
+    const lastShown = Number(secs[secs.length - 1].dataset.spsec);
+    const allNums = [];
+    for (let w = 0; w < meta.numWeeks; w++) { const n = window.RM.sprintNumForWeek(meta, w); if (allNums.indexOf(n) === -1) allNums.push(n); }
+    const far = allNums[allNums.length - 1];
+    if (far > lastShown) {
+      window.HeadwayApp.ai.commit('span', (s) => { const t = window.RM.itemById(s, it.id); t.startDay = window.RM.sprintStartDay(s.meta, far); t.durDays = perSprint; });
+      const secs2 = [...doc.querySelectorAll('#sprintView .spv-sec')].filter(s => s.dataset.spsec !== 'u');
+      ok(secs2[secs2.length - 1].dataset.spsec === String(far), 'scheduling into the last sprint reveals it');
+      window.HeadwayApp.ai.commit('span', (s) => { const t = window.RM.itemById(s, it.id); t.startDay = window.RM.sprintStartDay(s.meta, startNum); });
+    } else ok(true, 'timeline already ends at the last shown sprint');
+  }
 }
 
 ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'commits autosave to localStorage');

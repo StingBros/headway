@@ -2468,6 +2468,9 @@ body[data-view="sprints"] #rowFilter { display: none; }
   flex: none; font-size: 10px; font-weight: 600; color: var(--ink-3);
   border: 1px dashed var(--line-3); border-radius: 999px; padding: 1px 7px; white-space: nowrap;
 }
+.spv-snum { border-style: solid; color: var(--ink-2); }
+.spv-info { display: inline-flex; flex: none; color: var(--ink-3); cursor: help; }
+.spv-info svg { width: 13px; height: 13px; }
 .spv-chip {
   display: inline-flex; align-items: center; gap: 5px; flex: none; max-width: 160px;
   border: 1px solid var(--line-2); border-radius: 999px; padding: 2px 9px;
@@ -2476,10 +2479,8 @@ body[data-view="sprints"] #rowFilter { display: none; }
 }
 .spv-chip:hover { border-color: var(--line-3); background: var(--surface); }
 .spv-chip svg { width: 11px; height: 11px; flex: none; }
-.spv-dates { flex: none; width: 120px; font-size: 10.5px; color: var(--ink-3); font-family: var(--mono); text-align: right; }
 /* estimate chips (size · priority · risk · weeks) on Sprinting rows */
 .spv-est { display: inline-flex; align-items: center; gap: 2px; flex: none; }
-.spv-phase { flex: none; width: 120px; font-size: 10.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
 .spv-feat {
   display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px 0 28px;
   background: var(--paper-2); border-bottom: 1px solid var(--line); font-size: 12px; font-weight: 700; color: var(--ink);
