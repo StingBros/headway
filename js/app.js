@@ -118,7 +118,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioHideUnset: prioHideUnset, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy };
   }
   var COLOR_MODES = [['workstream', 'Workstream'], ['epic', 'Epic'], ['assignee', 'Assignee'], ['priority', 'Priority'], ['type', 'Item type']];
   var colorBy = 'workstream'; // what bar colors follow: 'workstream' | 'epic' | 'assignee' | 'priority' | 'type'
@@ -133,6 +133,7 @@
   var prioFeatCol = 'phase';     // Feature-level columns: 'phase' | 'priority' | 'size' | 'risk'
   var prioFields = [];      // scope-column keys shown on prioritizing cards (compact by default)
   var prioChipHide = [];    // card chips (size / priority / risk / dur / epic / ws) the user hid
+  var prioHideUnset = false; // Prioritizing: hide the Unset column (features/stories without a value for the column field)
   var prioSort = 'priority'; // Prioritizing order: 'priority' | 'doc' | 'title' | 'size'
   var prioFEpic = null;     // Prioritizing epic filter: null = all, '' = no epic, else the epic
   var prioFWs = null;       // Prioritizing workstream filter: null = all, '' = default, else the stream
@@ -189,6 +190,7 @@
     prioFeatCol = ['phase', 'priority', 'size', 'risk'].indexOf(ui.prioFeatCol) !== -1 ? ui.prioFeatCol : 'phase';
     if (Array.isArray(ui.prioFields)) prioFields = ui.prioFields.map(String);
     if (Array.isArray(ui.prioChipHide)) prioChipHide = ui.prioChipHide.map(String).filter(function (k) { return PR_CHIPS[k]; });
+    prioHideUnset = ui.prioHideUnset === true;
     prioSort = ['doc', 'title', 'size'].indexOf(ui.prioSort) !== -1 ? ui.prioSort : 'priority';
     if (ui.expanded && typeof ui.expanded === 'object') {
       expanded = ui.expanded;
@@ -2128,7 +2130,7 @@
           '<button class="pr-st-add" data-prstadd="1"><i data-lucide="plus"></i>' + esc('Add ' + lvl('story')) + '</button>') +
         '</div>'
       : '';
-    return '<div class="sp-card pr-card" data-prcard="' + it.id + '" style="--ws-c:#' + wsColor + '">' +
+    return '<div class="sp-card pr-card' + (isSel(it.id) && !selStory ? ' selected' : '') + '" data-prcard="' + it.id + '" style="--ws-c:#' + wsColor + '">' +
       '<div class="pr-head">' + typeGlyphHtml(it, 'feature') +
       prTitleHtml(it.feature, 'feature', 'pr-title') + '</div>' +
       fields + stories +
@@ -2170,7 +2172,7 @@
   function prStoryColumns() {
     var vals = prioStoryCol === 'priority' ? RM.priorityOrderOf(state, 'story')
       : prioStoryCol === 'risk' ? RM.riskOrderOf(state) : RM.sizeOrderOf(state, 'story');
-    return vals.map(function (v) { return { key: v, name: prStoryColLabel(v) }; }).concat([{ key: '', name: 'Unset' }]);
+    return vals.map(function (v) { return { key: v, name: prStoryColLabel(v) }; }).concat(prioHideUnset ? [] : [{ key: '', name: 'Unset' }]);
   }
   // the story's value for the column field; anything the ladder does not
   // know (an old scheme's value) files under Unset instead of vanishing
@@ -2221,7 +2223,7 @@
     var chips = ['size', 'pri', 'risk', 'dur'].filter(function (k) {
       return !(k === 'size' && prioStoryCol === 'size');
     }).map(function (k) { return storyChipHtml(k, st, 'data-prstact'); }).join('');
-    return '<div class="sp-card pr-card pr-stcard' + (st.done ? ' done' : '') + '" data-prcard="' + it.id + '" data-prst="' + st.id + '" style="--ws-c:#' + wsColor + '">' +
+    return '<div class="sp-card pr-card pr-stcard' + (st.done ? ' done' : '') + (selectedId === it.id && selStory === st.id ? ' selected' : '') + '" data-prcard="' + it.id + '" data-prst="' + st.id + '" style="--ws-c:#' + wsColor + '">' +
       '<div class="pr-stfeat" title="Feature"><span class="r-num">#' + it.num + '</span>' +
       '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' +
       '<span class="pr-stfeatname">' + esc(it.feature || '(untitled)') + '</span></div>' +
@@ -2245,13 +2247,21 @@
     if (RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto') out.push('risk');
     return out;
   }
+  // Columns menu tail: show / hide the Unset column (a ladder's catch-all)
+  function prUnsetToggleItems() {
+    return [{ sep: true }, { icon: 'eye-off', label: 'Unset column', checked: !prioHideUnset, fn: function () {
+      prioHideUnset = !prioHideUnset;
+      saveLocal();
+      render();
+    } }];
+  }
   function prFeatColumns() {
     if (prioFeatCol === 'phase') return state.phases.map(function (p) { return { key: p.id, name: p.name }; });
     var vals = prioFeatCol === 'priority' ? RM.priorityOrderOf(state)
       : prioFeatCol === 'risk' ? RM.riskOrderOf(state) : RM.sizeOrderOf(state);
     return vals.map(function (v) {
       return { key: v, name: prioFeatCol === 'priority' ? priorityValueLabel(v) : prioFeatCol === 'risk' ? riskValueLabel(v) : v };
-    }).concat([{ key: '', name: 'Unset' }]);
+    }).concat(prioHideUnset ? [] : [{ key: '', name: 'Unset' }]);
   }
   // the feature's value for the column field; off-ladder values file under Unset
   function prFeatVal(it) {
@@ -2502,13 +2512,13 @@
           return { icon: PR_STORY_COLS[k][0], label: PR_STORY_COLS[k][1], checked: prioStoryCol === k, fn: function () {
             if (prioStoryCol !== k) { prioStoryCol = k; saveLocal(); render(); }
           } };
-        }));
+        }).concat(prUnsetToggleItems()));
       } else if (kind === 'cols') {
         openDropdown(dd, prFeatColKinds().map(function (k) {
           return { icon: PR_FEAT_COLS[k][0], label: PR_FEAT_COLS[k][1], checked: prioFeatCol === k, fn: function () {
             if (prioFeatCol !== k) { prioFeatCol = k; saveLocal(); render(); }
           } };
-        }));
+        }).concat(prioFeatCol === 'phase' ? [] : prUnsetToggleItems())); // phases have no Unset
       } else if (kind === 'fphase') {
         openDropdown(dd, [{ label: '<i>All phases</i>', checked: prioFPhase == null, fn: function () { prioFPhase = null; render(); } }]
           .concat(state.phases.map(function (p) {
@@ -2600,6 +2610,17 @@
           return $('#prioView [data-prcard="' + cid + '"] [data-pract="ws"]');
         }));
       }
+      return;
+    }
+    // a plain click on a card opens the panel on it; clicking the selected
+    // card again puts the panel away
+    var cardK = e.target.closest('[data-prcard]');
+    if (cardK && !e.target.closest('.pr-story,input,textarea,select,button,[contenteditable="true"],[data-pract],[data-prstact]')) {
+      var kid = cardK.dataset.prcard, kst = cardK.dataset.prst || null;
+      var already = selectedId === kid && (kst ? selStory === kst : !selStory);
+      if (already && panelOpen) { select(null); return; }
+      panelOpen = true;
+      if (kst) selectStory(kid, kst); else select(kid);
       return;
     }
     var add = e.target.closest('[data-pradd]');
@@ -4230,8 +4251,15 @@
   function renderPanelInner() {
     var panel = $('#panel');
     var peek = $('#panelPeek');
-    // the panel lives on Planning, Scoping AND Sprinting: persistent, collapsible
-    if (view !== 'planning' && view !== 'scoping' && view !== 'sprints') {
+    // the panel lives on Planning, Scoping AND Sprinting: persistent, collapsible.
+    // On Prioritizing it appears only while a card is selected (click to
+    // show, click the same card to hide)
+    if (view !== 'planning' && view !== 'scoping' && view !== 'sprints' && view !== 'prio') {
+      panel.hidden = true; panel.innerHTML = '';
+      if (peek) peek.hidden = true;
+      return;
+    }
+    if (view === 'prio' && !selectedId) {
       panel.hidden = true; panel.innerHTML = '';
       if (peek) peek.hidden = true;
       return;

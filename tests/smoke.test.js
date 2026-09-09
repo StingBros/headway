@@ -3310,6 +3310,57 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   });
 }
 
+// ---------------------------------------------------------------- Prioritizing: Unset column toggle, widths, card click → panel
+{
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  const heads = () => [...doc.querySelectorAll('#prioView .pr-phhd')].map(h => h.childNodes[0].textContent.trim());
+  const pick = (re) => click([...doc.querySelectorAll('#popover .menu-list button')].find(b => re.test(b.textContent)));
+  // feature level, Columns → Size: the ladder plus Unset
+  click(doc.querySelector('#prioView [data-prdd="level"]')); pick(/Feature/);
+  click(doc.querySelector('#prioView [data-prdd="cols"]')); pick(/Size/);
+  ok(heads()[heads().length - 1] === 'Unset', 'Size columns end with Unset by default');
+  click(doc.querySelector('#prioView [data-prdd="cols"]'));
+  const unsetItem = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Unset column/.test(b.textContent));
+  ok(!!unsetItem, 'the Columns menu offers the Unset column toggle');
+  click(unsetItem);
+  ok(heads().indexOf('Unset') === -1, 'hiding the Unset column removes it from the board');
+  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1') || '{}').prioHideUnset === true, 'the choice persists in the browser prefs');
+  click(doc.querySelector('#prioView [data-prdd="cols"]')); pick(/Unset column/);
+  ok(heads()[heads().length - 1] === 'Unset', 'showing it again brings the column back');
+  click(doc.querySelector('#prioView [data-prdd="cols"]')); pick(/Phase/);
+  click(doc.querySelector('#prioView [data-prdd="cols"]'));
+  ok(![...doc.querySelectorAll('#popover .menu-list button')].some(b => /Unset column/.test(b.textContent)), 'phase columns have no Unset, so no toggle');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  // widths
+  const cssW = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  ok(!/\.sp-page\s*\{[^}]*max-width/.test(cssW), 'the Prioritizing page is full width (no max-width on .sp-page)');
+  ok(/\.spv-main\s*\{[^}]*max-width:\s*\d+px/.test(cssW), 'the Sprinting main content area has a max-width');
+  // clicking a card shows the panel for that item; clicking it again hides the panel
+  window.__headway.selectItem(null); // start with nothing selected (an earlier test may have left a selection)
+  const card = doc.querySelector('#prioView .pr-card[data-prcard]:not([data-prst])');
+  const cid = card.dataset.prcard;
+  click(card.querySelector('.pr-head') || card);
+  ok(!doc.querySelector('#panel').hidden && !!doc.querySelector('#panel input.p-num-edit[data-f="num"]') &&
+    doc.querySelector('#panel input.p-num-edit[data-f="num"]').value === String(state().items.find(i => i.id === cid).num),
+    'clicking a card opens the panel on that feature');
+  ok(doc.querySelector('#prioView .pr-card[data-prcard="' + cid + '"]').classList.contains('selected'), 'the selected card is marked');
+  click(doc.querySelector('#prioView .pr-card[data-prcard="' + cid + '"] .pr-head'));
+  ok(doc.querySelector('#panel').hidden, 'clicking the selected card again hides the panel');
+  // story level: a story card opens the story panel
+  click(doc.querySelector('#prioView [data-prdd="level"]')); pick(/Stor/);
+  const sc = doc.querySelector('#prioView .pr-stcard[data-prst]');
+  if (sc) {
+    click(sc.querySelector('.pr-head'));
+    ok(!doc.querySelector('#panel').hidden && !!doc.querySelector('#panel .p-crumb') &&
+      doc.querySelector('#panel input.p-num-edit[data-stf="num"]').value === String(window.RM.storyRef(state(), sc.dataset.prst).st.num),
+      'clicking a story card opens the story panel');
+    click(doc.querySelector('#prioView .pr-stcard[data-prst="' + sc.dataset.prst + '"] .pr-head'));
+    ok(doc.querySelector('#panel').hidden, 'clicking it again hides the panel');
+  }
+  click(doc.querySelector('#prioView [data-prdd="level"]')); pick(/Feature/);
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
 // ---------------------------------------------------------------- story panel estimate buttons
 // Size / Priority / Risk in the story panel are buttons with data-stf AND
 // data-v; the generic data-stf handler must not swallow them.

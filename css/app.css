@@ -2479,7 +2479,7 @@ body[data-view="sprints"] #rowFilter { display: none; }
   background: var(--blue); margin-left: 6px; vertical-align: middle;
 }
 /* main: one scrolling page of sprint sections */
-.spv-main { flex: 1; min-width: 0; overflow: auto; padding: 0 22px 60px; }
+.spv-main { flex: 1; min-width: 0; max-width: 1180px; overflow: auto; padding: 0 22px 60px; } /* rows read badly past ~1200px */
 /* the toolbar rides the top of the scroll area; section headers tuck under it */
 .spv-main .pr-bar { position: sticky; top: 0; z-index: 3; background: var(--paper); padding: 18px 0 6px; margin: 0 0 8px; }
 .spv-sec { margin-bottom: 26px; border-radius: 10px; }
@@ -2563,7 +2563,7 @@ body[data-view="prio"] #leftRzLine,
 body[data-view="prio"] #resPanel,
 body[data-view="prio"] #filterCell .filter-kbd,
 body[data-view="prio"] #rowFilter { display: none; }
-.sp-page { padding: 18px 22px 40px; max-width: 1500px; margin: 0 auto; }
+.sp-page { padding: 18px 22px 40px; } /* full width: the board grows with the window */
 .sp-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
 .sp-toolbar .dd-btn { min-width: 230px; }
 .sp-modeseg button { padding: 6px 12px; }
@@ -2695,6 +2695,8 @@ body[data-view="prio"] #rowFilter { display: none; }
   border-color: color-mix(in srgb, var(--line-3) 60%, var(--ws-c, var(--line-3)));
   box-shadow: 0 2px 4px rgba(0, 0, 0, .08), 0 6px 18px rgba(0, 0, 0, .07);
 }
+/* the card the panel shows */
+.pr-card.selected { border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-soft), 0 3px 10px rgba(0, 0, 0, .05); }
 .pr-card input, .pr-card [contenteditable] {
   border-color: transparent; background: transparent;
   padding: 3px 5px; margin: 0 -5px; width: calc(100% + 10px);

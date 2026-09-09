@@ -15,6 +15,8 @@ Format: short sections, bullets, one bold title per notable change —
 - **Story dependencies**: a story can depend on any other story. Add one in the story panel's Dependencies section (by # or name) or drag a story bar's edge circle onto another story; arrows and order warnings work like features; links push to Jira and the Stories sheet carries them.
 - **Titles rename on double-click**: on Planning and Prioritizing the feature and story titles are text, like Sprinting. Double-click one, or pick **Rename…** from its context menu, to edit; a single click just selects. Scoping keeps its spreadsheet cells.
 - AI assistant: Markdown tables in replies render as tables.
+- Prioritizing: the board is full width; **Columns → Unset column** hides or shows the catch-all column; clicking a card opens the detail panel on it and clicking the same card again puts the panel away.
+- Sprinting: the main content area is capped at a readable width.
 
 ## 1.0.12 — 2026-09-09
 
