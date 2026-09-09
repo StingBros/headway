@@ -321,11 +321,27 @@ click(firstItem.querySelector('.r-num'));
 ok(!doc.querySelector('#panel').hidden, 'clicking a row opens the detail panel');
 ok(doc.querySelector('#panel .p-name').value.length > 0, 'panel shows the feature name');
 {
-  const nameInp = doc.querySelector('#rows .row.item[data-id="' + itId + '"] input.r-name');
-  ok(!!nameInp, 'row title is an editable input');
+  const rowOf = () => doc.querySelector('#rows .row.item[data-id="' + itId + '"]');
+  const nameEl = rowOf().querySelector('.r-name');
+  ok(nameEl && nameEl.tagName !== 'INPUT' && nameEl.textContent.length > 0, 'row title is text, not an input');
+  click(nameEl);
+  ok(!rowOf().querySelector('input'), 'a single click on the title does not start an edit');
+  rowOf().querySelector('.r-name').dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
+  const nameInp = rowOf().querySelector('input.r-name');
+  ok(!!nameInp, 'double-click turns the row title into an input');
   nameInp.value = 'Renamed inline';
-  nameInp.dispatchEvent(new window.Event('change', { bubbles: true }));
-  ok(state().items.find(i => i.id === itId).feature === 'Renamed inline', 'row title rename commits');
+  nameInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  ok(state().items.find(i => i.id === itId).feature === 'Renamed inline', 'Enter commits the row title rename');
+  // the row menu starts the same edit
+  rowOf().dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 120 }));
+  const rnBtn = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Rename/.test(b.textContent));
+  ok(!!rnBtn, 'the row context menu offers Rename…');
+  click(rnBtn);
+  const ed2 = rowOf().querySelector('input.r-name');
+  ok(!!ed2, 'Rename… starts the same inline edit');
+  ed2.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  ok(state().items.find(i => i.id === itId).feature === 'Renamed inline', 'Escape leaves the title alone');
+  click(rowOf().querySelector('.r-num')); // Escape cleared the selection — put it back
 }
 ok(doc.querySelector('#panel .wz-ed[data-f="col:description"]') !== null, 'panel has a description field');
 {
@@ -2006,11 +2022,25 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
       'Priority and Risk chips stay on the card even when the columns are that field');
     ok(!doc.querySelector('#prFieldsBtn') && !doc.querySelector('#prioView .pr-add') && !doc.querySelector('#prioView [data-prstadd]'),
       'Fields, Add and Add story leave in story mode');
-    const stIn = card0.querySelector('input[data-prstf="title"]');
+    const stCardOf = () => doc.querySelector('#prioView .pr-stcard[data-prst="' + sid + '"]');
+    ok(stCardOf().querySelector('.pr-title').tagName !== 'INPUT', 'a story card title is text, not an input');
+    click(stCardOf().querySelector('.pr-title'));
+    ok(!stCardOf().querySelector('input'), 'a single click on a story card title does not start an edit');
+    stCardOf().querySelector('.pr-title').dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
+    const stIn = stCardOf().querySelector('input[data-prstf="title"]');
+    ok(!!stIn, 'double-click makes the story card title editable');
     stIn.value = 'Renamed on the board';
-    stIn.dispatchEvent(new window.Event('change', { bubbles: true }));
+    stIn.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     ok(state().items.find(i => i.id === fid).stories.find(x => x.id === sid).title === 'Renamed on the board',
       'a story title edits inline on the card');
+    // the card menu starts the same edit
+    stCardOf().dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 90, clientY: 90 }));
+    const stRn = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Rename/.test(b.textContent));
+    ok(!!stRn, 'a story card context menu offers Rename…');
+    click(stRn);
+    ok(!!stCardOf().querySelector('input[data-prstf="title"]'), 'Rename… opens the story card editor');
+    stCardOf().querySelector('input[data-prstf="title"]')
+      .dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
     // drag a story card into the High column: its priority follows
     const storyOf = () => state().items.find(i => i.id === fid).stories.find(x => x.id === sid);
@@ -2054,7 +2084,8 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   // sort control: Title ordering applies inside a column
   click(doc.querySelector('#prioView [data-prdd="sort"]'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Title/.test(b.textContent)));
-  const colTitles = [...doc.querySelector('#prioView .sp-col').querySelectorAll('.pr-title')].map(i => i.value);
+  const colTitles = [...doc.querySelector('#prioView .sp-col').querySelectorAll('.pr-title')]
+    .map(i => i.classList.contains('pr-ph') ? '' : i.textContent); // an untitled card shows its placeholder
   ok(colTitles.length < 2 || colTitles.every((t, i) => i === 0 || colTitles[i - 1].localeCompare(t) <= 0),
     'Sort → Title orders a column alphabetically');
   click(doc.querySelector('#prioView [data-prdd="sort"]'));
@@ -2597,11 +2628,14 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 // ---------------------------------------------------------------- version history diffs
 {
   window.localStorage.setItem('headway-user-v1', 'Test User');
-  const inp = doc.querySelector('#rows .row.item input[data-rowname]');
-  const it = window.RM.itemById(state(), inp.closest('.row').dataset.id);
+  const nameSpan = doc.querySelector('#rows .row.item [data-rowname]');
+  const rowId = nameSpan.closest('.row').dataset.id;
+  const it = window.RM.itemById(state(), rowId);
   const oldTitle = it.feature;
+  nameSpan.dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
+  const inp = doc.querySelector('#rows .row.item[data-id="' + rowId + '"] input[data-rowname]');
   inp.value = 'Diffed Feature Title';
-  inp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  inp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   const en = state().history[state().history.length - 1];
   ok(Array.isArray(en.d) && en.d.some(op => op[0] === 'scope' && /Title/.test(op[1]) &&
     op[2] === oldTitle && op[3] === 'Diffed Feature Title'),
@@ -3414,7 +3448,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
 // ---------------------------------------------------------------- Enter commits + blurs; format bar hides until focus
 {
   const enter = (el) => el.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
-  const row0 = Array.from(doc.querySelectorAll('#rows .row.item')).find(r => r.querySelector('input.r-name'));
+  const row0 = Array.from(doc.querySelectorAll('#rows .row.item')).find(r => r.querySelector('.r-name-txt'));
   const it0 = state().items.find(i => i.id === row0.dataset.id);
   click(row0.querySelector('.r-num'));
   const pn = doc.querySelector('#panel .p-name');
@@ -3430,12 +3464,15 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   enter(jk2);
   ok(doc.activeElement !== jk2, 'Enter on a panel input leaves the field');
   ok(state().items.find(i => i.id === it0.id).jiraKey === 'HW-77', 'Enter on a panel input saves it');
+  doc.querySelector('#rows .row.item[data-id="' + it0.id + '"] .r-name-txt')
+    .dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
   const rn = doc.querySelector('#rows .row.item[data-id="' + it0.id + '"] input.r-name');
   rn.focus();
   rn.value = 'Enter row';
   enter(rn);
-  ok(doc.activeElement !== rn, 'Enter on a left-pane name input leaves the field');
   ok(state().items.find(i => i.id === it0.id).feature === 'Enter row', 'Enter on a left-pane name input saves it');
+  ok(!doc.querySelector('#rows .row.item[data-id="' + it0.id + '"] input.r-name'),
+    'and the input gives way to the text title again');
   const css = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
   ok(/\.wz-bar\s*\{[^}]*display:\s*none/.test(css) && /\.wz:focus-within\s*(>\s*)?\.wz-bar\s*\{[^}]*display:\s*flex/.test(css),
     'panel format bar stays hidden until its editor has focus');
@@ -3479,6 +3516,65 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   if (upBtn) click(upBtn); // the insert opened the story in the panel; back to the feature
   click(doc.querySelector('#detailBtn'));
   click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
+}
+
+// ---------------------------------------------------------------- titles rename on double-click only
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story detail: every feature open
+  const stRow0 = doc.querySelector('#rows .row.story[data-story]');
+  const sFid = stRow0.dataset.id, sSid = stRow0.dataset.story;
+  const rowOf = () => doc.querySelector('#rows .row.story[data-story="' + sSid + '"]');
+  const storyOf = () => state().items.find(i => i.id === sFid).stories.find(s2 => s2.id === sSid);
+  const wasTitle = storyOf().title;
+  const title0 = rowOf().querySelector('.st-title');
+  ok(title0 && title0.tagName !== 'INPUT', 'a planning story title is text');
+  click(title0);
+  ok(!rowOf().querySelector('input'), 'a single click on a story title opens it, it does not edit it');
+  rowOf().querySelector('.st-title').dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
+  const sEd = rowOf().querySelector('input.st-add-input');
+  ok(!!sEd, 'double-click makes a planning story title editable');
+  sEd.value = 'Renamed story row';
+  sEd.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  ok(storyOf().title === 'Renamed story row', 'Enter commits the story rename');
+  rowOf().dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+  const sRn = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Rename/.test(b.textContent));
+  ok(!!sRn, 'the story row context menu offers Rename…');
+  click(sRn);
+  const sEd2 = rowOf().querySelector('input.st-add-input');
+  ok(!!sEd2, 'Rename… starts the same inline edit on a story row');
+  sEd2.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(storyOf().title === wasTitle, 'undo puts the old story title back');
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
+  // the same on a Prioritizing feature card
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  const cid = doc.querySelector('#prioView .pr-card:not(.pr-stcard)').dataset.prcard;
+  const cardOf = () => doc.querySelector('#prioView .pr-card[data-prcard="' + cid + '"]:not(.pr-stcard)');
+  const featOf = () => state().items.find(i => i.id === cid);
+  const wasFeat = featOf().feature;
+  const ct = cardOf().querySelector('.pr-head .pr-title');
+  ok(ct && ct.tagName !== 'INPUT' && ct.dataset.prf === 'feature', 'a prioritizing card title is text, not an input');
+  click(ct);
+  ok(!cardOf().querySelector('.pr-head input'), 'a single click on a card title does not start an edit');
+  cardOf().querySelector('.pr-head .pr-title').dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
+  const cEd = cardOf().querySelector('.pr-head input[data-prf="feature"]');
+  ok(!!cEd, 'double-click makes the card title editable');
+  cEd.value = 'Renamed on a card';
+  cEd.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  ok(featOf().feature === 'Renamed on a card', 'Enter commits the card rename');
+  cardOf().dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 90, clientY: 90 }));
+  const cRn = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Rename/.test(b.textContent));
+  ok(!!cRn, 'a prioritizing card context menu offers Rename…');
+  click(cRn);
+  ok(!!cardOf().querySelector('.pr-head input[data-prf="feature"]'), 'Rename… opens the card editor');
+  cardOf().querySelector('.pr-head input[data-prf="feature"]')
+    .dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(featOf().feature === wasFeat, 'undo puts the old card title back');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
 // ---------------------------------------------------------------- story assignees in the story panel

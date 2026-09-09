@@ -490,6 +490,17 @@ function done() {
     eq(AI.md('see #12 and #3.'), '<p>see <a class="ai-ref" data-num="12" href="#">#12</a> and <a class="ai-ref" data-num="3" href="#">#3</a>.</p>', 'feature references link');
     eq(AI.md('text\n```headway-tool\n{"name":"x"}\n```\nafter'), '<p>text</p><p>after</p>', 'tool fences never render');
     eq(AI.md('[doc](https://x.y/z) <script>'), '<p><a href="https://x.y/z" target="_blank" rel="noopener">doc</a> &lt;script&gt;</p>', 'links and escaping');
+    // GitHub-style tables: a header row, a delimiter row, body rows
+    eq(AI.md('| # | Feature | Size |\n|---|:--------|-----:|\n| 1 | **Alpha** | M |\n| 2 | a \\| b | <s> |'),
+      '<div class="ai-tbl"><table><thead><tr><th>#</th><th style="text-align:left">Feature</th><th style="text-align:right">Size</th></tr></thead>' +
+      '<tbody><tr><td>1</td><td style="text-align:left"><b>Alpha</b></td><td style="text-align:right">M</td></tr>' +
+      '<tr><td>2</td><td style="text-align:left">a | b</td><td style="text-align:right">&lt;s&gt;</td></tr></tbody></table></div>',
+      'pipe tables render as tables with alignment, inline markup, escaped pipes and escaping');
+    eq(AI.md('Before\n\nA | B\n--|--\n1 | 2\n\nAfter'),
+      '<p>Before</p><div class="ai-tbl"><table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table></div><p>After</p>',
+      'tables without outer pipes work and end at a blank line');
+    eq(AI.md('| a | b |\n| 1 | 2 |'), '<p>| a | b |<br>| 1 | 2 |</p>', 'a pipe line without a delimiter row is plain text');
+    eq(AI.md('| a | b |\n|---|---|\n| only |'), '<div class="ai-tbl"><table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>only</td><td></td></tr></tbody></table></div>', 'short rows pad to the header width');
   }
 
   console.log('— model labels + effort levels');
