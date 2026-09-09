@@ -29,8 +29,8 @@
     fibonacci: {
       name: 'Story points',
       hint: 'Fibonacci scale (Scrum) — uncertainty grows with size',
-      sizes: ['1', '2', '3', '5', '8', '13'],
-      days: { 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 }
+      sizes: ['0.5', '1', '2', '3', '5', '8', '13'],
+      days: { '0.5': 0.5, 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 }
     },
     points5: {
       name: 'Points 1–5',
@@ -110,6 +110,20 @@
     eachOfKind(state, kind, function (o) { if (o.size === label) o.size = null; });
     m[k.scheme] = 'custom';
   };
+  // Documents saved before Fibonacci gained its half point pick it up, as long
+  // as they still hold the untouched old default order (an edited scale is the
+  // project's own — leave it be; Setup can add 0.5 by hand).
+  RM.FIB_PRE_HALF_ORDER = ['1', '2', '3', '5', '8', '13'];
+  function addHalfPoint(m, k) {
+    if (m[k.scheme] !== 'fibonacci' || !Array.isArray(m[k.order])) return;
+    var o = m[k.order];
+    if (o.length !== RM.FIB_PRE_HALF_ORDER.length) return;
+    for (var i = 0; i < o.length; i++) if (o[i] !== RM.FIB_PRE_HALF_ORDER[i]) return;
+    o.unshift('0.5');
+    m[k.days] = m[k.days] || {};
+    m[k.days]['0.5'] = 0.5;
+  }
+
   RM.RISK_ORDER = ['L', 'M', 'H']; // low / medium / high (severity, not a size)
 
   // Assessment ("Risk") column schemes. Most projects track nothing here —
@@ -1278,6 +1292,7 @@
     } else {
       m.sizeOrder = (RM.SIZE_SCHEMES[m.sizeScheme].sizes || RM.SIZE_ORDER).slice();
     }
+    addHalfPoint(m, sizeKeys('feature'));
     var schemeDays = RM.SIZE_SCHEMES[m.sizeScheme].days || {};
     m.sizeOrder.forEach(function (l) {
       if (!isFinite(+m.sizeDays[l]) || +m.sizeDays[l] <= 0) {
@@ -1310,8 +1325,9 @@
     } else {
       m.storySizeOrder = (RM.SIZE_SCHEMES[m.storySizeScheme].sizes || []).slice();
     }
-    var storySchemeDays = RM.SIZE_SCHEMES[m.storySizeScheme].days || {};
     m.storySizeDays = m.storySizeDays && typeof m.storySizeDays === 'object' ? m.storySizeDays : {};
+    addHalfPoint(m, sizeKeys('story'));
+    var storySchemeDays = RM.SIZE_SCHEMES[m.storySizeScheme].days || {};
     m.storySizeOrder.forEach(function (l) {
       if (!isFinite(+m.storySizeDays[l]) || +m.storySizeDays[l] <= 0) {
         m.storySizeDays[l] = storySchemeDays[l] || 5;

@@ -1672,3 +1672,20 @@ eq(lines[0], 'Summary,Issue Type,Description,Parent,Labels,Priority,Due Date,Sta
 ok(lines.some(function (l) { return l.indexOf('"Search, ""fast"""') === 0; }), 'commas and quotes are escaped');
 ok(/"Hi there\n/.test(csv), 'newlines stay inside a quoted cell');
 eq(RMJira.csv(mkState([]), { features: true }).slice(1).split('\r\n').length, 2, 'empty doc: header plus trailing newline');
+
+// ------------------------------------------------------------ half points
+section('half points');
+{
+  eq(RM.SIZE_SCHEMES.fibonacci.sizes[0], '0.5', 'story points start at 0.5');
+  eq(RM.SIZE_SCHEMES.fibonacci.days['0.5'], 0.5, '0.5 points = half a day');
+  var sH = RM.normalizeState({ meta: { title: 'H', timelineStart: '2026-07-27', numWeeks: 8, storySizeScheme: 'fibonacci', storySizeOrder: ['1', '2', '3', '5', '8', '13'], storySizeDays: { 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 } },
+    phases: [{ id: 'p', name: 'P' }], team: [], items: [{ id: 'x', num: 1, phaseId: 'p', feature: 'X', startDay: 0, durDays: 5, stories: [{ id: 's', title: 'S', size: '0.5' }] }] });
+  eq(RM.sizeOrderOf(sH, 'story')[0], '0.5', 'an older Fibonacci document gains the 0.5 option');
+  eq(RM.sizeDays(sH, '0.5', 'story'), 0.5, 'and its day value');
+  eq(RM.storyEffortDays(sH, sH.items[0].stories[0]), 0.5, 'a 0.5-point story is half a day of effort');
+  ok(RM.stretchSpan(sH.meta, 0, 0.5) >= 1, 'a half-day span still occupies one working day on the grid');
+  var sC = RM.normalizeState({ meta: { title: 'C', timelineStart: '2026-07-27', numWeeks: 8, storySizeScheme: 'custom', storySizeOrder: ['1', '2', '3', '5', '8', '13'], storySizeDays: { 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 } }, phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
+  eq(RM.sizeOrderOf(sC, 'story').indexOf('0.5'), -1, 'a custom scale is left alone');
+  RM.addSizeOption(sC, '0.5', 0.5, 'story');
+  eq(RM.sizeDays(sC, '0.5', 'story'), 0.5, 'addSizeOption keeps a fractional day value');
+}

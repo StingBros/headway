@@ -2729,6 +2729,8 @@
       return v !== '' && v != null && !isNaN(Number(v));
     });
   }
+  // half points make totals fractional; keep them off floating-point noise
+  function fmtPts(p) { return Math.round(p * 10) / 10; }
   function sprStoryPts(st) {
     var n = st && st.size ? Number(st.size) : NaN;
     return isNaN(n) ? 0 : n;
@@ -2865,7 +2867,7 @@
       '<div class="spv-sechd"><h3>' + esc(sec.title) + '</h3>' +
       (sec.dates ? '<span class="spv-secdates">' + esc(sec.dates) + '</span>' : '') +
       '<span class="pr-lanect"' + (sec.points != null ? ' title="Story points"' : '') + '>' +
-      (sec.points != null ? sec.points + ' pt' : sec.count) + '</span></div>' +
+      (sec.points != null ? fmtPts(sec.points) + ' pt' : sec.count) + '</span></div>' +
       '<div class="spv-rows">' + (body || '<div class="spv-empty">Nothing here' + (sprFilterOn() ? ' matches' : '') + '. Drop a row to move it into this sprint.</div>') + '</div>' +
       (sprLevel === 'feature' ? '<button class="spv-add" data-spadd="' + sec.key + '"><i data-lucide="plus"></i>' + esc('Add ' + lvl('feature')) + '</button>' : '') +
       '</section>';
@@ -2901,7 +2903,7 @@
         '<span class="spv-sbtxt"><span class="spv-sbname">' + esc(sec.title) + '</span>' +
         (sec.dates ? '<small>' + esc(sec.dates) + '</small>' : '') + '</span>' +
         '<span class="pr-lanect"' + (sec.points != null ? ' title="Story points"' : '') + '>' +
-        (sec.points != null ? sec.points + ' pt' : sec.count) + '</span></button>';
+        (sec.points != null ? fmtPts(sec.points) + ' pt' : sec.count) + '</span></button>';
     }).join('');
     host.innerHTML = '<div class="spv">' +
       '<aside class="spv-side"><div class="spv-sidehd">Sprints</div>' + side + '</aside>' +
@@ -3957,7 +3959,7 @@
   function sizeHuman(size, kind) {
     var d = RM.sizeDays(state, size, kind);
     if (d == null) return '';
-    if (d < 5) return d + 'd';
+    if (d < 5) return (Math.round(d * 10) / 10) + 'd';
     return (Math.round(d / SPW() * 100) / 100) + 'w';
   }
   function sizeMatches(it) {
@@ -4785,7 +4787,7 @@
   // measured in weeks (5 working days); short spans read better in days
   function fmtDays(d) {
     if (d == null) return '';
-    if (d < 5) return d + 'd';
+    if (d < 5) return (Math.round(d * 10) / 10) + 'd';
     var w = d / SPW();
     return (Math.round(w * 10) / 10) + 'w';
   }
@@ -9003,7 +9005,7 @@
       return RM.sizeOrderOf(state, kind).map(function (s2) {
         return '<tr>' +
           '<td><input data-suszlabel="' + esc(s2) + '"' + kAttr + ' value="' + esc(s2) + '" aria-label="Option label"></td>' +
-          '<td><input type="number" min="1" data-susz="' + esc(s2) + '"' + kAttr + ' value="' + days[s2] + '" aria-label="Working days"></td>' +
+          '<td><input type="number" min="0.5" step="0.5" data-susz="' + esc(s2) + '"' + kAttr + ' value="' + days[s2] + '" aria-label="Working days"></td>' +
           '<td class="hol-x"><button data-suszrm="' + esc(s2) + '"' + kAttr + ' title="Remove option"><i data-lucide="x"></i></button></td>' +
           '</tr>';
       }).join('');
@@ -9514,7 +9516,7 @@
     }
     if (t.dataset.susz) {
       var sz = t.dataset.susz, szKeys = RM.sizeKeys(t.dataset.kind || 'feature');
-      var v = Math.max(1, parseInt(t.value, 10) || (state.meta[szKeys.days] || {})[sz] || 5);
+      var v = Math.max(0.5, parseFloat(t.value) || (state.meta[szKeys.days] || {})[sz] || 5);
       commit('size days', function (s2) {
         s2.meta[szKeys.days][sz] = v;
         s2.meta[szKeys.scheme] = 'custom';
