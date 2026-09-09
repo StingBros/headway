@@ -1628,9 +1628,9 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   ok(doc.querySelectorAll('#setupView .su-scheme').length >= 4, 'Sizing offers approach presets');
   click(doc.querySelector('#setupView [data-suscheme="fibonacci"]'));
   ok(state().meta.sizeScheme === 'fibonacci' &&
-    state().meta.sizeOrder.join(',') === '1,2,3,5,8,13',
+    state().meta.sizeOrder.join(',') === '0.5,1,2,3,5,8,13',
     'Story points preset applies its scale');
-  ok(doc.querySelectorAll('#setupView [data-susz]:not([data-kind])').length === 6, 'option table lists the six point values');
+  ok(doc.querySelectorAll('#setupView [data-susz]:not([data-kind])').length === 7, 'option table lists the seven point values');
   // rename an option — items follow, scheme flips to custom
   const lblInp = doc.querySelector('#setupView [data-suszlabel="13"]');
   lblInp.value = '21';
@@ -3336,7 +3336,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   // stories estimate on their own scale: story points + severity ladder by default
   ok(state().meta.storySizeScheme === 'fibonacci' && state().meta.storyPriorityScheme === 'levels',
     'stories default to story points and the severity ladder');
-  ok(window.RM.sizeOrderOf(state(), 'story').join(',') === '1,2,3,5,8,13' &&
+  ok(window.RM.sizeOrderOf(state(), 'story').join(',') === '0.5,1,2,3,5,8,13' &&
     window.RM.sizeOrderOf(state()).join(',') !== window.RM.sizeOrderOf(state(), 'story').join(','),
     'the story scale is separate from the feature scale');
   click(doc.querySelector('#btnSetup'));
@@ -3963,6 +3963,26 @@ ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'co
     'story level trims empty sprints at both ends');
   click(doc.querySelector('#sprintView [data-spdd="level"]'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
+}
+
+// 0.5 story points: option offered, totals sum fractions
+{
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  const prev = JSON.parse(JSON.stringify({ s: state().meta.storySizeScheme, o: state().meta.storySizeOrder, d: state().meta.storySizeDays }));
+  window.HeadwayApp.ai.commit('fib', (s) => { window.RM.setSizeScheme(s, 'fibonacci', 'story'); });
+  ok(state().meta.storySizeOrder[0] === '0.5', 'the Fibonacci story scale offers 0.5');
+  const row = doc.querySelector('#sprintView .spv-sec:not([data-spsec="u"]) .spv-row');
+  const id = row.dataset.spid, sec = row.dataset.spsec;
+  const it = state().items.find(i => i.id === id);
+  if (it.stories.length >= 2) {
+    const before = doc.querySelector('#sprintView .spv-sec[data-spsec="' + sec + '"] .pr-lanect').textContent;
+    window.HeadwayApp.ai.commit('half', (s) => { const t = window.RM.itemById(s, id); t.stories[0].size = '0.5'; t.stories[1].size = '3'; });
+    const txt = doc.querySelector('#sprintView .spv-sec[data-spsec="' + sec + '"] .pr-lanect').textContent;
+    ok(/^\d+(\.5)? pt$/.test(txt) && txt !== before, 'sprint totals include half points and show one decimal at most (' + txt + ')');
+    window.HeadwayApp.ai.commit('half', (s) => { const t = window.RM.itemById(s, id); t.stories[0].size = ''; t.stories[1].size = ''; });
+  } else ok(true, 'first sprint row has fewer than two stories');
+  window.HeadwayApp.ai.commit('restore', (s) => { s.meta.storySizeScheme = prev.s; s.meta.storySizeOrder = prev.o; s.meta.storySizeDays = prev.d; });
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
 // NOTE: this export promise chain must stay LAST in this file — its .then /
