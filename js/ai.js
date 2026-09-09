@@ -798,6 +798,46 @@
       .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
       .replace(/(^|[\s(])#(\d+)\b/g, '$1<a class="ai-ref" data-num="$2" href="#">#$2</a>');
   }
+  // GitHub-style pipe tables: split a row into cells (\| is a literal pipe)
+  function tableCells(line) {
+    var t = line.trim();
+    if (t.charAt(0) === '|') t = t.slice(1);
+    if (t.charAt(t.length - 1) === '|' && t.charAt(t.length - 2) !== '\\') t = t.slice(0, -1);
+    var cells = [], cur = '';
+    for (var i = 0; i < t.length; i++) {
+      var ch = t.charAt(i);
+      if (ch === '\\' && t.charAt(i + 1) === '|') { cur += '|'; i += 1; }
+      else if (ch === '|') { cells.push(cur.trim()); cur = ''; }
+      else cur += ch;
+    }
+    cells.push(cur.trim());
+    return cells;
+  }
+  // the delimiter row under a header: cells like ---, :---, ---:, :---:
+  function tableAligns(line) {
+    if (line.indexOf('-') === -1) return null;
+    var cells = tableCells(line);
+    var aligns = [];
+    for (var i = 0; i < cells.length; i++) {
+      var m = cells[i].match(/^(:?)-+(:?)$/);
+      if (!m) return null;
+      aligns.push(m[1] && m[2] ? 'center' : m[2] ? 'right' : m[1] ? 'left' : '');
+    }
+    return aligns;
+  }
+  function tableHtml(header, aligns, rows) {
+    function cell(tag, txt, i) {
+      var a = aligns[i];
+      return '<' + tag + (a ? ' style="text-align:' + a + '"' : '') + '>' + inline(esc(txt || '')) + '</' + tag + '>';
+    }
+    function row(cells, tag) {
+      var out = [];
+      for (var i = 0; i < header.length; i++) out.push(cell(tag, cells[i], i));
+      return '<tr>' + out.join('') + '</tr>';
+    }
+    return '<div class="ai-tbl"><table><thead>' + row(header, 'th') + '</thead>' +
+      '<tbody>' + rows.map(function (r) { return row(r, 'td'); }).join('') + '</tbody></table></div>';
+  }
   AI.md = function (text) {
     var src = String(text || '').replace(/\r\n?/g, '\n');
     var out = [];
@@ -823,6 +863,19 @@
         if (fence[1] === AI.FENCE) continue; // tool calls render as cards, not code
         out.push('<pre><code>' + esc(code.join('\n')) + '</code></pre>');
         continue;
+      }
+      // a table: a header line with a pipe, a delimiter line, then rows until a blank line
+      if (line.indexOf('|') !== -1 && i + 1 < lines.length) {
+        var aligns = tableAligns(lines[i + 1]);
+        var header = aligns ? tableCells(line) : null;
+        if (header && header.length === aligns.length) {
+          flushPara(); flushList();
+          var rows = [];
+          i += 2;
+          while (i < lines.length && lines[i].trim() && lines[i].indexOf('|') !== -1) { rows.push(tableCells(lines[i])); i += 1; }
+          out.push(tableHtml(header, aligns, rows));
+          continue;
+        }
       }
       var h = line.match(/^\s*(#{1,4})\s+(.*)$/);
       if (h) { flushPara(); flushList(); out.push('<h' + (h[1].length + 2) + '>' + inline(esc(h[2])) + '</h' + (h[1].length + 2) + '>'); i += 1; continue; }

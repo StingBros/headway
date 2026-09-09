@@ -3162,6 +3162,11 @@ html[data-theme="dark"] .ai-bubble { background: rgba(0, 100, 210, .18); border-
 .ai-body pre { background: var(--card); border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; overflow-x: auto; margin: 0 0 8px; }
 .ai-body pre code { background: none; border: 0; padding: 0; }
 .ai-body blockquote { margin: 0 0 8px; padding: 2px 10px; border-left: 3px solid var(--line-2); color: var(--ink-2); }
+.ai-tbl { overflow-x: auto; margin: 0 0 8px; }
+.ai-tbl:last-child { margin-bottom: 0; }
+.ai-tbl table { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+.ai-tbl th, .ai-tbl td { border: 1px solid var(--line); padding: 3px 8px; text-align: left; vertical-align: top; white-space: nowrap; }
+.ai-tbl th { background: var(--card); font-weight: 600; }
 .ai-body a { color: var(--blue); }
 .ai-ref { font-family: var(--mono); font-size: 12px; text-decoration: none; border-bottom: 1px dotted var(--blue); }
 .ai-ref:hover { background: var(--blue-soft); }
