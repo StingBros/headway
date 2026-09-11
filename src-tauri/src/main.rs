@@ -94,7 +94,19 @@ mod ai {
         {
             let out = Command::new("where").arg("claude").output().ok()?;
             let s = String::from_utf8_lossy(&out.stdout);
-            return s.lines().map(str::trim).find(|l| !l.is_empty()).map(String::from);
+            // `where` lists every PATH hit; with nvm-for-windows the first is the
+            // extensionless Unix shim, which CreateProcess cannot run (error 193).
+            // Prefer a real executable, then a batch wrapper, never a bare script.
+            fn rank(p: &str) -> u8 {
+                let l = p.to_ascii_lowercase();
+                if l.ends_with(".exe") { 0 } else if l.ends_with(".cmd") || l.ends_with(".bat") { 1 } else { 9 }
+            }
+            return s
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && rank(l) < 9)
+                .min_by_key(|l| rank(l))
+                .map(String::from);
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -115,6 +127,19 @@ mod ai {
     pub fn ai_claude_path(custom: String) -> Option<String> {
         let c = custom.trim();
         if !c.is_empty() {
+            #[cfg(target_os = "windows")]
+            {
+                // a saved path to the npm shell shim (no extension): use the
+                // runnable sibling that npm installs beside it
+                if std::path::Path::new(c).extension().is_none() {
+                    for ext in ["exe", "cmd", "bat"] {
+                        let alt = format!("{c}.{ext}");
+                        if std::path::Path::new(&alt).is_file() {
+                            return Some(alt);
+                        }
+                    }
+                }
+            }
             return if std::path::Path::new(c).is_file() { Some(c.to_string()) } else { None };
         }
         let h = home();
@@ -126,6 +151,10 @@ mod ai {
         ];
         if let Ok(appdata) = std::env::var("APPDATA") {
             candidates.push(format!("{appdata}\\npm\\claude.cmd"));
+        }
+        // nvm-for-windows links the active node (and its npm bins) here
+        if let Ok(sym) = std::env::var("NVM_SYMLINK") {
+            candidates.push(format!("{sym}\\claude.cmd"));
         }
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             candidates.push(format!("{local}\\Programs\\claude\\claude.exe"));
