@@ -89,34 +89,77 @@ mod ai {
             .unwrap_or_default()
     }
 
-    fn login_shell_lookup() -> Option<String> {
+    /// 0 = a real executable, 1 = a batch wrapper, 9 = something CreateProcess
+    /// cannot run (the extensionless Unix shim npm writes, a .ps1, …).
+    #[cfg(target_os = "windows")]
+    fn exe_rank(p: &str) -> u8 {
+        let l = p.to_ascii_lowercase();
+        if l.ends_with(".exe") { 0 } else if l.ends_with(".cmd") || l.ends_with(".bat") { 1 } else { 9 }
+    }
+
+    /// npm's claude.cmd only launches the native binary shipped inside the
+    /// package. Return that binary so nothing goes through cmd.exe: Rust refuses
+    /// to hand a batch file any argument with quotes or newlines, and the
+    /// assistant's system prompt has both.
+    #[cfg(target_os = "windows")]
+    fn unwrap_npm_shim(p: &str) -> Option<String> {
+        if exe_rank(p) != 1 {
+            return None;
+        }
+        let native = std::path::Path::new(p)
+            .parent()?
+            .join("node_modules")
+            .join("@anthropic-ai")
+            .join("claude-code")
+            .join("bin")
+            .join("claude.exe");
+        if native.is_file() { Some(native.to_string_lossy().into_owned()) } else { None }
+    }
+
+    /// Every `claude` the login shell / PATH knows about, in PATH order.
+    fn login_shell_lookup() -> Vec<String> {
         #[cfg(target_os = "windows")]
         {
-            let out = Command::new("where").arg("claude").output().ok()?;
-            let s = String::from_utf8_lossy(&out.stdout);
             // `where` lists every PATH hit; with nvm-for-windows the first is the
-            // extensionless Unix shim, which CreateProcess cannot run (error 193).
-            // Prefer a real executable, then a batch wrapper, never a bare script.
-            fn rank(p: &str) -> u8 {
-                let l = p.to_ascii_lowercase();
-                if l.ends_with(".exe") { 0 } else if l.ends_with(".cmd") || l.ends_with(".bat") { 1 } else { 9 }
-            }
+            // extensionless Unix shim, which CreateProcess cannot run (error 193)
+            let Ok(out) = Command::new("where").arg("claude").output() else { return Vec::new() };
+            let s = String::from_utf8_lossy(&out.stdout);
             return s
                 .lines()
                 .map(str::trim)
-                .filter(|l| !l.is_empty() && rank(l) < 9)
-                .min_by_key(|l| rank(l))
-                .map(String::from);
+                .filter(|l| !l.is_empty() && exe_rank(l) < 9)
+                .map(String::from)
+                .collect();
         }
         #[cfg(not(target_os = "windows"))]
         {
             let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-            let out = Command::new(shell)
-                .args(["-lc", "command -v claude"])
-                .output()
-                .ok()?;
+            let Ok(out) = Command::new(shell).args(["-lc", "command -v claude"]).output() else { return Vec::new() };
             let s = String::from_utf8_lossy(&out.stdout);
-            s.lines().map(str::trim).find(|l| !l.is_empty()).map(String::from)
+            s.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect()
+        }
+    }
+
+    /// The best of several found paths. On Windows a native .exe beats a batch
+    /// wrapper (unwrapped to its bundled .exe when possible); earlier hits win
+    /// within a rank. Elsewhere the first hit wins, as before.
+    fn best_claude(found: Vec<String>) -> Option<String> {
+        #[cfg(target_os = "windows")]
+        {
+            let mut all: Vec<String> = Vec::new();
+            for p in found {
+                if let Some(native) = unwrap_npm_shim(&p) {
+                    all.push(native);
+                }
+                all.push(p);
+            }
+            all.retain(|p| exe_rank(p) < 9 && std::path::Path::new(p).is_file());
+            all.sort_by_key(|p| exe_rank(p));
+            return all.into_iter().next();
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            found.into_iter().find(|p| std::path::Path::new(p).is_file())
         }
     }
 
@@ -129,18 +172,20 @@ mod ai {
         if !c.is_empty() {
             #[cfg(target_os = "windows")]
             {
-                // a saved path to the npm shell shim (no extension): use the
-                // runnable sibling that npm installs beside it
+                // a saved path to the npm shell shim (no extension) or to
+                // claude.cmd resolves to the runnable binary beside / inside it
+                let mut tries = vec![c.to_string()];
                 if std::path::Path::new(c).extension().is_none() {
                     for ext in ["exe", "cmd", "bat"] {
-                        let alt = format!("{c}.{ext}");
-                        if std::path::Path::new(&alt).is_file() {
-                            return Some(alt);
-                        }
+                        tries.push(format!("{c}.{ext}"));
                     }
                 }
+                return best_claude(tries);
             }
-            return if std::path::Path::new(c).is_file() { Some(c.to_string()) } else { None };
+            #[cfg(not(target_os = "windows"))]
+            {
+                return if std::path::Path::new(c).is_file() { Some(c.to_string()) } else { None };
+            }
         }
         let h = home();
         let mut candidates = vec![
@@ -159,16 +204,25 @@ mod ai {
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             candidates.push(format!("{local}\\Programs\\claude\\claude.exe"));
         }
-        for p in candidates {
-            if std::path::Path::new(&p).is_file() {
-                return Some(p);
-            }
-        }
-        login_shell_lookup()
+        let mut found: Vec<String> = candidates.into_iter().filter(|p| std::path::Path::new(p).is_file()).collect();
+        found.extend(login_shell_lookup());
+        best_claude(found)
     }
 
     #[tauri::command]
     pub fn ai_spawn(app: AppHandle, procs: State<Procs>, bin: String, args: Vec<String>) -> Result<u32, String> {
+        // never spawn through cmd.exe: unwrap an npm batch wrapper to the native
+        // binary it launches, and refuse a bare .cmd with a fix the user can apply
+        #[cfg(target_os = "windows")]
+        let bin = unwrap_npm_shim(&bin).unwrap_or(bin);
+        #[cfg(target_os = "windows")]
+        if exe_rank(&bin) == 1 {
+            return Err(format!(
+                "{bin} is a batch wrapper and Windows cannot pass this prompt through cmd.exe. \
+                 In AI settings set Claude Code path to a claude.exe (the native install, or \
+                 node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe inside your npm folder)."
+            ));
+        }
         let mut cmd = Command::new(&bin);
         cmd.args(&args)
             .current_dir(home())
