@@ -203,6 +203,16 @@ mod ai {
         }
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             candidates.push(format!("{local}\\Programs\\claude\\claude.exe"));
+            // WinGet's portable install: its Links shim, or the package folder
+            // itself — GUI apps may start with a PATH that has neither
+            candidates.push(format!("{local}\\Microsoft\\WinGet\\Links\\claude.exe"));
+            if let Ok(entries) = std::fs::read_dir(format!("{local}\\Microsoft\\WinGet\\Packages")) {
+                for e in entries.flatten() {
+                    if e.file_name().to_string_lossy().starts_with("Anthropic.ClaudeCode_") {
+                        candidates.push(e.path().join("claude.exe").to_string_lossy().into_owned());
+                    }
+                }
+            }
         }
         let mut found: Vec<String> = candidates.into_iter().filter(|p| std::path::Path::new(p).is_file()).collect();
         found.extend(login_shell_lookup());
