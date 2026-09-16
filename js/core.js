@@ -20,6 +20,15 @@
   // (Kanban / #NoEstimates style — duration is set directly, if at all).
   // Editing options in Setup flips the scheme to 'custom'.
   RM.SIZE_SCHEMES = {
+    // features only: the size is the sum of the feature's story points and
+    // cannot be edited by hand (working days are the stories' days summed)
+    rollup: {
+      name: 'Roll up from stories',
+      hint: 'The size is the sum of the story points — set sizes on the stories',
+      sizes: [],
+      days: {},
+      featureOnly: true
+    },
     tshirt: {
       name: 'T-shirt sizes',
       hint: 'XS–XL relative buckets — quick gut-feel estimates',
@@ -54,7 +63,44 @@
       days: {}
     }
   };
-  RM.SIZE_SCHEME_ORDER = ['tshirt', 'fibonacci', 'points5', 'none'];
+  RM.SIZE_SCHEME_ORDER = ['rollup', 'tshirt', 'fibonacci', 'points5', 'none'];
+  // the schemes a kind may pick (stories never roll up)
+  RM.sizeSchemesFor = function (kind) {
+    return RM.SIZE_SCHEME_ORDER.filter(function (k) { return !(kind === 'story' && RM.SIZE_SCHEMES[k].featureOnly); });
+  };
+  RM.sizeRollup = function (state) { return (state.meta || state).sizeScheme === 'rollup'; };
+  // the rolled-up label (sum of numeric story sizes, as a string) — null
+  // when no story carries a numeric size
+  RM.rollupSize = function (state, it) {
+    var sum = 0, any = false;
+    (it.stories || []).forEach(function (st) {
+      var n = st && st.size != null && st.size !== '' ? Number(st.size) : NaN;
+      if (!isNaN(n)) { sum += n; any = true; }
+    });
+    return any ? String(Math.round(sum * 10) / 10) : null;
+  };
+  // working days behind the rolled-up size: the sized stories' days summed
+  RM.rollupDays = function (state, it) {
+    var sum = 0, any = false;
+    (it.stories || []).forEach(function (st) {
+      var d = st && RM.sizeDays(state, st.size, 'story');
+      if (d != null) { sum += d; any = true; }
+    });
+    return any ? sum : null;
+  };
+  // under the rollup scheme every feature's size is derived; run after any
+  // change (normalize + commit) so the stored field always reads right
+  RM.applySizeRollup = function (state) {
+    if (!RM.sizeRollup(state)) return;
+    (state.items || []).forEach(function (it) {
+      if (!it || it.milestone) return;
+      it.size = RM.rollupSize(state, it);
+    });
+  };
+  // the working days an item's size stands for (rolled up, or looked up)
+  RM.itemSizeDays = function (state, it) {
+    return RM.sizeRollup(state) ? RM.rollupDays(state, it) : RM.sizeDays(state, it.size);
+  };
   // Features and stories size on SEPARATE scales: features under
   // meta.sizeScheme / sizeOrder / sizeDays, stories under the story* twins.
   // Every helper takes an optional kind ('feature' default | 'story').
@@ -80,19 +126,26 @@
   };
   RM.sizingEnabled = function (state, kind) {
     var m = state.meta || state;
+    if (kind !== 'story' && m.sizeScheme === 'rollup') return true; // sized, just not by hand
     return m[sizeKeys(kind).scheme] !== 'none' && RM.sizeOrderOf(state, kind).length > 0;
   };
   RM.setSizeScheme = function (state, scheme, kind) {
     var def = RM.SIZE_SCHEMES[scheme];
     if (!def || scheme === 'custom') return;
+    if (def.featureOnly && kind === 'story') return;
     var m = state.meta, k = sizeKeys(kind);
     var skip = (kind !== 'story' && def.storyOnly) || [];
+    // leaving the rollup: the derived sizes mean nothing on a hand-picked scale
+    if (kind !== 'story' && m.sizeScheme === 'rollup' && scheme !== 'rollup') {
+      (state.items || []).forEach(function (it) { if (it) it.size = null; });
+    }
     m[k.scheme] = scheme;
     m[k.order] = def.sizes.filter(function (l) { return skip.indexOf(l) === -1; });
     m[k.days] = {};
     Object.keys(def.days).forEach(function (l) {
       if (skip.indexOf(l) === -1) m[k.days][l] = def.days[l];
     });
+    RM.applySizeRollup(state);
   };
   RM.renameSizeOption = function (state, oldLabel, newLabel, kind) {
     var m = state.meta, k = sizeKeys(kind);
@@ -255,7 +308,46 @@
     return it.startDay < w1 * S && it.startDay + span > w0 * S;
   };
 
-  RM.DEFAULT_TEAM_TYPES = ['Software Engineer', 'Product Designer', 'Product Manager', 'Data Scientist', 'QA Engineer'];
+  RM.DEFAULT_TEAM_TYPES = ['Project Manager', 'Product Manager', 'Software Engineer', 'Product Designer', 'QA Engineer', 'Data Scientist'];
+  // capacity types: what kind of capacity a story drains and which people can
+  // take it (a person's capacity type says what they supply)
+  RM.DEFAULT_CAP_TYPES = ['Development', 'Design', 'QA', 'Product', 'Data'];
+  RM.capTypesOf = function (state) { return state.capTypes || []; };
+  RM.renameCapType = function (state, oldName, newName) {
+    newName = String(newName || '').trim();
+    if (!newName || newName === oldName) return false;
+    if (state.capTypes.indexOf(newName) !== -1) return false;
+    var i = state.capTypes.indexOf(oldName);
+    if (i === -1) return false;
+    state.capTypes[i] = newName;
+    state.team.forEach(function (m) { if (m.capType === oldName) m.capType = newName; });
+    state.items.forEach(function (it) {
+      (it.stories || []).forEach(function (st) { if (st.capType === oldName) st.capType = newName; });
+    });
+    return true;
+  };
+  RM.removeCapType = function (state, name) {
+    var i = state.capTypes.indexOf(name);
+    if (i === -1) return false;
+    state.capTypes.splice(i, 1);
+    state.team.forEach(function (m) { if (m.capType === name) m.capType = ''; });
+    state.items.forEach(function (it) {
+      (it.stories || []).forEach(function (st) { if (st.capType === name) st.capType = ''; });
+    });
+    return true;
+  };
+  // planning level: 'feature' (default) plans capacity on features — stories
+  // need no details; 'story' ignores feature weights and durations and plans
+  // the work on the stories themselves
+  RM.planLevel = function (state) { return (state.meta || state).planLevel === 'story' ? 'story' : 'feature'; };
+  // people who can take a story: those supplying its capacity type (a story
+  // without a type, or a type nobody supplies, is open to everyone)
+  RM.assignableFor = function (state, st) {
+    var t = st && st.capType;
+    if (!t) return state.team.slice();
+    var pool = state.team.filter(function (m) { return m.capType === t; });
+    return pool.length ? pool : state.team.slice();
+  };
   RM.WEEK_HOURS = 40; // one person's full week
   RM.HISTORY_MAX = 300; // version-history entries kept per document
   RM.OPTIONS_MAX = 12;  // parked alternate-plan options kept per document
@@ -1197,6 +1289,12 @@
     // capacity feature switch — roster-based scheduling constraints and the
     // capacity header row. OFF by default; enabled per-document in Setup.
     m.capacityEnabled = !!m.capacityEnabled;
+    m.planLevel = m.planLevel === 'story' ? 'story' : 'feature';
+    // the capacity row's total: features or stories, in points or item counts,
+    // colored against an optional per-week limit
+    m.capBasis = m.capBasis === 'stories' ? 'stories' : 'features';
+    m.capUnit = m.capUnit === 'points' ? 'points' : 'count';
+    m.capLimit = m.capLimit != null && m.capLimit !== '' && isFinite(+m.capLimit) && +m.capLimit > 0 ? +m.capLimit : null;
     // apps switch (Setup → Apps): which header tabs this project shows. All
     // on by default; Planning is the home view and can never go off.
     var apps = (m.apps && typeof m.apps === 'object') ? m.apps : {};
@@ -1604,6 +1702,8 @@
             risk: s.risk && riskOrder.indexOf(String(s.risk).toUpperCase()) !== -1
               ? String(s.risk).toUpperCase() : null,
             assignees: Array.isArray(s.assignees) ? s.assignees.map(String) : [],
+            // capacity type: what the story drains and who can take it
+            capType: s.capType != null ? String(s.capType) : '',
             tags: RM.normalizeTags(s.tags),
             // stories carry their own hard deadline, same shape as items
             deadline: /^\d{4}-\d{2}-\d{2}$/.test(String(s.deadline || '')) ? String(s.deadline) : null,
@@ -1702,6 +1802,7 @@
     wsRefList.forEach(function (w) { if (wsOrder.indexOf(w) === -1) wsOrder.push(w); });
     state.wsOrder = wsOrder;
     state.teamTypes = state.teamTypes && state.teamTypes.length ? state.teamTypes : RM.clone(RM.DEFAULT_TEAM_TYPES);
+    state.capTypes = Array.isArray(state.capTypes) ? state.capTypes.map(String).filter(function (t, i, a) { return t && a.indexOf(t) === i; }) : RM.clone(RM.DEFAULT_CAP_TYPES);
     // fixed & recurring costs (budgeting)
     state.costs = (state.costs || []).map(function (c) {
       if (!c || typeof c !== 'object') return null;
@@ -1796,6 +1897,8 @@
         role: mbr.role != null ? String(mbr.role) : '',
         // rate-card role (drives default rate/cost); empty = not assigned
         type: mbr.type != null ? String(mbr.type) : '',
+        // capacity type supplied (empty = general)
+        capType: mbr.capType != null ? String(mbr.capType) : '',
         workstream: wss[0] || '',
         workstreams: wss,
         // capacity at 40 h — a 0.5 role contributes half a head even full-time;
@@ -1814,6 +1917,12 @@
     });
     state.team.forEach(function (mbr) {
       if (mbr.type && state.teamTypes.indexOf(mbr.type) === -1) state.teamTypes.push(mbr.type);
+      if (mbr.capType && state.capTypes.indexOf(mbr.capType) === -1) state.capTypes.push(mbr.capType);
+    });
+    state.items.forEach(function (it) {
+      (it.stories || []).forEach(function (st) {
+        if (st.capType && state.capTypes.indexOf(st.capType) === -1) state.capTypes.push(st.capType);
+      });
     });
     var teamIds = {};
     state.team.forEach(function (mbr) { teamIds[mbr.id] = true; });
@@ -1842,6 +1951,7 @@
         RM.remapDaySpace(state, legacyMeta);
       }
     }
+    RM.applySizeRollup(state);
     return state;
   };
 
@@ -1989,7 +2099,7 @@
 
   // Effective working days of effort for an item.
   RM.effortDays = function (state, it) {
-    var sd = RM.sizeDays(state, it.size);
+    var sd = RM.itemSizeDays(state, it);
     if (sd != null) return sd;
     if (it.durDays != null) return it.durDays;
     return RM.sprintDays(state.meta);
@@ -2200,41 +2310,101 @@
   RM.wipWeight = function (state, it) {
     var days = it.startDay != null && it.durDays != null
       ? RM.workInSpan(state.meta, it.startDay, it.durDays)
-      : (RM.sizeDays(state, it.size) || it.durDays || 5);
+      : (RM.itemSizeDays(state, it) || it.durDays || 5);
     return Math.max(0.3, Math.min(2, days / 10));
   };
 
   // Weekly size-weighted WIP vs the people available. Blackout weeks carry
   // no demand and no check; member off-weeks lower that week's availability.
+  // people available in a week, split by the capacity type they supply
+  RM.availByTypeForWeek = function (state, week) {
+    var full = RM.weekHoursOf(state.meta);
+    var out = {};
+    state.team.forEach(function (m) {
+      var pe = (RM.memberHoursForWeek(state.meta, m, week) / full) * (m.capacity != null ? m.capacity : 1);
+      if (pe <= 0) return;
+      var t = m.capType || '';
+      out[t] = (out[t] || 0) + pe;
+    });
+    return out;
+  };
+  // a story's focus weight: its effort days ÷ 10, same clamp as features
+  RM.storyWipWeight = function (state, st) {
+    var days = st.startDay != null && st.durDays != null
+      ? RM.workInSpan(state.meta, st.startDay, st.durDays)
+      : RM.storyEffortDays(state, st);
+    return Math.max(0.3, Math.min(2, days / 10));
+  };
+  // numeric points on a sized thing (T-shirt labels count for nothing)
+  RM.pointsOf = function (obj) {
+    var n = obj && obj.size != null && obj.size !== '' ? Number(obj.size) : NaN;
+    return isNaN(n) ? 0 : n;
+  };
   RM.capacity = function (state) {
     var meta = state.meta;
     var weeks = [];
     var teamTotal = state.team.length;
+    var storyLevel = RM.planLevel(state) === 'story';
+    var basisStories = meta.capBasis === 'stories';
+    var unitPoints = meta.capUnit === 'points';
+    var S = RM.slotsOf(meta);
     var w;
     for (w = 0; w < meta.numWeeks; w++) {
       var avail = RM.availForWeek(state, w);
       weeks.push({
         demand: 0, items: [],
         cap: teamTotal > 0 ? avail.total : Infinity,
+        // per capacity type (story level): demand vs the people supplying it
+        byType: {}, capByType: storyLevel ? RM.availByTypeForWeek(state, w) : {},
+        // the row's total in the chosen basis and unit (features or stories,
+        // points or counts)
+        load: 0,
         blackout: RM.isBlackoutWeek(meta, w),
         over: false
       });
     }
-    state.items.forEach(function (it) {
-      if (it.startDay == null || it.durDays == null || it.done || it.milestone) return;
-      var wt = RM.wipWeight(state, it);
-      var S = RM.slotsOf(meta);
-      var w0 = Math.floor(it.startDay / S);
-      var w1 = Math.floor((it.startDay + it.durDays - 1) / S);
+    function eachWeek(obj, fn) {
+      if (obj.startDay == null || obj.durDays == null) return;
+      var w0 = Math.floor(obj.startDay / S);
+      var w1 = Math.floor((obj.startDay + obj.durDays - 1) / S);
       for (var wk = Math.max(0, w0); wk <= Math.min(meta.numWeeks - 1, w1); wk++) {
-        var cell = weeks[wk];
-        if (cell.blackout) continue;
-        cell.demand += wt;
-        cell.items.push(it.id);
+        if (!weeks[wk].blackout) fn(weeks[wk]);
       }
+    }
+    state.items.forEach(function (it) {
+      if (it.done || it.milestone) return;
+      // feature level: features carry the demand. Story level: the stories
+      // do, and feature weights and durations are ignored
+      if (!storyLevel) {
+        var wt = RM.wipWeight(state, it);
+        eachWeek(it, function (cell) { cell.demand += wt; cell.items.push(it.id); });
+      }
+      if (!basisStories) eachWeek(it, function (cell) { cell.load += unitPoints ? RM.pointsOf(it) : 1; });
+      (it.stories || []).forEach(function (st) {
+        if (st.done) return;
+        if (storyLevel) {
+          var swt = RM.storyWipWeight(state, st);
+          eachWeek(st, function (cell) {
+            cell.demand += swt;
+            if (cell.items.indexOf(it.id) === -1) cell.items.push(it.id);
+            var t = st.capType || '';
+            cell.byType[t] = (cell.byType[t] || 0) + swt;
+          });
+        }
+        if (basisStories) eachWeek(st, function (cell) { cell.load += unitPoints ? RM.pointsOf(st) : 1; });
+      });
     });
     weeks.forEach(function (cell) {
       if (cell.demand > cell.cap + 1e-9) cell.over = true;
+      // a typed pool that is over-asked flags the week even when the team as
+      // a whole has room (a type nobody supplies falls back to the whole team)
+      if (storyLevel && teamTotal > 0) {
+        Object.keys(cell.byType).forEach(function (t) {
+          if (!t || cell.capByType[t] == null) return;
+          if (cell.byType[t] > cell.capByType[t] + 1e-9) cell.over = true;
+        });
+      }
+      if (meta.capLimit != null && cell.load > meta.capLimit + 1e-9) cell.over = true;
     });
     return { weeks: weeks, teamTotal: teamTotal };
   };
@@ -3157,7 +3327,7 @@
   RM.itemEffortInfo = function (state, it) {
     var days = it.startDay != null && it.durDays != null
       ? RM.workInSpan(state.meta, it.startDay, it.durDays)
-      : (it.size ? RM.sizeDays(state, it.size) : (it.durDays || 0));
+      : (it.size ? RM.itemSizeDays(state, it) : (it.durDays || 0));
     var hours = days * RM.hoursPerDay(state.meta);
     return { days: days, hours: hours, cost: hours * RM.avgCostRate(state, it.teamType) };
   };

@@ -435,7 +435,8 @@
     (lay.legend || []).forEach(function (e) {
       var cy = e.y + e.h / 2;
       ctx.fillStyle = '#' + e.color;
-      roundRect(ctx, e.x, cy - 5, 10, 10, 3);
+      ctx.beginPath();
+      ctx.arc(e.x + 5, cy, 5, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = INK;
       ctx.font = '10.5px ' + FONT;

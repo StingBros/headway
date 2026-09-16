@@ -239,7 +239,7 @@ With capacity planning on, in the Planning view:
 
 - Story rows: a `cap` chip (`.r-cap`) showing the type or "—", opening the
   existing story capacity-type dropdown; in person mode a `×N` chip
-  (`.r-mult`) that opens a small number prompt (existing `promptBox`) —
+  (`.r-mult`) that opens a small inline number input (same pattern as the duration chip) —
   hidden when N is 1 unless hovered.
 - Feature rows at Features level: the same two chips, driving `item.capType`
   / `item.capMult`. Hidden at Stories level.

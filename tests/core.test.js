@@ -1582,7 +1582,9 @@ eq(sRr.team[0].type, 'Engineer', 'people follow the rename');
 eq(sRr.items[0].teamType, 'Engineer', 'items follow the rename');
 eq(sRr.meta.rateCard.Engineer.rate, 200, 'rate card key follows the rename');
 ok(!RM.renameRole(sRr, 'Engineer', 'Data'), 'rename refuses an existing name');
-eq(RM.DEFAULT_TEAM_TYPES[0], 'Software Engineer', 'default roles use real role names');
+eq(RM.DEFAULT_TEAM_TYPES[0], 'Project Manager', 'default roles lead with Project Manager and use real role names');
+ok(RM.DEFAULT_TEAM_TYPES.indexOf('Software Engineer') !== -1 && RM.DEFAULT_CAP_TYPES.slice(0, 3).join(',') === 'Development,Design,QA',
+  'default capacity types are Development, Design, QA, …');
 
 // ------------------------------------------------------------- rigid chain drag
 section('rigid chain shift');

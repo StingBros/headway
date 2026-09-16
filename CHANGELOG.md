@@ -11,6 +11,19 @@ Format: short sections, bullets, one bold title per notable change —
 
 - Flagged rows are tinted light orange in the left pane, darker when selected.
 - The Planning / Scoping left pane no longer shows #numbers on rows (they stay in the panel header, on cards and on sprint rows).
+- #numbers are gone from Sprinting rows and Prioritizing cards too (the panel header keeps them), and Sprinting rows drop the sprint-number bubble.
+- Scoping: story glyphs and warning icons center on the first title line like the feature rows; story rows lose their left divider line and the epic tag beside the feature title (the Epic column already shows it).
+- Workstream color marks are filled circles everywhere (rows, chips, dropdowns, the PNG legend).
+- **Roll up from stories**: a new feature sizing option (Setup → Sizing, first in the list; T-shirt sizes stay the default). Each feature's size is the sum of its story points and its working days are the stories' days added up; feature sizes are not edited by hand in this mode. Switching back to a hand-picked scale clears the derived sizes.
+- **Move a story to another feature**: right-click a story (Planning / Scoping rows, Sprinting rows, Prioritizing cards, the panel) → Move to feature… opens a searchable list of features.
+- Assignee pickers are searchable and show each person's avatar; typing narrows the roster, Enter picks the first match.
+- Prioritizing cards: text fields (Description etc.) are read-only on the card — edit them in the panel or the Scoping grid; the title still renames on double-click. Clicking the selected card keeps it selected.
+- Story titles in the Planning left pane read a step darker (still lighter than features).
+- **Standalone HTML export**: Export → Standalone HTML (view-only) saves the whole roadmap as one self-contained .html — every tab is there to browse, nothing edits, and Setup keeps only the theme. Opens from disk in any browser.
+- **Planning level** (Setup → Team → Capacity): Features (default) plans capacity on the features and stories need no details; Stories ignores feature weights and durations and plans the work on the stories and their capacity types.
+- **Capacity types**: stories carry a capacity type (what they drain and who can take them) and people carry the type they supply — Development, Design, QA, … by default, editable and reorderable under Setup → Team. Story assignee pickers list only the people supplying the story's type. The Budgeting / Resources rows gain a Capacity column.
+- Default roles now lead with Project Manager and Product Manager.
+- **Capacity row total**: the row shows each week's total in flight — features or stories, in item counts or points (Setup → Team → Capacity) — and an optional weekly limit colors it red past the limit and amber near it.
 
 ## 1.0.13 — 2026-09-09
 
