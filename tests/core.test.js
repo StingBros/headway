@@ -344,6 +344,14 @@ var sInf = autoState([
 var rInf = RM.autoTimeline(sInf, { today: 0 });
 eq(byNum(rInf.state)[1].startDay, 10, 'infeasible unit keeps its start');
 ok(rInf.notes.length === 1 && /never/.test(rInf.notes[0]), 'and explains itself');
+// left where it is means still booked there: later work goes around it
+var sInfB = autoState([
+  { num: 1, feature: 'crowd', phaseId: 'p1', startDay: 10, durDays: 5, capType: 'Development', capMult: 3 },
+  { num: 2, feature: 'normal', phaseId: 'p1', durDays: 5, capType: 'Development' }
+], [{ name: 'X', capType: 'Development' }]);
+var InfB = byNum(RM.autoTimeline(sInfB, { today: 10 }).state);
+eq(InfB[1].startDay, 10, 'the infeasible unit keeps week 2');
+eq(InfB[2].startDay, 15, 'and feasible work is not piled onto the week it still occupies');
 // story level: stories move, feature bar becomes their hull
 var sSt = autoState([
   { num: 1, feature: 'f', phaseId: 'p1', startDay: 0, durDays: 40, capType: 'Development', stories: [
@@ -402,6 +410,25 @@ var rPlS = RM.placeUnit(sPlS, sPlS.items[0].id, sPlS.items[0].stories[1].id, { t
 eq(RM.itemByNum(rPlS.state, 1).stories[1].startDay, 5, 'a story places after the week its sibling fills');
 var rPlI = RM.placeUnit(autoState([{ num: 1, feature: 'crowd', phaseId: 'p2', startDay: 10, durDays: 5, capType: 'Development', capMult: 3 }], [{ name: 'X', capType: 'Development' }]), null, null, { today: 0 });
 eq(rPlI.changed, 0, 'missing item → no change');
+// story level: asking for the feature places every one of its stories
+var sPlF = autoState([
+  { num: 1, feature: 'f', phaseId: 'p2', startDay: 0, durDays: 5, stories: [
+    { num: 101, title: 'a', durDays: 5, capType: 'Development' },
+    { num: 102, title: 'b', durDays: 5, capType: 'Development' }
+  ] }
+], [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
+var rPlF = RM.placeUnit(sPlF, sPlF.items[0].id, null, { today: 0 });
+var plF = RM.itemByNum(rPlF.state, 1);
+eq(plF.stories[0].startDay, 0, 'the first story takes week 0');
+eq(plF.stories[1].startDay, 5, 'the second waits for week 1');
+eq([plF.startDay, plF.durDays], [0, 10], 'and the feature hull covers both');
+ok(rPlF.changed > 0, 'placing a story-level feature reports its changes');
+// a dependency-free milestone is a fixed date, not something to place
+var sPlM = autoState([{ num: 1, feature: 'gate', phaseId: 'p2', milestone: true, startDay: 30, durDays: 0 }], [{ name: 'Solo', capType: 'Development' }]);
+var rPlM = RM.placeUnit(sPlM, sPlM.items[0].id, null, { today: 0 });
+eq(rPlM.changed, 0, 'a dependency-free milestone stays put');
+eq(RM.itemByNum(rPlM.state, 1).startDay, 30, 'on its own date');
+ok(/dependencies/.test(rPlM.note || ''), 'and placeUnit says why');
 eq(RM.todayDay(META, new Date(Date.UTC(2026, 6, 20))), 0, 'today before the timeline clamps to 0');
 eq(RM.todayDay(META, new Date(Date.UTC(2026, 7, 4))), 6, 'today maps to its working-day index');
 

@@ -3027,7 +3027,12 @@
       if (ledger.constrained(u) && RM.unitWeekDemand(state, u, s, dur) > ledger.peak(u.capType) + 1e-9) {
         var it0 = RM.itemById(state, u.itemId);
         notes.push('#' + it0.num + ' (' + it0.feature + ') asks more ' + u.capType + ' in a week than the roster can ever give, so it never fits — left where it is.');
-        if (u.startDay != null && u.durDays != null) endOf[u.id] = u.startDay + u.durDays + (u.riskDays || 0);
+        // it stays where it is, so it still consumes what it consumes —
+        // everything placed after it has to work around its weeks
+        if (u.startDay != null && u.durDays != null) {
+          endOf[u.id] = u.startDay + u.durDays + (u.riskDays || 0);
+          ledger.book(u, u.startDay, u.durDays, 1);
+        }
         release(u);
         return;
       }
@@ -3066,8 +3071,10 @@
     return out;
   };
 
-  // one unit at its earliest dependency- and capacity-valid slot, everything
-  // else fixed (its own booking is released first). Any phase.
+  // One unit at its earliest dependency- and capacity-valid slot, everything
+  // else fixed (the target's own bookings are released first). Any phase.
+  // At story level a feature has no unit of its own, so asking for the feature
+  // places every one of its stories, in row order, each booking before the next.
   RM.placeUnit = function (inputState, itemId, storyId, opts) {
     opts = opts || {};
     var state = RM.clone(inputState);
@@ -3075,42 +3082,71 @@
     var res = { state: state, changed: 0, note: null };
     var it = RM.itemById(state, itemId);
     if (!it) return res;
-    var uid = storyId ? 's:' + storyId : 'i:' + it.id;
     var units = RM.capUnits(state);
-    var u = units.filter(function (x) { return x.id === uid; })[0];
-    if (!u) return res;
+    var byId = {};
+    units.forEach(function (x) { byId[x.id] = x; });
+    var targets;
+    if (storyId) targets = units.filter(function (x) { return x.id === 's:' + storyId; });
+    else if (byId['i:' + it.id]) targets = [byId['i:' + it.id]];
+    else targets = units.filter(function (x) { return x.itemId === it.id; });
+    if (!targets.length) return res;
+    var mine = {};
+    targets.forEach(function (t) { mine[t.id] = true; });
     var HORIZON = meta.numWeeks + 104;
     var S = RM.slotsOf(meta);
     var ledger = capLedger(state, HORIZON);
-    var byId = {};
-    units.forEach(function (x) { byId[x.id] = x; if (x.id !== uid && !x.done && x.startDay != null && x.durDays != null) ledger.book(x, x.startDay, x.durDays, 1); });
+    units.forEach(function (x) { if (!mine[x.id] && !x.done && x.startDay != null && x.durDays != null) ledger.book(x, x.startDay, x.durDays, 1); });
     var today = opts.today != null ? opts.today : RM.todayDay(meta);
-    var est = today;
-    u.deps.forEach(function (d) {
-      var du = byId[d];
-      if (!du || du.startDay == null || du.durDays == null) return;
-      var e = du.startDay + du.durDays + (du.riskDays || 0);
-      if (e > est) est = e;
+    var endOf = {};
+    var maxEnd = 0;
+    // a dependency's end: its fresh placement when we just made one, else its
+    // stored bar
+    function depEnd(id) {
+      if (endOf[id] != null) return endOf[id];
+      var du = byId[id];
+      if (!du || du.startDay == null || du.durDays == null) return null;
+      return du.startDay + du.durDays + (du.riskDays || 0);
+    }
+    targets.forEach(function (u) {
+      var after = 0;
+      u.deps.forEach(function (d) {
+        var e = depEnd(d);
+        if (e != null && e > after) after = e;
+      });
+      if (u.milestone) {
+        // a milestone is a fixed date; only dependencies may move it
+        if (!u.deps.length) {
+          res.note = 'Milestone has no dependencies — nothing to place it after.';
+          return;
+        }
+        if (RM.applyUnitPlacement(state, u, after, 0)) res.changed += 1;
+        endOf[u.id] = after;
+        if (after > maxEnd) maxEnd = after;
+        return;
+      }
+      var work = RM.unitWorkDays(state, u);
+      var s = Math.max(today, after), dur = RM.stretchSpan(meta, s, work);
+      if (ledger.constrained(u) && RM.unitWeekDemand(state, u, s, dur) > ledger.peak(u.capType) + 1e-9) {
+        res.note = 'Asks more ' + u.capType + ' in a week than the roster can ever give, so it never fits — left unchanged.';
+        if (u.startDay != null && u.durDays != null) {
+          endOf[u.id] = u.startDay + u.durDays + (u.riskDays || 0);
+          ledger.book(u, u.startDay, u.durDays, 1);
+        }
+        return;
+      }
+      var guard = 0;
+      while (guard < HORIZON * S) {
+        if (!RM.offDay(meta, s, ledger.set) && ledger.fits(u, s, dur)) break;
+        s += 1; dur = RM.stretchSpan(meta, s, work); guard += 1;
+      }
+      if (RM.applyUnitPlacement(state, u, s, dur)) res.changed += 1;
+      ledger.book(u, s, dur, 1);
+      var end = s + dur + (u.storyId ? 0 : RM.stretchSpan(meta, s + dur, RM.riskEffortDays(state, RM.itemById(state, u.itemId))));
+      endOf[u.id] = end;
+      if (end > maxEnd) maxEnd = end;
     });
-    if (u.milestone) {
-      if (RM.applyUnitPlacement(state, u, est, 0)) res.changed = 1;
-      return res;
-    }
-    var work = RM.unitWorkDays(state, u);
-    var s = est, dur = RM.stretchSpan(meta, s, work);
-    if (ledger.constrained(u) && RM.unitWeekDemand(state, u, s, dur) > ledger.peak(u.capType) + 1e-9) {
-      res.note = 'Asks more ' + u.capType + ' in a week than the roster can ever give, so it never fits — left unchanged.';
-      return res;
-    }
-    var guard = 0;
-    while (guard < HORIZON * S) {
-      if (!RM.offDay(meta, s, ledger.set) && ledger.fits(u, s, dur)) break;
-      s += 1; dur = RM.stretchSpan(meta, s, work); guard += 1;
-    }
-    if (RM.applyUnitPlacement(state, u, s, dur)) res.changed = 1;
-    if (storyId && RM.planLevel(state) === 'story') RM.rebuildHulls(state, [it.id]);
-    var end = s + dur;
-    var need = Math.ceil(end / S);
+    if (targets[0].storyId && RM.planLevel(state) === 'story') res.changed += RM.rebuildHulls(state, [it.id]);
+    var need = Math.ceil(maxEnd / S);
     if (need > meta.numWeeks) { meta.numWeeks = need; RM.syncEndDate(meta); }
     return res;
   };
