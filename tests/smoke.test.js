@@ -3911,6 +3911,16 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   rowChk.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(Array.isArray(state().meta.capRowTypes) && state().meta.capRowTypes.indexOf('Design') !== -1,
     'ticking a capacity type under “Only these” stores it in capRowTypes');
+  ok(/Untick the last type/.test(doc.querySelector('#setupView').textContent),
+    'the Capacity tab says what unticking the last type does');
+  // unticking the LAST ticked type goes back to All rather than a silent empty row
+  window.HeadwayApp.ai.commit('one row type', (s) => { s.meta.capRowTypes = ['Design']; });
+  const lastChk = doc.querySelector('#setupView [data-sucaprow="Design"]');
+  lastChk.checked = false;
+  lastChk.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.capRowTypes === 'all', 'unticking the last capacity type reverts the row to all types');
+  ok(doc.querySelector('#suCapRowAll').checked, 'and the All radio reads checked again');
+  undo(); undo();
   undo(); undo(); undo(); undo();
   // people and stories carry a capacity type; assignability follows it
   const person = state().team[0], person2 = state().team[1];
@@ -4041,6 +4051,26 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     const placeToast = doc.querySelector('#toasts .toast');
     ok(!!placeToast && /earliest slot/.test(placeToast.textContent), 'clicking it reports back with a toast');
     if (JSON.stringify(window.HeadwayApp.ai.state()) !== beforePlace) undo();
+    undo(); undo();
+  }
+  // the panel's own Snap earliest refuses a locked row the same way
+  {
+    window.HeadwayApp.ai.commit('cap on for snap', (s) => { s.meta.capacityEnabled = true; });
+    const snapIt = state().items.find((i) => !i.milestone && i.startDay != null && !i.done);
+    window.HeadwayApp.ai.commit('lock for snap', (s) => {
+      s.items.forEach((i) => { if (i.id === snapIt.id) { i.locked = true; i.done = false; } });
+    });
+    window.__headway.selectItem(snapIt.id);
+    const snapBtn = doc.querySelector('#panel [data-f="snap"]');
+    ok(!!snapBtn, 'the panel offers Snap earliest for a scheduled feature');
+    [...doc.querySelectorAll('#toasts .toast')].forEach((t) => t.remove());
+    const snapBefore = state().items.find((i) => i.id === snapIt.id).startDay;
+    click(snapBtn);
+    const snapToast = doc.querySelector('#toasts .toast');
+    ok(state().items.find((i) => i.id === snapIt.id).startDay === snapBefore,
+      'the panel Snap earliest leaves a locked row where it is');
+    ok(!!snapToast && /Locked/.test(snapToast.textContent), 'and says it is locked');
+    window.__headway.selectItem(null);
     undo(); undo();
   }
   // capacity chips in the Planning left pane
@@ -5142,9 +5172,16 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
   doc0.team = [{ id: 'solo', name: 'Solo', capType: 'Development', weekHours: {}, capacity: 1 }];
   const autoPh = doc0.phases.find((p) => !p.bucket);
   autoPh.auto = true;
-  // three features of the Auto phase pile into the same week
-  const piled = doc0.items.filter((i) => i.phaseId === autoPh.id && !i.milestone).slice(0, 3);
-  piled.forEach((it) => { it.locked = false; it.done = false; it.capType = 'Development'; it.capMult = 1; it.startDay = 10; it.durDays = 5; it.deps = []; });
+  // three features of the Auto phase pile into the same week: the phase floor
+  // holds them at that week, so capacity has to spread them forward from it
+  const seed = doc0.items.filter((i) => !i.milestone)[0];
+  [1, 2].forEach((n) => {
+    const copy = window.RM.clone(seed);
+    copy.id = 'pile' + n; copy.num = 900 + n; copy.feature = 'Pile ' + n; copy.stories = []; copy.deps = [];
+    doc0.items.push(copy);
+  });
+  const piled = doc0.items.filter((i) => !i.milestone).slice(0, 3);
+  piled.forEach((it) => { it.phaseId = autoPh.id; it.locked = false; it.done = false; it.capType = 'Development'; it.capMult = 1; it.startDay = 10; it.durDays = 5; it.deps = []; });
   doc0.items.reverse(); // and the rows arrive out of start order
   return window.RMExcel.exportWorkbook(doc0)
     .then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))

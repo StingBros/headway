@@ -1967,6 +1967,8 @@
     // is the sentinel for every type and is never a list)
     if (Array.isArray(m.capRowTypes)) {
       m.capRowTypes = m.capRowTypes.filter(function (t) { return state.capTypes.indexOf(t) !== -1; });
+      // nothing left to aggregate is not a row showing 0 / 0: fall back to all
+      if (!m.capRowTypes.length) m.capRowTypes = 'all';
     }
     var teamIds = {};
     state.team.forEach(function (mbr) { teamIds[mbr.id] = true; });
@@ -2362,7 +2364,7 @@
     var set = RM.holidayDaySet(meta);
     var points = meta.capMode === 'points';
     var sw = RM.sprintWeeksForPoints(meta);
-    var byType = {};
+    var byType = Object.create(null); // prototype-free: a type may be named 'constructor'
     var types = [];
     state.team.forEach(function (m) {
       var t = m.capType || '';
@@ -2883,14 +2885,15 @@
     var meta = state.meta;
     var S = RM.slotsOf(meta);
     var sup = RM.capSupply(state, horizonWeeks);
-    var used = {};
+    var used = Object.create(null);
     sup.types.forEach(function (t) { used[t] = new Array(horizonWeeks); for (var i = 0; i < horizonWeeks; i++) used[t][i] = 0; });
     var set = RM.holidayDaySet(meta);
     function weeksOf(startDay, durDays) {
       return [Math.floor(startDay / S), Math.floor((startDay + Math.max(1, durDays) - 1) / S)];
     }
     function constrained(u) { return !u.milestone && !!u.capType && sup.types.indexOf(u.capType) !== -1; }
-    var peaks = {}; // the peak never changes: compute each type's once
+    // prototype-free: a capacity type may be named 'constructor'
+    var peaks = Object.create(null); // the peak never changes: compute each type's once
     return {
       types: sup.types,
       constrained: constrained,
@@ -2994,6 +2997,10 @@
     var units = RM.capUnits(state);
     var byId = {};
     units.forEach(function (u) { byId[u.id] = u; });
+    // A unit never lands before its phase begins. Measured once, up front, so
+    // the floor is where the phase started BEFORE this pass moved anything.
+    var phaseFloor = Object.create(null);
+    state.phases.forEach(function (p) { phaseFloor[p.id] = RM.phaseFloorDay(state, p); });
     function movable(u) {
       if (!targets[u.phaseId] || u.locked || u.done) return false;
       if (u.milestone) return u.deps.length > 0;
@@ -3043,13 +3050,16 @@
         if (e == null && byId[d] && byId[d].startDay != null && byId[d].durDays != null) e = byId[d].startDay + byId[d].durDays + (byId[d].riskDays || 0);
         if (e != null && e > est) est = e;
       });
+      var pFloor = phaseFloor[u.phaseId];
       if (u.milestone) {
+        if (pFloor != null && pFloor > est) est = pFloor;
         if (RM.applyUnitPlacement(state, u, est, 0, ledger.set)) out.changed += 1;
         endOf[u.id] = est;
         release(u);
         return;
       }
       var floor = (u.startDay != null && u.startDay <= today) ? u.startDay : today;
+      if (pFloor != null && pFloor > floor) floor = pFloor;
       if (floor > est) est = floor;
       var work = RM.unitWorkDays(state, u, ledger.set);
       var s = est;
@@ -3132,6 +3142,9 @@
     }
     var mine = {};
     targets.forEach(function (t) { mine[t.id] = true; });
+    // the same phase floor the auto timeline uses, read before anything moves
+    var phaseFloor = Object.create(null);
+    state.phases.forEach(function (p) { phaseFloor[p.id] = RM.phaseFloorDay(state, p); });
     var HORIZON = meta.numWeeks + 104;
     var S = RM.slotsOf(meta);
     var ledger = capLedger(state, HORIZON);
@@ -3165,7 +3178,8 @@
         return;
       }
       var work = RM.unitWorkDays(state, u, ledger.set);
-      var s = Math.max(today, after), dur = RM.stretchSpan(meta, s, work, ledger.set);
+      var pFloor = phaseFloor[u.phaseId];
+      var s = Math.max(today, after, pFloor != null ? pFloor : 0), dur = RM.stretchSpan(meta, s, work, ledger.set);
       if (ledger.constrained(u) && RM.unitWeekDemand(state, u, s, dur, ledger.set) > ledger.peak(u.capType) + 1e-9) {
         res.note = 'Asks more ' + u.capType + ' in a week than the roster can ever give, so it never fits — left unchanged.';
         if (u.startDay != null && u.durDays != null) {
@@ -3577,6 +3591,15 @@
 
   // Phase window in working-day indices: user-pinned startDay/endDay win;
   // whichever side is unset auto-derives from the phase's scheduled items.
+  // Where a phase begins for scheduling: its pinned start if it has one,
+  // else where its earliest scheduled item already sits (null when the phase
+  // is neither pinned nor scheduled — then nothing floors it).
+  RM.phaseFloorDay = function (state, phase) {
+    if (phase.startDay != null) return phase.startDay;
+    var sp = RM.phaseSpan(state, phase);
+    return sp ? sp.lo : null;
+  };
+
   RM.phaseSpan = function (state, phase) {
     var lo = null, hi = null;
     RM.itemsInPhase(state, phase.id).forEach(function (it) {
