@@ -1436,7 +1436,16 @@ body.panning, body.panning * { cursor: grabbing !important; }
   border-bottom: 1px solid var(--line);
   background-image: repeating-linear-gradient(to right,
     rgba(var(--ink-rgb), .09) 0 1px, transparent 1px var(--sprint-px, var(--week-px)));
+  /* one period per tile, so a non-zero offset shifts the whole lattice
+     instead of leaving a short last stripe at the element's edge */
+  background-size: var(--sprint-px, var(--week-px)) 100%;
   background-position: var(--sprint-off, 0px) 0;
+}
+/* Scoping has no time axis (#bgcols is emptied there), so the band lane must
+   not paint a sprint grid: match the Scoping item lanes below instead */
+body[data-view="scoping"] .row.eband .row-lane {
+  background-color: var(--surface);
+  background-image: none;
 }
 .row.eband.wsband .row-left { padding-left: 30px; }
 .row.eband.wsband .eb-name { color: var(--ink); }

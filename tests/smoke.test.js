@@ -417,6 +417,13 @@ ok(doc.querySelector('#panel [data-f=allabove]') === null, '"all items above" ch
     'group band cells are opaque so rows do not show through when pinned');
   ok(/\.row\.eband \.row-lane\s*{[^}]*repeating-linear-gradient\([^)]*\)[^}]*var\(--sprint-px/.test(css),
     'the pinned band lane redraws the sprint grid on the sprint pitch');
+  // one period per tile, or a non-zero --sprint-off leaves the last stripe off-lattice
+  ok(/\.row\.eband \.row-lane\s*{[^}]*background-size:\s*var\(--sprint-px[^}]*}/.test(css),
+    'the band lane tiles exactly one sprint period');
+  // Scoping has no time axis (#bgcols is empty there) — no grid on the band
+  ok(/body\[data-view="scoping"\] \.row\.eband \.row-lane\s*{[^}]*background-image:\s*none/.test(css) &&
+     /body\[data-view="scoping"\] \.row\.eband \.row-lane\s*{[^}]*background-color:\s*var\(--surface\)/.test(css),
+    'Scoping band lanes drop the sprint grid and match the Scoping item lanes');
 }
 
 // ---------------------------------------------------------------- chips
@@ -952,7 +959,8 @@ ok(doc.querySelectorAll('#rows .row.eband').length > 3, 'epic group bands render
   ok(/px$/.test(off), 'render publishes --sprint-off (' + off + ')');
   const line = doc.querySelector('#bgcols .bg-week.sprint');
   const at = line && parseFloat((line.getAttribute('style').match(/\+\s*(-?[\d.]+)px/) || [])[1]);
-  ok(typeof at === 'number' && !isNaN(at) && Math.abs((at - parseFloat(off)) % parseFloat(px)) < 0.01,
+  const pxN = parseFloat(px), r = (((at - parseFloat(off)) % pxN) + pxN) % pxN;
+  ok(typeof at === 'number' && !isNaN(at) && Math.min(r, pxN - r) < 0.01,
     'the drawn sprint lines land on the --sprint-off/--sprint-px lattice (' + at + ')');
 }
 {
