@@ -3,3 +3,7 @@ node_modules/
 dist/
 src-tauri/target/
 src-tauri/gen/
+
+# session worktrees and SDD scratch
+.claude/worktrees/
+.superpowers/
