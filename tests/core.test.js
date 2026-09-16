@@ -148,7 +148,10 @@ ok(v.global.some(function (g) { return g.code === 'OVER_CAP'; }), 'OVER_CAP: wee
 ok(!v.global.some(function (g) { return /Data/.test(g.msg); }), 'capacity messages are role-agnostic now');
 ok(v.counts.warn > 0, 'counts aggregated');
 
-var vClean = RM.validate(mkState([{ num: 1, feature: 'solo', startDay: 0, durDays: 5, size: 'M' }]));
+// a feature always carries a capacity type, so a clean document needs somebody
+// supplying it (an unsupplied type is a warning of its own)
+var vClean = RM.validate(mkState([{ num: 1, feature: 'solo', startDay: 0, durDays: 5, size: 'M' }],
+  { team: [{ name: 'X', capType: 'Development' }] }));
 eq(vClean.counts.error + vClean.counts.warn, 0, 'clean state has no errors/warnings');
 
 // done-dep suppression
@@ -257,6 +260,32 @@ eq(RM.normalizeState(sCT).capTypes.indexOf('Design'), -1, 'renormalizing does no
 ok(RM.removeCapType(sCT, 'UX'), 'removeCapType reports the removal');
 eq(sCT.items[0].capType, '', 'a feature capType is cleared on removal');
 eq(RM.normalizeState(sCT).capTypes.indexOf('UX'), -1, 'renormalizing does not resurrect the removed type');
+// the capacity row's selection follows a rename and drops a removal
+var sCR = RM.normalizeState({ meta: { capRowTypes: ['Design', 'QA'] }, phases: [{ id: 'p' }], items: [] });
+ok(RM.renameCapType(sCR, 'Design', 'UX'), 'renameCapType reports the rename (row types)');
+eq(sCR.meta.capRowTypes, ['UX', 'QA'], 'the capacity row selection follows the rename');
+ok(RM.removeCapType(sCR, 'QA'), 'removeCapType reports the removal (row types)');
+eq(sCR.meta.capRowTypes, ['UX'], 'and a removed type leaves the selection');
+eq(RM.normalizeState({ meta: { capRowTypes: ['Design', 'Ghost'] }, phases: [{ id: 'p' }], items: [] }).meta.capRowTypes,
+  ['Design'], 'normalize prunes row types the document no longer has');
+eq(RM.normalizeState({ meta: { capRowTypes: 'all' }, phases: [{ id: 'p' }], items: [] }).meta.capRowTypes,
+  'all', "and leaves the 'all' sentinel alone");
+// documents written before capacity types: a blank feature type takes the
+// document's first type so it is never invisible to the capacity row
+var sDefCT = RM.normalizeState({ meta: {}, capTypes: ['Development', 'Design'], phases: [{ id: 'p' }], items: [
+  { num: 1, feature: 'old', phaseId: 'p', stories: [{ num: 101, title: 'st' }] },
+  { num: 2, feature: 'gate', phaseId: 'p', milestone: true }
+] });
+eq(sDefCT.items[0].capType, 'Development', 'a blank feature capType defaults to the first capacity type');
+eq(sDefCT.items[0].stories[0].capType, '', 'a story may still be general');
+eq(sDefCT.items[1].capType, '', 'a milestone stays untyped');
+
+// the span helpers take an optional prebuilt holiday set — hot loops (the
+// auto timeline) pass one instead of rebuilding it per call
+var hsSet = RM.holidayDaySet(META);
+eq(RM.stretchSpan(META, 70, 12, hsSet), RM.stretchSpan(META, 70, 12), 'stretchSpan with a passed holiday set matches');
+eq(RM.workInSpan(META, 70, 30, hsSet), RM.workInSpan(META, 70, 30), 'workInSpan with a passed holiday set matches');
+eq(RM.workingWeeksInSpan(META, 70, 30, hsSet), RM.workingWeeksInSpan(META, 70, 30), 'workingWeeksInSpan with a passed holiday set matches');
 
 // ------------------------------------------------------------- auto timeline
 section('autoTimeline');
@@ -423,6 +452,40 @@ eq(plF.stories[0].startDay, 0, 'the first story takes week 0');
 eq(plF.stories[1].startDay, 5, 'the second waits for week 1');
 eq([plF.startDay, plF.durDays], [0, 10], 'and the feature hull covers both');
 ok(rPlF.changed > 0, 'placing a story-level feature reports its changes');
+// locked and finished work never moves
+var sPlL = autoState([
+  { num: 1, feature: 'locked', phaseId: 'p2', startDay: 30, durDays: 5, capType: 'Development', locked: true },
+  { num: 2, feature: 'finished', phaseId: 'p2', startDay: 30, durDays: 5, capType: 'Development', done: true }
+], [{ name: 'Solo', capType: 'Development' }]);
+var rPlLk = RM.placeUnit(sPlL, sPlL.items[0].id, null, { today: 0 });
+eq(rPlLk.changed, 0, 'a locked feature is not placed');
+eq(RM.itemByNum(rPlLk.state, 1).startDay, 30, 'and keeps its dates');
+eq(rPlLk.note, 'Locked', 'placeUnit says the feature is locked');
+var rPlDn = RM.placeUnit(sPlL, sPlL.items[1].id, null, { today: 0 });
+eq(rPlDn.changed, 0, 'a done feature is not placed');
+eq(RM.itemByNum(rPlDn.state, 2).startDay, 30, 'and keeps its dates');
+ok(/done/.test(rPlDn.note || ''), 'placeUnit says it is already done');
+// story level: the feature fan-out skips locked and done stories
+var sPlFD = autoState([
+  { num: 1, feature: 'f', phaseId: 'p2', startDay: 30, durDays: 5, stories: [
+    { num: 101, title: 'shipped', startDay: 30, durDays: 5, capType: 'Development', done: true },
+    { num: 102, title: 'todo', durDays: 5, capType: 'Development' }
+  ] }
+], [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
+var rPlFD = RM.placeUnit(sPlFD, sPlFD.items[0].id, null, { today: 0 });
+var plFD = RM.itemByNum(rPlFD.state, 1);
+eq(plFD.stories[0].startDay, 30, 'a done story keeps its dates while its feature fans out');
+eq(plFD.stories[1].startDay, 0, 'and the open story still places at the earliest slot');
+var sPlFL = autoState([
+  { num: 1, feature: 'f', phaseId: 'p2', startDay: 30, durDays: 5, locked: true, stories: [
+    { num: 101, title: 'a', durDays: 5, capType: 'Development' },
+    { num: 102, title: 'b', durDays: 5, capType: 'Development' }
+  ] }
+], [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
+var rPlFL = RM.placeUnit(sPlFL, sPlFL.items[0].id, null, { today: 0 });
+eq(rPlFL.changed, 0, 'a locked feature places none of its stories');
+eq(rPlFL.note, 'Locked', 'and says why');
+eq(RM.itemByNum(rPlFL.state, 1).stories[0].startDay, null, 'its stories are left unscheduled');
 // a dependency-free milestone is a fixed date, not something to place
 var sPlM = autoState([{ num: 1, feature: 'gate', phaseId: 'p2', milestone: true, startDay: 30, durDays: 0 }], [{ name: 'Solo', capType: 'Development' }]);
 var rPlM = RM.placeUnit(sPlM, sPlM.items[0].id, null, { today: 0 });

@@ -513,6 +513,21 @@
     } finally { applyingAuto = false; }
     return moved;
   }
+  // run the auto rules on their own (nothing else changed): one pass, and an
+  // undo/history entry only when something actually moved
+  function runAutoRulesNow() {
+    if (readOnly) { viewOnlyToast(); return 0; }
+    var prev = JSON.stringify(state);
+    var moved = applyAutoRules();
+    if (!moved) return 0;
+    undoStack.push(prev);
+    if (undoStack.length > 120) undoStack.shift();
+    redoStack.length = 0;
+    recordHistory('auto', prev);
+    afterChange();
+    maybeAskName();
+    return moved;
+  }
   function commit(label, mutate) {
     if (readOnly) { viewOnlyToast(); return; }
     var prev = JSON.stringify(state);
@@ -2097,9 +2112,9 @@
     var head = itemCapInherited(itC)
       ? [{ label: '<i>Type follows the stories while they all agree</i>', disabled: true, fn: function () {} }, { sep: true }]
       : [];
-    return head.concat([{ label: '<i>— general —</i>', checked: !cur, fn: function () {
-      commit('capacity type', function (s) { var t2 = RM.itemById(s, itemId); if (t2) t2.capType = ''; });
-    } }]).concat(RM.capTypesOf(state).map(function (t) {
+    // a feature always plans as one of the types — no "general" entry here
+    // (stories keep theirs)
+    return head.concat(RM.capTypesOf(state).map(function (t) {
       return { label: esc(t), checked: cur === t, fn: function () {
         commit('capacity type', function (s) { var t2 = RM.itemById(s, itemId); if (t2) t2.capType = t; });
       } };
@@ -3501,14 +3516,18 @@
       if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = 'Holiday week'; }
       else {
         var ratio = cell.supply > 0 ? cell.demand / cell.supply : (cell.demand > 0 ? Infinity : 0);
-        cls = cell.over ? 'over' : (cell.demand === 0 ? 'idle' : (cell.supply > 0 && ratio > 0.85 ? 'mid' : 'ok'));
+        // work asked of a type nobody supplies can never be done: that reads
+        // over, not ok
+        cls = (cell.over || (cell.supply === 0 && cell.demand > 0))
+          ? 'over' : (cell.demand === 0 ? 'idle' : (ratio > 0.85 ? 'mid' : 'ok'));
         // demand / supply from the default zoom up; tighter than that, the
         // ask alone (the tooltip always carries both)
         txt2 = weekPx >= 28 ? fmtPe(cell.demand) + ' / ' + fmtPe(cell.supply) : (weekPx >= 20 ? fmtPe(cell.demand) : '');
         title = fmtPe(cell.demand) + ' ' + unitWord + ' asked · ' + fmtPe(cell.supply) + ' available';
         Object.keys(cell.byType).forEach(function (ct) {
           var bt = cell.byType[ct];
-          title += ' · ' + (ct || 'untyped') + ' ' + fmtPe(bt.demand) + '/' + fmtPe(bt.supply);
+          title += ' · ' + (ct || 'untyped') + ' ' + fmtPe(bt.demand) + '/' + fmtPe(bt.supply) +
+            (bt.supply === 0 && bt.demand > 0 ? ' (no supply)' : '');
         });
         if (!cap.types.length) title += ' · nobody on the roster supplies a capacity type yet';
       }
@@ -5508,6 +5527,11 @@
       return;
     }
     if (f === 'snap') {
+      // locked and finished rows never move (same rule as the context menu)
+      if (it.locked || it.done) {
+        toast(it.locked ? 'Locked — unlock it to place it' : 'Already done — nothing to place', 'err');
+        return;
+      }
       var r = RM.placeUnit(state, it.id, null);
       if (r.changed) {
         if (autoOrder) RM.sortItemsByStart(r.state);
@@ -10433,7 +10457,14 @@
     }
     if (t.id === 'suCapRowAll' || t.id === 'suCapRowSome') {
       var all = t.id === 'suCapRowAll';
-      commit('capacity row types', function (s2) { s2.meta.capRowTypes = all ? 'all' : (Array.isArray(s2.meta.capRowTypes) ? s2.meta.capRowTypes : []); });
+      commit('capacity row types', function (s2) {
+        if (all) { s2.meta.capRowTypes = 'all'; return; }
+        if (Array.isArray(s2.meta.capRowTypes)) return; // already a list — keep it
+        // coming from "All": start from what the row was already showing (the
+        // supplied types), so the row never drops to a silent 0 / 0
+        var seed = RM.capSupply(s2).types.slice();
+        s2.meta.capRowTypes = seed.length ? seed : RM.capTypesOf(s2).slice();
+      });
       return;
     }
     if (t.dataset.sucaprow != null) {
@@ -11915,7 +11946,7 @@
         aiActor = true;
         try { commit(label, mutate); } finally { aiActor = false; }
       },
-      autoTimelineNow: function () { var n = 0; commit('auto', function () { n = applyAutoRules(); }); return n; },
+      autoTimelineNow: function () { return runAutoRulesNow(); },
       validation: function () { return validation || RM.validate(state); },
       userName: userName,
       ui: function () {

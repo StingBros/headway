@@ -3904,6 +3904,8 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   // capacity row types: All → Only these, then tick one type
   doc.querySelector('#suCapRowSome').checked = true;
   doc.querySelector('#suCapRowSome').dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(Array.isArray(state().meta.capRowTypes) && state().meta.capRowTypes.length > 0,
+    'switching from All to “Only these” seeds the list instead of leaving a silent 0 / 0 row');
   const rowChk = doc.querySelector('#setupView [data-sucaprow="Design"]');
   rowChk.checked = true;
   rowChk.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -3966,6 +3968,15 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   ok(!!busy && /Development/.test(busy.getAttribute('title')), 'an over-asked week reads over and names the type in its tooltip');
   ok(/\d+(\.\d)? \/ \d+(\.\d)?/.test(busy.textContent), 'the cell reads demand / supply');
   ok(/people|points/.test(doc.querySelector('#capTypeCell').textContent), 'the row label says the unit');
+  // a picked type nobody supplies can never be done: that reads over, not ok
+  window.HeadwayApp.ai.commit('no supply', (s) => {
+    s.meta.capRowTypes = ['Design'];
+    s.items.forEach((i) => { if (!i.milestone) i.capType = 'Design'; });
+  });
+  const dry = [...doc.querySelectorAll('#hdrCap .cap-cell')].find((c) => c.classList.contains('over'));
+  ok(!!dry && / \/ 0/.test(dry.textContent) && /no supply/.test(dry.getAttribute('title')),
+    'a week asking a type nobody supplies reads over and says “no supply”');
+  undo();
   undo();
   // auto timeline: a phase flagged Auto re-lays its items on every commit
   {
@@ -3973,7 +3984,12 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
       s.meta.capacityEnabled = true; s.meta.planLevel = 'feature'; s.meta.capMode = 'person';
       s.team = [{ id: 'solo', name: 'Solo', capType: 'Development', weekHours: {}, capacity: 1 }];
       s.phases[0].auto = true;
-      s.items.forEach((it) => { if (it.phaseId === s.phases[0].id) { it.locked = false; it.capType = 'Development'; it.capMult = 1; } });
+      // every feature now carries a capacity type, so park the other phases'
+      // work as done — this check is about what the Auto phase lays out
+      s.items.forEach((it) => {
+        if (it.phaseId === s.phases[0].id) { it.locked = false; it.done = false; it.capType = 'Development'; it.capMult = 1; }
+        else it.done = true;
+      });
     });
     const st = window.HeadwayApp.ai.state();
     const cap = window.RM.capacity(st);
@@ -4039,6 +4055,11 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     const itRow = [...doc.querySelectorAll('#rows .row.item[data-id]')]
       .find((r) => !(state().items.find((i) => i.id === r.dataset.id) || {}).milestone);
     ok(!!itRow && !!itRow.querySelector('.r-cap[data-act="cap"]'), 'feature rows show the chip at Features level');
+    // a feature always plans as one of the types — no "general" entry
+    click(itRow.querySelector('.r-cap[data-act="cap"]'));
+    ok(menuBtns().length > 0 && !menuBtns().some((b) => /general/.test(b.textContent)),
+      'the feature capacity picker offers the types only, with no “general” entry');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     // a feature whose stories all agree shows the type as inherited
     const inhId = [...doc.querySelectorAll('#rows .row.item[data-id]')]
       .map((r) => state().items.find((i) => i.id === r.dataset.id))
@@ -5140,7 +5161,9 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
       const before = JSON.stringify(state().items);
       undo(); // the open cleared the stack — nothing to step back to
       ok(JSON.stringify(state().items) === before, 'on open: undo cannot step back past the auto pass');
+      const hLen = state().history.length;
       ok(window.HeadwayApp.ai.autoTimelineNow() === 0, 'a second pass over a laid-out document moves nothing');
+      ok(state().history.length === hLen, 'and a pass that moves nothing adds no version-history entry');
     });
 }).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');

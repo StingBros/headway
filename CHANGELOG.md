@@ -17,6 +17,7 @@ Format: short sections, bullets, one bold title per notable change —
 - Story rows in the Planning left pane show a capacity type chip and, in per-person mode, a × multiplier (feature rows too at the Features planning level); both are columns you can hide or reorder. The Resources panel gains a points column in story-points mode.
 - Epic and workstream group rows now stay pinned under their phase band while you scroll, like the phase band itself.
 - Auto-order rows by start now also applies when a document opens.
+- Opening a document whose rows are out of start order (with auto-order on) re-sorts them there and then, says so ("Rows auto-ordered") and leaves the document unsaved.
 - The Auto-schedule dialog is gone; Auto timeline and Place at earliest slot replace it.
 - Flagged rows are tinted light orange in the left pane, darker when selected.
 - The Planning / Scoping left pane no longer shows #numbers on rows (they stay in the panel header, on cards and on sprint rows).
