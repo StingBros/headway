@@ -166,7 +166,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 **Files:**
 - Modify: `js/core.js:2276-2410` (replace `memberHoursForWeek`… through the end of `RM.capacity`; keep `memberHoursForWeek`, `memberOffWeek`, `pointsOf`)
 - Modify: `js/core.js:2656-2668` (`RM.validate` OVER_CAP block)
-- Test: `tests/core.test.js` (replace the `capacity` section at lines 162-178)
+- Test: `tests/core.test.js` (replace the `capacity` section at lines 162-178); `tests/smoke.test.js:3905-3932` (replace the capacity-row assertions)
+- Modify: `js/app.js:3374-3456` (capacity row rendering — Ruling 1)
 
 **Interfaces:**
 - Produces:
@@ -255,6 +256,41 @@ Note: `mkState` merges `extras.meta` only when the test passes a full meta; add 
 ```
 
 (Put it right after `var base = {...};` and before the generic `extras` loop.) Check `RM.pointsOf` reads `size` as a number: with `sizeScheme = 'points'` a numeric `size` survives normalize — confirm by reading `RM.normalizeState`'s size handling (`grep -n "sizeScheme" js/core.js`); if numeric sizes are only kept under a points scheme, the test's `sizeScheme: 'points'` line is required, else drop it.
+
+
+Also replace the capacity-row smoke assertions in `tests/smoke.test.js` (the block starting `s.meta.planLevel = 'story'` near line 3905 through the `undo();` after `the row label says what it totals`) with:
+
+
+```js
+  {
+    const s = window.RM.clone(window.HeadwayApp.ai.state());
+    s.meta.capacityEnabled = true; s.meta.planLevel = 'story'; s.meta.capMode = 'person'; s.meta.capRowTypes = 'all';
+    s.team = [{ id: 'p1', name: 'A', capType: 'Design', weekHours: {}, capacity: 1 }];
+    const it = s.items.find((i) => i.startDay != null && !i.milestone);
+    it.stories = [{ title: 'design it', startDay: it.startDay, durDays: 5, capType: 'Design' }, { title: 'later', capType: 'Design' }];
+    const capS = window.RM.capacity(window.RM.normalizeState(s));
+    const wk = Math.floor(it.startDay / 5);
+    ok(capS.weeks[wk].demand === 1 && capS.weeks[wk].supply === 1, 'story level: one Design story vs one Design person');
+    s.items.find((i) => i.id === it.id).stories[0].capMult = 2;
+    ok(window.RM.capacity(window.RM.normalizeState(s)).weeks[wk].over, 'a ×2 story over-asks a one-person pool');
+    s.meta.capRowTypes = ['Development'];
+    ok(!window.RM.capacity(window.RM.normalizeState(s)).weeks[wk].over, 'the row only judges the selected types');
+  }
+  // the header row shows demand / supply for the selected types
+  window.HeadwayApp.ai.commit('cap row', (s) => {
+    s.meta.capacityEnabled = true; s.meta.planLevel = 'feature'; s.meta.capMode = 'person'; s.meta.capRowTypes = 'all';
+    s.team = [{ id: 'p1', name: 'A', capType: 'Development', weekHours: {}, capacity: 1 }];
+    s.items.forEach((i) => { if (!i.milestone) { i.capType = 'Development'; i.capMult = 1; } });
+    s.phases.forEach((p) => { p.auto = false; });
+  });
+  const cells = [...doc.querySelectorAll('#hdrCap .cap-cell')];
+  const busy = cells.find((c) => c.classList.contains('over'));
+  ok(!!busy && /Development/.test(busy.getAttribute('title')), 'an over-asked week reads over and names the type in its tooltip');
+  ok(/\d+(\.\d)? \/ \d+(\.\d)?/.test(busy.textContent), 'the cell reads demand / supply');
+  ok(/people|points/.test(doc.querySelector('#capTypeCell').textContent), 'the row label says the unit');
+  undo();
+```
+
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -495,16 +531,57 @@ Replace the `OVER_CAP` block in `RM.validate` (lines ~2656-2668) with:
 
 `RM.autoSchedule` and `RM.snapEarliest` reference the deleted `wipWeight` / `availForWeek`. Delete both functions now, together with their tests (`tests/core.test.js` lines 181-246, the `autoSchedule` + `snapEarliest` sections, and the `snapEarliest` / `autoSchedule` regressions at lines 300-330). Task 3 brings the replacements with new tests. Also delete `doAuto` (`js/app.js:8404-8420`) and its `Auto-schedule…` menu entry (`js/app.js:8503`) so the app keeps loading.
 
+**App side (Ruling 1 — moved here from Task 6 so the header never renders against the old cell shape).** Capacity row (`renderHeader`, lines 3374-3456): replace from `// capacity row:` through the `$('#capTypeCell')` assignment with:
+
+```js
+    // capacity row: each week's demand vs supply for the selected capacity
+    // types (Setup → Capacity), in people or points
+    var cap = validation.capacity;
+    var unitWord = meta.capMode === 'points' ? 'points' : 'people';
+    var selTypes = meta.capRowTypes === 'all' ? cap.types : meta.capRowTypes;
+    for (var w = 0; w < meta.numWeeks; w++) {
+      var cell = cap.weeks[w];
+      var hn = RM.holidaysInWeek(meta, w, hset);
+      var cls, txt2 = '', title;
+      if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = 'Holiday week'; }
+      else {
+        var ratio = cell.supply > 0 ? cell.demand / cell.supply : (cell.demand > 0 ? Infinity : 0);
+        cls = cell.over ? 'over' : (cell.demand === 0 ? 'idle' : (cell.supply > 0 && ratio > 0.85 ? 'mid' : 'ok'));
+        txt2 = weekPx >= 34 ? fmtPe(cell.demand) + ' / ' + fmtPe(cell.supply) : (weekPx >= 20 ? fmtPe(cell.demand) : '');
+        title = fmtPe(cell.demand) + ' ' + unitWord + ' asked · ' + fmtPe(cell.supply) + ' available';
+        Object.keys(cell.byType).forEach(function (ct) {
+          var bt = cell.byType[ct];
+          title += ' · ' + (ct || 'untyped') + ' ' + fmtPe(bt.demand) + '/' + fmtPe(bt.supply);
+        });
+        if (!cap.types.length) title += ' · nobody on the roster supplies a capacity type yet';
+      }
+      hc.push('<div class="cap-cell ' + cls + (hn && !cell.blackout ? ' part' : '') + '" tabindex="0" data-w="' + w +
+        '" style="left:' + (w * weekPx + 1) + 'px;width:' + (weekPx - 2) + 'px" title="' +
+        esc('Week of ' + RM.fmtShort(RM.weekStartDate(meta, w)) + ': ' + title +
+          (hn ? ' · ' + hn + ' holiday day(s)' : '') + ' · click to toggle holiday week') + '">' + txt2 + '</div>');
+    }
+```
+
+and after `$('#hdrCap').innerHTML = hc.join('');`:
+
+```js
+    $('#capTypeCell').innerHTML =
+      '<span class="cap-lab" title="' + esc('Each week: ' + unitWord + ' asked / available for ' +
+        (meta.capRowTypes === 'all' ? 'all capacity types' : selTypes.join(', ')) + ' — Setup → Capacity') + '">' + unitWord + '</span>';
+```
+
+Keep the phase-lane code between them untouched. Remove the `loadWhat`/`unitPts`/`storyLvl` variables.
+
 - [ ] **Step 4: Run tests**
 
 Run: `NODE_PATH=./node_modules node tests/core.test.js && NODE_PATH=./node_modules node tests/smoke.test.js`
-Expected: core passes. Smoke fails only in the capacity-row block (`tests/smoke.test.js:3905-3932`) — fix it in Task 6; for now note the failures and continue (the commit below is core-only).
+Expected: both suites pass (the rewritten capacity-row smoke assertions included). A smoke test elsewhere that still references `capLimit`, `capBasis`, `capUnit` or `focus units` must be updated in this task too — grep for them.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add js/core.js js/app.js tests/core.test.js
-git commit -m "feat(core): typed weekly capacity supply, units and demand; capacity row aggregates selected types
+git add js/core.js js/app.js tests/core.test.js tests/smoke.test.js
+git commit -m "feat(core): typed weekly capacity supply, units and demand; capacity row shows demand / supply for the selected types
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -1192,92 +1269,30 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 6: Capacity row text and the Setup → Capacity tab
+### Task 6: The Setup → Capacity tab
 
 **Files:**
-- Modify: `js/app.js:3374-3456` (capacity row), `js/app.js:9981-10012` (Team tab: remove the Capacity types and Capacity cards), `js/app.js:10118-10128` (`SETUP_SECTIONS`), `js/app.js:10229-10245` (`suCapBasis`/`suCapUnit`/`suCapLimit` handlers → replace), `js/app.js:10429` (`suplan` click handler stays), Setup tab bodies object (add `capacity:`)
-- Modify: `tests/smoke.test.js:3905-3932` (replace the old row assertions)
+- Modify: `js/app.js:9981-10012` (Team tab: remove the Capacity types and Capacity cards), `js/app.js:10118-10128` (`SETUP_SECTIONS`), `js/app.js:10229-10245` (`suCapBasis`/`suCapUnit`/`suCapLimit` handlers → replace), `js/app.js:10429` (`suplan` click handler stays), Setup tab bodies object (add `capacity:`)
+- Test: `tests/smoke.test.js`
 - Modify: `js/export-png.js` only if it reads `capLimit` (grep says no — skip)
 
 **Interfaces:**
 - Consumes: `RM.capacity(state)` cells `{ demand, supply, over, blackout, byType }`.
 
-- [ ] **Step 1: Replace the smoke assertions** at lines 3905-3932 with
+- [ ] **Step 1: Write the failing smoke test** (the capacity-row assertions were rewritten in Task 2; add a Setup-tab check next to them)
 
 ```js
-  {
-    const s = window.RM.clone(window.HeadwayApp.ai.state());
-    s.meta.capacityEnabled = true; s.meta.planLevel = 'story'; s.meta.capMode = 'person'; s.meta.capRowTypes = 'all';
-    s.team = [{ id: 'p1', name: 'A', capType: 'Design', weekHours: {}, capacity: 1 }];
-    const it = s.items.find((i) => i.startDay != null && !i.milestone);
-    it.stories = [{ title: 'design it', startDay: it.startDay, durDays: 5, capType: 'Design' }, { title: 'later', capType: 'Design' }];
-    const capS = window.RM.capacity(window.RM.normalizeState(s));
-    const wk = Math.floor(it.startDay / 5);
-    ok(capS.weeks[wk].demand === 1 && capS.weeks[wk].supply === 1, 'story level: one Design story vs one Design person');
-    s.items.find((i) => i.id === it.id).stories[0].capMult = 2;
-    ok(window.RM.capacity(window.RM.normalizeState(s)).weeks[wk].over, 'a ×2 story over-asks a one-person pool');
-    s.meta.capRowTypes = ['Development'];
-    ok(!window.RM.capacity(window.RM.normalizeState(s)).weeks[wk].over, 'the row only judges the selected types');
-  }
-  // the header row shows demand / supply for the selected types
-  window.HeadwayApp.ai.commit('cap row', (s) => {
-    s.meta.capacityEnabled = true; s.meta.planLevel = 'feature'; s.meta.capMode = 'person'; s.meta.capRowTypes = 'all';
-    s.team = [{ id: 'p1', name: 'A', capType: 'Development', weekHours: {}, capacity: 1 }];
-    s.items.forEach((i) => { if (!i.milestone) { i.capType = 'Development'; i.capMult = 1; } });
-    s.phases.forEach((p) => { p.auto = false; });
-  });
-  const cells = [...doc.querySelectorAll('#hdrCap .cap-cell')];
-  const busy = cells.find((c) => c.classList.contains('over'));
-  ok(!!busy && /Development/.test(busy.getAttribute('title')), 'an over-asked week reads over and names the type in its tooltip');
-  ok(/\d+(\.\d)? \/ \d+(\.\d)?/.test(busy.textContent), 'the cell reads demand / supply');
-  ok(/people|points/.test(doc.querySelector('#capTypeCell').textContent), 'the row label says the unit');
-  undo();
+  // Setup → Capacity tab
+  window.HeadwayApp.openSetup ? window.HeadwayApp.openSetup('capacity') : window.HeadwayApp.ai.openSetup('capacity');
+  ok(!!doc.querySelector('#suCapEnable') && !!doc.querySelector('[data-sucapmode="points"]'), 'the Capacity tab carries the enable switch and the demand picker');
+  ok(!doc.querySelector('#suCapLimit') && !doc.querySelector('#suCapBasis'), 'the weekly limit and row basis controls are gone');
 ```
 
-- [ ] **Step 2: Run to verify failure** — `NODE_PATH=./node_modules node tests/smoke.test.js` → the cell text / title checks fail.
+(Find the setup opener the suite already uses: `grep -n "openSetup" tests/smoke.test.js`.)
+
+- [ ] **Step 2: Run to verify failure** — `NODE_PATH=./node_modules node tests/smoke.test.js` → the Capacity tab check fails.
 
 - [ ] **Step 3: Implement**
-
-Capacity row (`renderHeader`, lines 3374-3456): replace from `// capacity row:` through the `$('#capTypeCell')` assignment with:
-
-```js
-    // capacity row: each week's demand vs supply for the selected capacity
-    // types (Setup → Capacity), in people or points
-    var cap = validation.capacity;
-    var unitWord = meta.capMode === 'points' ? 'points' : 'people';
-    var selTypes = meta.capRowTypes === 'all' ? cap.types : meta.capRowTypes;
-    for (var w = 0; w < meta.numWeeks; w++) {
-      var cell = cap.weeks[w];
-      var hn = RM.holidaysInWeek(meta, w, hset);
-      var cls, txt2 = '', title;
-      if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = 'Holiday week'; }
-      else {
-        var ratio = cell.supply > 0 ? cell.demand / cell.supply : (cell.demand > 0 ? Infinity : 0);
-        cls = cell.over ? 'over' : (cell.demand === 0 ? 'idle' : (cell.supply > 0 && ratio > 0.85 ? 'mid' : 'ok'));
-        txt2 = weekPx >= 34 ? fmtPe(cell.demand) + ' / ' + fmtPe(cell.supply) : (weekPx >= 20 ? fmtPe(cell.demand) : '');
-        title = fmtPe(cell.demand) + ' ' + unitWord + ' asked · ' + fmtPe(cell.supply) + ' available';
-        Object.keys(cell.byType).forEach(function (ct) {
-          var bt = cell.byType[ct];
-          title += ' · ' + (ct || 'untyped') + ' ' + fmtPe(bt.demand) + '/' + fmtPe(bt.supply);
-        });
-        if (!cap.types.length) title += ' · nobody on the roster supplies a capacity type yet';
-      }
-      hc.push('<div class="cap-cell ' + cls + (hn && !cell.blackout ? ' part' : '') + '" tabindex="0" data-w="' + w +
-        '" style="left:' + (w * weekPx + 1) + 'px;width:' + (weekPx - 2) + 'px" title="' +
-        esc('Week of ' + RM.fmtShort(RM.weekStartDate(meta, w)) + ': ' + title +
-          (hn ? ' · ' + hn + ' holiday day(s)' : '') + ' · click to toggle holiday week') + '">' + txt2 + '</div>');
-    }
-```
-
-and after `$('#hdrCap').innerHTML = hc.join('');`:
-
-```js
-    $('#capTypeCell').innerHTML =
-      '<span class="cap-lab" title="' + esc('Each week: ' + unitWord + ' asked / available for ' +
-        (meta.capRowTypes === 'all' ? 'all capacity types' : selTypes.join(', ')) + ' — Setup → Capacity') + '">' + unitWord + '</span>';
-```
-
-Keep the phase-lane code between them untouched. Remove the `loadWhat`/`unitPts`/`storyLvl` variables.
 
 Setup tab: in `SETUP_SECTIONS` insert `['capacity', 'Capacity', 'gauge'],` after `['team', 'Team', 'users'],`. In the Team tab body delete the `Capacity types` and `Capacity` `<section>` cards (keep Roles and Work week; keep the `capTypeRows` computation — it moves). Add a `capacity:` body to `tabBodies`:
 
