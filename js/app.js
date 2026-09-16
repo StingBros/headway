@@ -505,6 +505,7 @@
       // rule normalize enforces, applied here for edits that skip it
       state.phases.forEach(function (p) { if (p.auto && (!state.meta.capacityEnabled || p.bucket)) p.auto = false; });
       if (anyAutoPhase()) {
+        RM.applySizeRollup(state); // rolled-up sizes size the bars the layout places
         var r = RM.autoTimeline(state);
         if (r.changed) { state = r.state; moved = r.changed; }
       }
@@ -556,7 +557,9 @@
       recordHistory('auto', prevJson);
       docSaved = false;
       sessionEdited = true;
+      // the open left the document unsaved — never silently
       if (moved) toast('Auto timeline moved ' + moved + ' item' + (moved === 1 ? '' : 's'));
+      else toast('Rows auto-ordered');
     }
     validation = RM.validate(state);
     saveLocal();

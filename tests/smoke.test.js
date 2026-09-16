@@ -4985,6 +4985,37 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
         'story numbers survive an xlsx round trip');
     });
 }).then(() => {
+  // opening a document runs the auto features: the rows come back in start
+  // order and an Auto phase is laid out under the roster's capacity
+  const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  window.HeadwayApp.ai.setPref('autoOrder', true);
+  const doc0 = window.RM.clone(state());
+  doc0.meta.capacityEnabled = true; doc0.meta.planLevel = 'feature'; doc0.meta.capMode = 'person'; doc0.meta.capRowTypes = 'all';
+  doc0.team = [{ id: 'solo', name: 'Solo', capType: 'Development', weekHours: {}, capacity: 1 }];
+  const autoPh = doc0.phases.find((p) => !p.bucket);
+  autoPh.auto = true;
+  // three features of the Auto phase pile into the same week
+  const piled = doc0.items.filter((i) => i.phaseId === autoPh.id && !i.milestone).slice(0, 3);
+  piled.forEach((it) => { it.locked = false; it.done = false; it.capType = 'Development'; it.capMult = 1; it.startDay = 10; it.durDays = 5; it.deps = []; });
+  doc0.items.reverse(); // and the rows arrive out of start order
+  return window.RMExcel.exportWorkbook(doc0)
+    .then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
+    .then((ab) => window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), 'Auto.xlsx'))
+    .then(() => {
+      const opened = state();
+      ok(opened.phases.find((p) => p.id === autoPh.id).auto === true, 'on open: the Auto flag survived the file');
+      ok(!window.RM.capacity(opened).weeks.some((c) => c.over), 'on open: the Auto phase is laid out, no week over capacity');
+      const sorted = window.RM.clone(opened);
+      window.RM.sortItemsByStart(sorted);
+      ok(sorted.items.map((i) => i.id).join() === opened.items.map((i) => i.id).join(), 'on open: the rows are in start order');
+      ok(window.HeadwayApp.unsavedNow() === true, 'on open: the auto pass leaves the document unsaved');
+      ok(opened.history[opened.history.length - 1].label === 'auto', 'on open: the newest version-history entry is labelled auto');
+      const before = JSON.stringify(state().items);
+      undo(); // the open cleared the stack — nothing to step back to
+      ok(JSON.stringify(state().items) === before, 'on open: undo cannot step back past the auto pass');
+      ok(window.HeadwayApp.ai.autoTimelineNow() === 0, 'a second pass over a laid-out document moves nothing');
+    });
+}).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
 }).catch((e) => {
