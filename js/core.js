@@ -2847,6 +2847,274 @@
     });
   };
 
+  // ------------------------------------------------------------ scheduling
+  // today's working-day index on the grid (never negative)
+  RM.todayDay = function (meta, now) {
+    now = now || new Date();
+    var d = RM.dateToDay(meta, new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())));
+    return d == null || !isFinite(d) ? 0 : Math.max(0, d);
+  };
+
+  // typed weekly ledger shared by autoTimeline and placeUnit
+  function capLedger(state, horizonWeeks) {
+    var meta = state.meta;
+    var S = RM.slotsOf(meta);
+    var sup = RM.capSupply(state, horizonWeeks);
+    var used = {};
+    sup.types.forEach(function (t) { used[t] = new Array(horizonWeeks); for (var i = 0; i < horizonWeeks; i++) used[t][i] = 0; });
+    var set = RM.holidayDaySet(meta);
+    function weeksOf(startDay, durDays) {
+      return [Math.floor(startDay / S), Math.floor((startDay + Math.max(1, durDays) - 1) / S)];
+    }
+    function constrained(u) { return !u.milestone && !!u.capType && sup.types.indexOf(u.capType) !== -1; }
+    return {
+      types: sup.types,
+      constrained: constrained,
+      peak: function (t) { var p = 0; for (var w = 0; w < horizonWeeks; w++) if (sup.byType[t][w] > p) p = sup.byType[t][w]; return p; },
+      book: function (u, startDay, durDays, sign) {
+        if (!constrained(u) || startDay == null || durDays == null) return;
+        var d = RM.unitWeekDemand(state, u, startDay, durDays) * (sign || 1);
+        var ww = weeksOf(startDay, durDays);
+        for (var w = Math.max(0, ww[0]); w <= ww[1] && w < horizonWeeks; w++) {
+          if (RM.isBlackoutWeek(meta, w, set)) continue;
+          used[u.capType][w] += d;
+        }
+      },
+      fits: function (u, startDay, durDays) {
+        if (!constrained(u)) return true;
+        var d = RM.unitWeekDemand(state, u, startDay, durDays);
+        var ww = weeksOf(startDay, durDays);
+        for (var w = ww[0]; w <= ww[1]; w++) {
+          if (w >= horizonWeeks) return true;
+          if (RM.isBlackoutWeek(meta, w, set)) continue;
+          if (used[u.capType][w] + d > sup.byType[u.capType][w] + 1e-9) return false;
+        }
+        return true;
+      },
+      set: set
+    };
+  }
+
+  // write a unit's new window back onto its story or item
+  RM.applyUnitPlacement = function (state, u, startDay, durDays) {
+    var it = RM.itemById(state, u.itemId);
+    if (!it) return false;
+    var changed = false;
+    if (u.storyId) {
+      (it.stories || []).forEach(function (st) {
+        if (st.id !== u.storyId) return;
+        if (st.startDay !== startDay || st.durDays !== durDays) changed = true;
+        st.startDay = startDay; st.durDays = durDays;
+      });
+      return changed;
+    }
+    if (it.milestone) {
+      if (it.startDay !== startDay) changed = true;
+      it.startDay = startDay; it.durDays = 0;
+      return changed;
+    }
+    var riskSpan = RM.stretchSpan(state.meta, startDay + durDays, RM.riskEffortDays(state, it));
+    if (it.startDay !== startDay || it.durDays !== durDays || (it.riskDays || 0) !== riskSpan) changed = true;
+    if (it.startDay != null && RM.planLevel(state) !== 'story') RM.shiftStories(it, startDay - it.startDay);
+    it.startDay = startDay; it.durDays = durDays; it.riskDays = riskSpan;
+    return changed;
+  };
+
+  // story level: a feature bar is the hull of its scheduled stories
+  RM.rebuildHulls = function (state, itemIds) {
+    var changed = 0;
+    state.items.forEach(function (it) {
+      if (itemIds && itemIds.indexOf(it.id) === -1) return;
+      if (it.milestone) return;
+      var lo = null, hi = null;
+      (it.stories || []).forEach(function (st) {
+        if (st.startDay == null || st.durDays == null) return;
+        if (lo == null || st.startDay < lo) lo = st.startDay;
+        var e = st.startDay + Math.max(1, st.durDays);
+        if (hi == null || e > hi) hi = e;
+      });
+      if (lo == null) return;
+      var riskSpan = RM.stretchSpan(state.meta, hi, RM.riskEffortDays(state, it));
+      if (it.startDay !== lo || it.durDays !== hi - lo || (it.riskDays || 0) !== riskSpan) changed += 1;
+      it.startDay = lo; it.durDays = hi - lo; it.riskDays = riskSpan;
+    });
+    return changed;
+  };
+
+  // Lay out the Auto phases: dependency order, earliest start from today (or
+  // the unit's own start once begun), under the typed weekly ledger. Fixed
+  // units (other phases, locked, done, dependency-free milestones) pre-book.
+  RM.autoTimeline = function (inputState, opts) {
+    opts = opts || {};
+    var state = RM.clone(inputState);
+    var meta = state.meta;
+    var notes = [];
+    var out = { state: state, changed: 0, notes: notes };
+    if (!meta.capacityEnabled) return out;
+    var targets = {};
+    var phaseIdx = {};
+    state.phases.forEach(function (p, i) { phaseIdx[p.id] = i; });
+    (opts.phaseIds || state.phases.filter(function (p) { return p.auto && !p.bucket; }).map(function (p) { return p.id; }))
+      .forEach(function (id) { targets[id] = true; });
+    if (!Object.keys(targets).length) return out;
+    var today = opts.today != null ? opts.today : RM.todayDay(meta);
+    var HORIZON = meta.numWeeks + 104;
+    var S = RM.slotsOf(meta);
+    var ledger = capLedger(state, HORIZON);
+    var units = RM.capUnits(state);
+    var byId = {};
+    units.forEach(function (u) { byId[u.id] = u; });
+    function movable(u) {
+      if (!targets[u.phaseId] || u.locked || u.done) return false;
+      if (u.milestone) return u.deps.length > 0;
+      return true;
+    }
+    var endOf = {};
+    units.forEach(function (u) {
+      if (movable(u)) return;
+      if (u.startDay != null && u.durDays != null) {
+        endOf[u.id] = u.startDay + u.durDays + (u.riskDays || 0);
+        if (!u.done) ledger.book(u, u.startDay, u.durDays, 1);
+      }
+    });
+    var pending = {}, dependents = {};
+    var mov = units.filter(movable);
+    var movIds = {};
+    mov.forEach(function (u) { movIds[u.id] = true; });
+    mov.forEach(function (u) {
+      var n = 0;
+      u.deps.forEach(function (d) { if (movIds[d]) { n += 1; (dependents[d] = dependents[d] || []).push(u); } });
+      pending[u.id] = n;
+    });
+    function prio(a, b) {
+      var pa = phaseIdx[a.phaseId], pb = phaseIdx[b.phaseId];
+      if (pa !== pb) return pa - pb;
+      return a.order[0] - b.order[0] || a.order[1] - b.order[1];
+    }
+    var ready = mov.filter(function (u) { return pending[u.id] === 0; }).sort(prio);
+    var remaining = mov.filter(function (u) { return pending[u.id] > 0; });
+    var maxDay = 0;
+    var touchedItems = {};
+    // Freed work queues BEHIND whatever was already ready: a dependent never
+    // jumps ahead of work that could have started earlier. Units freed by the
+    // same placement enter in row order.
+    function release(u) {
+      var freed = [];
+      (dependents[u.id] || []).forEach(function (c) {
+        pending[c.id] -= 1;
+        if (pending[c.id] === 0) { freed.push(c); remaining = remaining.filter(function (r) { return r.id !== c.id; }); }
+      });
+      freed.sort(prio).forEach(function (c) { ready.push(c); });
+    }
+    function place(u) {
+      var est = 0;
+      u.deps.forEach(function (d) {
+        var e = endOf[d];
+        if (e == null && byId[d] && byId[d].startDay != null && byId[d].durDays != null) e = byId[d].startDay + byId[d].durDays + (byId[d].riskDays || 0);
+        if (e != null && e > est) est = e;
+      });
+      if (u.milestone) {
+        if (RM.applyUnitPlacement(state, u, est, 0)) out.changed += 1;
+        endOf[u.id] = est;
+        release(u);
+        return;
+      }
+      var floor = (u.startDay != null && u.startDay <= today) ? u.startDay : today;
+      if (floor > est) est = floor;
+      var work = RM.unitWorkDays(state, u);
+      var s = est;
+      var dur = RM.stretchSpan(meta, s, work);
+      if (ledger.constrained(u) && RM.unitWeekDemand(state, u, s, dur) > ledger.peak(u.capType) + 1e-9) {
+        var it0 = RM.itemById(state, u.itemId);
+        notes.push('#' + it0.num + ' (' + it0.feature + ') asks more ' + u.capType + ' in a week than the roster can ever give, so it never fits — left where it is.');
+        if (u.startDay != null && u.durDays != null) endOf[u.id] = u.startDay + u.durDays + (u.riskDays || 0);
+        release(u);
+        return;
+      }
+      var guard = 0;
+      while (guard < HORIZON * S) {
+        if (!RM.offDay(meta, s, ledger.set) && ledger.fits(u, s, dur)) break;
+        s += 1; dur = RM.stretchSpan(meta, s, work); guard += 1;
+      }
+      if (RM.applyUnitPlacement(state, u, s, dur)) out.changed += 1;
+      touchedItems[u.itemId] = true;
+      ledger.book(u, s, dur, 1);
+      var e2 = s + dur + (u.storyId ? 0 : RM.stretchSpan(meta, s + dur, RM.riskEffortDays(state, RM.itemById(state, u.itemId))));
+      endOf[u.id] = e2;
+      if (e2 > maxDay) maxDay = e2;
+      release(u);
+    }
+    var guard2 = 0;
+    while ((ready.length || remaining.length) && guard2 < 10000) {
+      guard2 += 1;
+      if (!ready.length) {
+        remaining.sort(prio);
+        var forced = remaining.shift();
+        notes.push('#' + RM.itemById(state, forced.itemId).num + ' is in a dependency cycle; placed by row order.');
+        pending[forced.id] = 0;
+        ready.push(forced);
+      }
+      place(ready.shift());
+    }
+    if (RM.planLevel(state) === 'story') out.changed += RM.rebuildHulls(state, Object.keys(touchedItems));
+    var neededWeeks = Math.ceil(maxDay / S);
+    if (neededWeeks > meta.numWeeks) {
+      meta.numWeeks = neededWeeks;
+      RM.syncEndDate(meta);
+      notes.push('Timeline extended to ' + neededWeeks + ' weeks to fit the schedule.');
+    }
+    return out;
+  };
+
+  // one unit at its earliest dependency- and capacity-valid slot, everything
+  // else fixed (its own booking is released first). Any phase.
+  RM.placeUnit = function (inputState, itemId, storyId, opts) {
+    opts = opts || {};
+    var state = RM.clone(inputState);
+    var meta = state.meta;
+    var res = { state: state, changed: 0, note: null };
+    var it = RM.itemById(state, itemId);
+    if (!it) return res;
+    var uid = storyId ? 's:' + storyId : 'i:' + it.id;
+    var units = RM.capUnits(state);
+    var u = units.filter(function (x) { return x.id === uid; })[0];
+    if (!u) return res;
+    var HORIZON = meta.numWeeks + 104;
+    var S = RM.slotsOf(meta);
+    var ledger = capLedger(state, HORIZON);
+    var byId = {};
+    units.forEach(function (x) { byId[x.id] = x; if (x.id !== uid && !x.done && x.startDay != null && x.durDays != null) ledger.book(x, x.startDay, x.durDays, 1); });
+    var today = opts.today != null ? opts.today : RM.todayDay(meta);
+    var est = today;
+    u.deps.forEach(function (d) {
+      var du = byId[d];
+      if (!du || du.startDay == null || du.durDays == null) return;
+      var e = du.startDay + du.durDays + (du.riskDays || 0);
+      if (e > est) est = e;
+    });
+    if (u.milestone) {
+      if (RM.applyUnitPlacement(state, u, est, 0)) res.changed = 1;
+      return res;
+    }
+    var work = RM.unitWorkDays(state, u);
+    var s = est, dur = RM.stretchSpan(meta, s, work);
+    if (ledger.constrained(u) && RM.unitWeekDemand(state, u, s, dur) > ledger.peak(u.capType) + 1e-9) {
+      res.note = 'Asks more ' + u.capType + ' in a week than the roster can ever give, so it never fits — left unchanged.';
+      return res;
+    }
+    var guard = 0;
+    while (guard < HORIZON * S) {
+      if (!RM.offDay(meta, s, ledger.set) && ledger.fits(u, s, dur)) break;
+      s += 1; dur = RM.stretchSpan(meta, s, work); guard += 1;
+    }
+    if (RM.applyUnitPlacement(state, u, s, dur)) res.changed = 1;
+    if (storyId && RM.planLevel(state) === 'story') RM.rebuildHulls(state, [it.id]);
+    var end = s + dur;
+    var need = Math.ceil(end / S);
+    if (need > meta.numWeeks) { meta.numWeeks = need; RM.syncEndDate(meta); }
+    return res;
+  };
+
   // Ripple move: cascade the dragged item's end-change through its dependents
   // ITERATIVELY. The dragged item has already been moved by the caller.
   // Forward (delta > 0): each dependent is pushed only as far as its deps'

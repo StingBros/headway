@@ -258,6 +258,153 @@ ok(RM.removeCapType(sCT, 'UX'), 'removeCapType reports the removal');
 eq(sCT.items[0].capType, '', 'a feature capType is cleared on removal');
 eq(RM.normalizeState(sCT).capTypes.indexOf('UX'), -1, 'renormalizing does not resurrect the removed type');
 
+// ------------------------------------------------------------- auto timeline
+section('autoTimeline');
+function autoMeta(extra) {
+  var m = JSON.parse(JSON.stringify(META));
+  m.holidays = []; m.capacityEnabled = true;
+  if (extra) Object.keys(extra).forEach(function (k) { m[k] = extra[k]; });
+  return m;
+}
+function autoState(items, team, extraMeta, phases) {
+  return mkState(items, { meta: autoMeta(extraMeta), team: team || [],
+    phases: phases || [{ id: 'p1', name: 'Alpha', bucket: false, auto: true }, { id: 'p2', name: 'Later', bucket: false, auto: false }, { id: 'p3', name: 'Next', bucket: true }] });
+}
+function byNum(st) { var o = {}; st.items.forEach(function (it) { o[it.num] = it; }); return o; }
+// feature level, person mode, one Development head: three features serialize, deps hold
+var sT = autoState([
+  { num: 1, feature: 'a', phaseId: 'p1', durDays: 5, capType: 'Development' },
+  { num: 2, feature: 'b', phaseId: 'p1', durDays: 5, capType: 'Development', deps: [1] },
+  { num: 3, feature: 'c', phaseId: 'p1', durDays: 5, capType: 'Development' },
+  { num: 8, feature: 'other phase', phaseId: 'p2', startDay: 40, durDays: 5, capType: 'Development' },
+  { num: 9, feature: 'parked', phaseId: 'p3', durDays: 5 }
+], [{ name: 'Solo', capType: 'Development' }]);
+var rT = RM.autoTimeline(sT, { today: 0 });
+var T = byNum(rT.state);
+eq(T[1].startDay, 0, 'first unit starts today');
+eq(T[3].startDay, 5, 'third slides to week 1 (cap 1)');
+eq(T[2].startDay, 10, 'dependent lands after its dep and after the busy week');
+eq(T[8].startDay, 40, 'non-auto phase untouched');
+ok(T[9].startDay == null, 'bucket untouched');
+ok(!RM.capacity(rT.state).weeks.some(function (c) { return c.over; }), 'never overallocates');
+eq(RM.autoTimeline(sT, { today: 0, phaseIds: [] }).changed, 0, 'no target phases → nothing changes');
+var sOff = autoState([{ num: 1, feature: 'a', phaseId: 'p1', durDays: 5 }], [], { capacityEnabled: false });
+eq(RM.autoTimeline(sOff, { today: 0 }).changed, 0, 'capacity off → nothing changes');
+// cap 2: two run together, third waits
+var s2 = autoState([
+  { num: 1, feature: 'a', phaseId: 'p1', durDays: 5, capType: 'Development' },
+  { num: 2, feature: 'b', phaseId: 'p1', durDays: 5, capType: 'Development' },
+  { num: 3, feature: 'c', phaseId: 'p1', durDays: 5, capType: 'Development' }
+], [{ name: 'X', capType: 'Development' }, { name: 'Y', capType: 'Development' }]);
+var R2 = byNum(RM.autoTimeline(s2, { today: 0 }).state);
+ok(R2[1].startDay === 0 && R2[2].startDay === 0 && R2[3].startDay === 5, 'cap 2 lets two run at once');
+// locked pre-books; unlocked flows around; untyped is dependency-only
+var sLk = autoState([
+  { num: 1, feature: 'rock', phaseId: 'p1', startDay: 5, durDays: 5, locked: true, capType: 'Development' },
+  { num: 2, feature: 'water', phaseId: 'p1', durDays: 10, capType: 'Development' },
+  { num: 3, feature: 'free', phaseId: 'p1', durDays: 5, capType: '' }
+], [{ name: 'Solo', capType: 'Development' }]);
+var Lk = byNum(RM.autoTimeline(sLk, { today: 0 }).state);
+eq(Lk[1].startDay, 5, 'locked stays');
+eq(Lk[2].startDay, 10, 'a 2-week unit cannot straddle the locked week, so it waits');
+eq(Lk[3].startDay, 0, 'untyped work is placed by dependencies only');
+// milestones: dependency-free stays; with deps lands at the dep end
+var sMs = autoState([
+  { num: 1, feature: 'work', phaseId: 'p1', durDays: 5, capType: 'Development' },
+  { num: 2, feature: 'gate', phaseId: 'p1', milestone: true, startDay: 30, durDays: 0, deps: [1] },
+  { num: 3, feature: 'fixed date', phaseId: 'p1', milestone: true, startDay: 30, durDays: 0 },
+  { num: 4, feature: 'after gate', phaseId: 'p1', durDays: 5, capType: 'Development', deps: [2] }
+], [{ name: 'Solo', capType: 'Development' }]);
+var Ms = byNum(RM.autoTimeline(sMs, { today: 0 }).state);
+eq(Ms[2].startDay, 5, 'milestone with deps moves to the dep end');
+eq(Ms[3].startDay, 30, 'dependency-free milestone stays');
+eq(Ms[4].startDay, 5, 'dependents may start on the milestone day');
+// floor: started work keeps its start; future work may move earlier
+var sFl = autoState([
+  { num: 1, feature: 'in progress', phaseId: 'p1', startDay: 2, durDays: 5, capType: 'Development' },
+  { num: 2, feature: 'far future', phaseId: 'p1', startDay: 60, durDays: 5, capType: 'Development' }
+], [{ name: 'X', capType: 'Development' }, { name: 'Y', capType: 'Development' }]);
+var Fl = byNum(RM.autoTimeline(sFl, { today: 4 }).state);
+eq(Fl[1].startDay, 2, 'started work keeps its start');
+eq(Fl[2].startDay, 4, 'future work pulls in to today');
+// holidays stretch, working days preserved
+var sHo = autoState([
+  // unscheduled, 10 working days of effort; the floor (today) is day 75
+  { num: 1, feature: 'spanner', phaseId: 'p1', durDays: 10, capType: 'Development' }
+], [{ name: 'Solo', capType: 'Development' }], { holidays: META.holidays });
+var rHo = RM.autoTimeline(sHo, { today: 75 });
+var Ho = byNum(rHo.state);
+eq(Ho[1].startDay, 75, 'starts at the floor');
+eq(Ho[1].durDays, 20, '10 working days stretch over two blackout weeks');
+eq(RM.workInSpan(rHo.state.meta, Ho[1].startDay, Ho[1].durDays), 10, 'net work preserved');
+// infeasible: demand above peak supply stays put with a note
+var sInf = autoState([
+  { num: 1, feature: 'crowd', phaseId: 'p1', startDay: 10, durDays: 5, capType: 'Development', capMult: 3 }
+], [{ name: 'X', capType: 'Development' }]);
+var rInf = RM.autoTimeline(sInf, { today: 0 });
+eq(byNum(rInf.state)[1].startDay, 10, 'infeasible unit keeps its start');
+ok(rInf.notes.length === 1 && /never/.test(rInf.notes[0]), 'and explains itself');
+// story level: stories move, feature bar becomes their hull
+var sSt = autoState([
+  { num: 1, feature: 'f', phaseId: 'p1', startDay: 0, durDays: 40, capType: 'Development', stories: [
+    { num: 101, title: 'a', durDays: 5, capType: 'Development' },
+    { num: 102, title: 'b', durDays: 5, capType: 'Development', deps: [101] },
+    { num: 103, title: 'c', durDays: 5, capType: 'Development' }
+  ] },
+  { num: 2, feature: 'g', phaseId: 'p1', capType: 'Development', deps: [1], stories: [{ num: 201, title: 'd', durDays: 5, capType: 'Development' }] }
+], [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
+var rSt = RM.autoTimeline(sSt, { today: 0 });
+var St = byNum(rSt.state);
+var sts = {}; St[1].stories.forEach(function (s) { sts[s.num] = s; });
+eq(sts[101].startDay, 0, 'story a first');
+eq(sts[103].startDay, 5, 'story c waits for capacity');
+eq(sts[102].startDay, 10, 'story b after a and after c took week 1');
+eq(St[1].startDay, 0, 'feature hull start');
+eq(St[1].durDays, 15, 'feature hull spans its stories');
+eq(St[2].stories[0].startDay, 15, 'feature dep expands to every story of the dependency');
+ok(rSt.state.items.every(function (it) { return it.stories.every(function (s) { return s.startDay != null; }); }), 'every story placed');
+// points mode
+var sPm = autoState([
+  { num: 1, feature: 'ten', phaseId: 'p1', durDays: 5, size: 10, capType: 'Development' },
+  { num: 2, feature: 'six', phaseId: 'p1', durDays: 5, size: 6, capType: 'Development' }
+], [{ name: 'X', capType: 'Development', points: 20 }], { capMode: 'points', sizeScheme: 'points' });
+var Pm = byNum(RM.autoTimeline(sPm, { today: 0 }).state);
+ok(Pm[1].startDay === 0 && Pm[2].startDay === 5, '10 + 6 points in one week exceed 10 per week (20 per 2-week sprint) → serialized');
+// cycles do not hang
+var sCy2 = autoState([
+  { num: 1, feature: 'a', phaseId: 'p1', durDays: 5, deps: [2], capType: 'Development' },
+  { num: 2, feature: 'b', phaseId: 'p1', durDays: 5, deps: [1], capType: 'Development' }
+], [{ name: 'Solo', capType: 'Development' }]);
+var rCy2 = RM.autoTimeline(sCy2, { today: 0 });
+ok(rCy2.state.items.every(function (it) { return it.startDay != null; }) && rCy2.notes.some(function (n) { return /cycle/.test(n); }), 'cycle members placed, note added');
+// horizon grows
+var sHz = autoState([{ num: 1, feature: 'late', phaseId: 'p1', startDay: 48 * 5 + 5, durDays: 5, capType: 'Development' }], [{ name: 'Solo', capType: 'Development' }]);
+ok(RM.autoTimeline(sHz, { today: 48 * 5 + 5 }).state.meta.numWeeks >= 50, 'timeline extends to fit');
+
+// placeUnit
+section('placeUnit');
+var sPl = autoState([
+  { num: 1, feature: 'base', phaseId: 'p2', startDay: 0, durDays: 10, capType: 'Development' },
+  { num: 2, feature: 'placeme', phaseId: 'p2', deps: [1], startDay: 0, durDays: 5, capType: 'Development' }
+], [{ name: 'Solo', capType: 'Development' }]);
+var rPl = RM.placeUnit(sPl, sPl.items[1].id, null, { today: 0 });
+eq(RM.itemByNum(rPl.state, 2).startDay, 10, 'placeUnit lands right after its dep, in a non-auto phase');
+eq(rPl.changed, 1, 'one change');
+var rPl2 = RM.placeUnit(rPl.state, sPl.items[1].id, null, { today: 0 });
+eq(rPl2.changed, 0, 'already there → no change (its own booking is released first)');
+var sPlS = autoState([
+  { num: 1, feature: 'f', phaseId: 'p2', startDay: 0, durDays: 10, stories: [
+    { num: 101, title: 'a', startDay: 0, durDays: 5, capType: 'Development' },
+    { num: 102, title: 'b', startDay: 0, durDays: 5, capType: 'Development' }
+  ] }
+], [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
+var rPlS = RM.placeUnit(sPlS, sPlS.items[0].id, sPlS.items[0].stories[1].id, { today: 0 });
+eq(RM.itemByNum(rPlS.state, 1).stories[1].startDay, 5, 'a story places after the week its sibling fills');
+var rPlI = RM.placeUnit(autoState([{ num: 1, feature: 'crowd', phaseId: 'p2', startDay: 10, durDays: 5, capType: 'Development', capMult: 3 }], [{ name: 'X', capType: 'Development' }]), null, null, { today: 0 });
+eq(rPlI.changed, 0, 'missing item → no change');
+eq(RM.todayDay(META, new Date(Date.UTC(2026, 6, 20))), 0, 'today before the timeline clamps to 0');
+eq(RM.todayDay(META, new Date(Date.UTC(2026, 7, 4))), 6, 'today maps to its working-day index');
+
 // ------------------------------------------------------------- regressions (adversarial review)
 section('regressions');
 // total calendar helpers

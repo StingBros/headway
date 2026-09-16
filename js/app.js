@@ -5369,7 +5369,7 @@
       return;
     }
     if (f === 'snap') {
-      var r = RM.snapEarliest(state, it.id);
+      var r = RM.placeUnit(state, it.id, null);
       if (r.changed) {
         if (autoOrder) RM.sortItemsByStart(r.state);
         replaceState('snap', r.state);
