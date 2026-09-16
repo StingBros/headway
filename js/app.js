@@ -10026,36 +10026,47 @@
             (onDay ? ' checked' : '') + '> ' + dn.slice(0, 3) + '</label>';
         }).join('') + '</div></div>' +
         '<div class="m-hint">Defines what one full-time person means — the schedule plans across exactly the days checked (1–7); bars keep their calendar dates when this changes.</div>' +
+        '</section>',
+      capacity:
+        '<section class="su-card"><h2>Capacity planning</h2>' +
+        '<label class="p-check" title="The roster limits scheduling and validation; shows the capacity row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Enable capacity planning</label>' +
+        '<div class="m-hint">People, their capacity type and weekly hours live in the Resources panel under the timeline. Auto timeline (per phase) and Place at earliest slot need this on.</div>' +
+        '</section>' +
+        '<section class="su-card"><h2>Planning level</h2><div class="su-schemes">' +
+        [['feature', esc(lvl('feature', true)), 'Capacity follows the ' + esc(lvl('feature', true).toLowerCase()) + ' and their capacity type; ' + esc(lvl('story', true).toLowerCase()) + ' need no details'],
+         ['story', esc(lvl('story', true)), esc(lvl('feature')) + ' bars become the hull of their ' + esc(lvl('story', true).toLowerCase()) + ' \u2014 work is planned on the ' + esc(lvl('story', true).toLowerCase()) + ' and their capacity types']].map(function (o) {
+          var on = RM.planLevel(state) === o[0];
+          return '<button class="su-scheme' + (on ? ' on' : '') + '" data-suplan="' + o[0] + '">' +
+            '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
+            '<span class="su-scheme-main"><b>' + o[1] + '</b><span>' + o[2] + '</span></span></button>';
+        }).join('') + '</div></section>' +
+        '<section class="su-card"><h2>Demand</h2><div class="su-schemes">' +
+        [['person', 'Per person', 'A unit in flight uses one person of its capacity type, times its multiplier'],
+         ['points', 'Story points', 'A unit\u2019s points spread over its weeks; each person supplies points per sprint']].map(function (o) {
+          var on = (m.capMode || 'person') === o[0];
+          return '<button class="su-scheme' + (on ? ' on' : '') + '" data-sucapmode="' + o[0] + '">' +
+            '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
+            '<span class="su-scheme-main"><b>' + o[1] + '</b><span>' + o[2] + '</span></span></button>';
+        }).join('') + '</div>' +
+        (m.capMode === 'points'
+          ? '<div style="margin-top:10px"><label class="p-lab">Default points per person per sprint</label>' +
+            '<input type="number" id="suDefPoints" min="0" step="1" value="' + m.defaultPoints + '" style="width:140px">' +
+            '<div class="m-hint">Each person can override this in the Resources panel. With sprints off, points are per two weeks.</div></div>'
+          : '') +
         '</section>' +
         '<section class="su-card"><h2>Capacity types</h2>' +
         '<div class="su-rows" data-sulist="captype">' + capTypeRows + '</div>' +
         '<div class="p-row" style="margin-top:8px"><input id="suCapTypeAdd" placeholder="New capacity type, e.g. Data"><button id="suCapTypeAddBtn" class="fixed">Add</button></div>' +
         '<div class="m-hint">A ' + esc(lvl('story').toLowerCase()) + '\u2019s capacity type says what it drains and who can take it; a person\u2019s says what they supply. Drag the grips to reorder.</div>' +
         '</section>' +
-        '<section class="su-card"><h2>Capacity</h2>' +
-        '<label class="p-check" title="Roster limits scheduling and validation; shows the availability row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Enable capacity planning</label>' +
-        '<div class="m-hint">People and their weekly hours live in the Resources panel under the timeline.</div>' +
-        '<label class="p-lab" style="margin-top:12px">Planning level</label>' +
-        '<div class="su-schemes">' +
-        [['feature', esc(lvl('feature', true)), 'Capacity follows the ' + esc(lvl('feature', true).toLowerCase()) + '; ' + esc(lvl('story', true).toLowerCase()) + ' need no details'],
-         ['story', esc(lvl('story', true)), esc(lvl('feature')) + ' weights and durations are ignored \u2014 work is planned on the ' + esc(lvl('story', true).toLowerCase()) + ' and their capacity types']].map(function (o) {
-          var on = RM.planLevel(state) === o[0];
-          return '<button class="su-scheme' + (on ? ' on' : '') + '" data-suplan="' + o[0] + '">' +
-            '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
-            '<span class="su-scheme-main"><b>' + o[1] + '</b><span>' + o[2] + '</span></span></button>';
+        '<section class="su-card"><h2>Capacity row</h2>' +
+        '<label class="p-check"><input type="radio" name="suCapRow" id="suCapRowAll"' + (m.capRowTypes === 'all' ? ' checked' : '') + '> All capacity types</label>' +
+        '<label class="p-check"><input type="radio" name="suCapRow" id="suCapRowSome"' + (m.capRowTypes !== 'all' ? ' checked' : '') + '> Only these:</label>' +
+        '<div style="margin-left:22px">' + RM.capTypesOf(state).map(function (t) {
+          var on = m.capRowTypes !== 'all' && m.capRowTypes.indexOf(t) !== -1;
+          return '<label class="p-check"><input type="checkbox" data-sucaprow="' + esc(t) + '"' + (on ? ' checked' : '') + (m.capRowTypes === 'all' ? ' disabled' : '') + '> ' + esc(t) + '</label>';
         }).join('') + '</div>' +
-        '<label class="p-lab" style="margin-top:12px">Capacity row total</label>' +
-        '<div class="p-grid2">' +
-        '<div><label class="p-lab">Count</label><select id="suCapBasis" style="width:100%">' +
-        '<option value="features"' + (m.capBasis !== 'stories' ? ' selected' : '') + '>' + esc(lvl('feature', true)) + '</option>' +
-        '<option value="stories"' + (m.capBasis === 'stories' ? ' selected' : '') + '>' + esc(lvl('story', true)) + '</option></select></div>' +
-        '<div><label class="p-lab">In</label><select id="suCapUnit" style="width:100%">' +
-        '<option value="count"' + (m.capUnit !== 'points' ? ' selected' : '') + '>Item counts</option>' +
-        '<option value="points"' + (m.capUnit === 'points' ? ' selected' : '') + '>Points</option></select></div>' +
-        '</div>' +
-        '<div style="margin-top:8px"><label class="p-lab">Weekly limit (colors the row)</label>' +
-        '<input type="number" id="suCapLimit" min="0" step="1" value="' + (m.capLimit != null ? m.capLimit : '') + '" placeholder="none" style="width:140px"></div>' +
-        '<div class="m-hint">The row shows each week\u2019s total in flight. With a limit, weeks past it turn red and weeks near it amber; without one, colors follow the roster\u2019s availability.</div>' +
+        '<div class="m-hint">The row under the header shows each week\u2019s demand against what the roster supplies for these types.</div>' +
         '</section>',
       columns: (function () {
         var offNotes = [];
@@ -10170,6 +10181,7 @@
       ['phases', 'Phases', 'flag'],
       ['workstreams', 'Workstreams', 'layers'],
       ['team', 'Team', 'users'],
+      ['capacity', 'Capacity', 'gauge'],
       ['columns', 'Columns', 'columns-3'],
       ['sizing', 'Sizing', 'ruler'],
       ['jira', 'Jira', 'link']
@@ -10283,14 +10295,25 @@
       commit('rename capacity type', function (s2) { RM.renameCapType(s2, oldCap, newCap); });
       return;
     }
-    if (t.id === 'suCapBasis' || t.id === 'suCapUnit') {
-      var capV = t.value, capK = t.id === 'suCapBasis' ? 'capBasis' : 'capUnit';
-      commit('capacity row', function (s2) { s2.meta[capK] = capV; });
+    if (t.id === 'suDefPoints') {
+      var dp = parseFloat(t.value);
+      if (!isFinite(dp) || dp < 0) { render(); return; }
+      commit('default points', function (s2) { s2.meta.defaultPoints = dp; });
       return;
     }
-    if (t.id === 'suCapLimit') {
-      var limV = parseFloat(t.value);
-      commit('capacity limit', function (s2) { s2.meta.capLimit = isFinite(limV) && limV > 0 ? limV : null; });
+    if (t.id === 'suCapRowAll' || t.id === 'suCapRowSome') {
+      var all = t.id === 'suCapRowAll';
+      commit('capacity row types', function (s2) { s2.meta.capRowTypes = all ? 'all' : (Array.isArray(s2.meta.capRowTypes) ? s2.meta.capRowTypes : []); });
+      return;
+    }
+    if (t.dataset.sucaprow != null) {
+      var rt = t.dataset.sucaprow, rtOn = t.checked;
+      commit('capacity row types', function (s2) {
+        var list = Array.isArray(s2.meta.capRowTypes) ? s2.meta.capRowTypes.slice() : [];
+        list = list.filter(function (x) { return x !== rt; });
+        if (rtOn) list.push(rt);
+        s2.meta.capRowTypes = list;
+      });
       return;
     }
     if (t.dataset.rcname != null) {
@@ -10482,6 +10505,12 @@
       var planV = t.dataset.suplan;
       if (planV === RM.planLevel(state)) return;
       commit('planning level', function (s2) { s2.meta.planLevel = planV; });
+      return;
+    }
+    if (t.dataset.sucapmode) {
+      var cmV = t.dataset.sucapmode;
+      commit('capacity mode', function (s2) { s2.meta.capMode = cmV; });
+      toast('Demand: ' + (cmV === 'points' ? 'story points' : 'per person'));
       return;
     }
     if (t.id === 'suCapTypeAddBtn') {

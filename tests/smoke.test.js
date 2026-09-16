@@ -525,11 +525,11 @@ click(doc.querySelector('#resManage'));
 ok(doc.body.dataset.view === 'setup', 'resources "manage" jumps to the Setup view');
 ok(doc.querySelector('#setupView [data-sutab="team"]').classList.contains('on'),
   'resources "manage" lands on the Team tab');
-ok(doc.querySelectorAll('#setupView .su-tab').length === 11 &&
+ok(doc.querySelectorAll('#setupView .su-tab').length === 12 &&
   doc.querySelectorAll('#setupView .su-rail-hd').length === 2,
-  'settings rail: 10 vertical tabs under Project + Personal sections');
-ok(doc.querySelectorAll('#setupView .su-card').length === 4 && !!doc.querySelector('#suCapEnable'),
-  'Team tab shows roles + work week + capacity types + capacity');
+  'settings rail: 11 vertical tabs under Project + Personal sections');
+ok(doc.querySelectorAll('#setupView .su-card').length === 2 && !doc.querySelector('#suCapEnable'),
+  'Team tab keeps roles and the work week only');
 ok(/Roles/.test(doc.querySelector('#setupView .su-card h2').textContent), 'team types renamed to Roles');
 ok(!!doc.querySelector('#setupView [data-rcrate]') && !!doc.querySelector('#setupView [data-rccost]'),
   'rate card inputs per role');
@@ -1286,7 +1286,7 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
 // ---------------------------------------------------------------- capacity feature switch (Setup)
 {
   window.eval("document.querySelector('#btnSetup').click()");
-  suTab('team'); // the capacity switch lives on the Team tab
+  suTab('capacity'); // the capacity switch lives on the Capacity tab
   const capChk = doc.querySelector('#suCapEnable');
   ok(capChk && capChk.checked, 'Setup capacity checkbox reflects the enabled fixture');
   capChk.checked = false;
@@ -3847,11 +3847,11 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   const menuBtns = () => [...doc.querySelectorAll('#popover .menu-list button')];
   ok(state().capTypes.slice(0, 3).join(',') === 'Development,Design,QA', 'a document starts with the default capacity types');
-  // Setup → Team: capacity types list (rename / add / remove / reorder) + planning level + capacity row options
+  // Setup → Capacity: capacity types list (rename / add / remove / reorder) + planning level + capacity row options
   click(doc.querySelector('#btnSetup'));
-  suTab('team');
+  suTab('capacity');
   ok(doc.querySelectorAll('#setupView [data-sulist="captype"] .su-row').length === state().capTypes.length &&
-    !!doc.querySelector('#setupView [data-sulist="captype"] .su-grip'), 'the Team tab lists the capacity types with reorder grips');
+    !!doc.querySelector('#setupView [data-sulist="captype"] .su-grip'), 'the Capacity tab lists the capacity types with reorder grips');
   doc.querySelector('#suCapTypeAdd').value = 'Research';
   click(doc.querySelector('#suCapTypeAddBtn'));
   ok(state().capTypes.indexOf('Research') !== -1, 'a capacity type can be added');
@@ -3866,7 +3866,24 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   click(doc.querySelector('#setupView [data-suplan="story"]'));
   ok(state().meta.planLevel === 'story' && window.RM.planLevel(state()) === 'story', 'picking Stories sets the planning level');
   undo();
-  ok(!!doc.querySelector('#suCapBasis') && !!doc.querySelector('#suCapUnit') && !!doc.querySelector('#suCapLimit'), 'the capacity row can count features or stories, in points or counts, against a limit');
+  // Setup → Capacity tab
+  window.HeadwayApp.openSetup ? window.HeadwayApp.openSetup('capacity') : window.HeadwayApp.ai.openSetup('capacity');
+  ok(!!doc.querySelector('#suCapEnable') && !!doc.querySelector('[data-sucapmode="points"]'), 'the Capacity tab carries the enable switch and the demand picker');
+  ok(!doc.querySelector('#suCapLimit') && !doc.querySelector('#suCapBasis'), 'the weekly limit and row basis controls are gone');
+  ok(!doc.querySelector('#suDefPoints'), 'per-person demand hides the default-points input');
+  click(doc.querySelector('#setupView [data-sucapmode="points"]'));
+  ok(state().meta.capMode === 'points' && !!doc.querySelector('#suDefPoints'), 'picking story points switches the demand model and reveals the default points');
+  click(doc.querySelector('#setupView [data-sucapmode="person"]'));
+  ok(state().meta.capMode === 'person', 'and back to per person');
+  // capacity row types: All → Only these, then tick one type
+  doc.querySelector('#suCapRowSome').checked = true;
+  doc.querySelector('#suCapRowSome').dispatchEvent(new window.Event('change', { bubbles: true }));
+  const rowChk = doc.querySelector('#setupView [data-sucaprow="Design"]');
+  rowChk.checked = true;
+  rowChk.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(Array.isArray(state().meta.capRowTypes) && state().meta.capRowTypes.indexOf('Design') !== -1,
+    'ticking a capacity type under “Only these” stores it in capRowTypes');
+  undo(); undo(); undo(); undo();
   // people and stories carry a capacity type; assignability follows it
   const person = state().team[0], person2 = state().team[1];
   window.HeadwayApp.ai.commit('cap types', (s) => {
