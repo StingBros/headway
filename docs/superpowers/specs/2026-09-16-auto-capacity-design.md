@@ -57,9 +57,12 @@ supply instead of counts.
 | `capType` | string, `''` = untyped | new; used at Features level only |
 | `capMult` | number > 0, default 1 | new; Features level, person mode |
 
-A new feature gets `capType` = the document's first capacity type
-("Development" by default) so the default document already plans against
-Development at Features level. Milestones carry no capacity fields.
+A non-milestone feature always carries a type: `normalizeState` defaults a
+blank `capType` to the document's first capacity type ("Development" by
+default) on every ingress path (new features, opened documents, imports, AI),
+so the default document already plans against Development at Features level.
+The feature dropdown therefore has no "general" entry; stories keep theirs.
+Milestones carry no capacity fields.
 
 Effective feature type at Features level (`RM.itemCapType(state, it)`): if the
 feature has stories and every typed story shares one type, that type;
@@ -140,11 +143,14 @@ type, e.g. "Design: 2 people asked, 1 available (week of Nov 16)".
 ### The capacity row
 
 `RM.capacity(state)` returns per week `{ demand, supply, over, blackout,
-byType: { T: { demand, supply } } }` where `demand`/`supply` aggregate the
-types in `meta.capRowTypes` (all supplied types when `'all'`; untyped units
-count under `'all'` only, with no supply). The cell reads `d / s` (people or
-points, one decimal), red when any selected type is over, amber above 85 %,
-idle when 0. The row tooltip lists each selected type's `d / s`. The
+byType: { T: { demand, supply } }, items }` where `supply` sums the selected
+types and `demand` counts only work whose type the roster supplies (untyped
+and unsupplied work stays visible in `byType` and `items` but never marks
+`over`, since nothing can answer it). `meta.capRowTypes` is `'all'` or a list;
+choosing "Only these" starts from the currently supplied types, and renaming
+or removing a capacity type carries through the list. The cell reads `d / s`
+(people or points, one decimal), red when any selected type is over or when a
+selected type has demand and no supply, amber above 85 %, idle when 0. The row tooltip lists each selected type's `d / s`. The
 resources panel hint changes to say the limit comes from the roster.
 
 ## 3. Scheduler
@@ -183,8 +189,13 @@ off or no phase qualifies.
 ### `RM.placeUnit(state, itemId, storyId|null) → { state, changed, note }`
 
 The single-unit action. Same ledger with everything else fixed; the unit's
-own current booking is released first. `floor` = today. Works in any phase,
-Auto or not, as long as capacity planning is on. Replaces `RM.snapEarliest`.
+own current booking is released first. `floor` = today for work; a milestone
+with dependencies lands at their end, and one without is left alone with a
+note. At Stories level a feature with stories places each of its not-done,
+not-locked stories in row order (each booked before the next) and rebuilds
+the hull; hull changes count in `changed`. Locked or done targets are never
+moved. Works in any phase, Auto or not, as long as capacity planning is on.
+Replaces `RM.snapEarliest` (the panel's "Snap earliest" button now calls it).
 
 ### `RM.autoSchedule`
 
@@ -196,9 +207,10 @@ Removed, along with the Auto-schedule dialog.
 
 - **On document load** (every path that installs a new state: open, import,
   reload, option switch, history restore): if `autoOrder`, sort; then run
-  `RM.autoTimeline`. If anything changed, replace state silently under the
-  history label `auto` and mark the document dirty. A toast reports
-  "Auto timeline moved N item(s)".
+  `RM.autoTimeline`. If anything changed, replace state under the history
+  label `auto`, clear undo, and mark the document unsaved. A toast reports
+  "Auto timeline moved N item(s)", or "Rows auto-ordered" when only the row
+  order changed, so the unsaved state is never silent.
 - **After every commit / replaceState** while any phase is Auto: run
   `RM.autoTimeline` on the new state inside the same history entry, then the
   auto-order sort. No toast (it would fire on every keystroke); the moved
@@ -224,8 +236,10 @@ Removed, along with the Auto-schedule dialog.
 
 Feature rows, story rows (Planning / Scoping left pane and bars) gain
 "Place at earliest slot" (icon `zap`) when capacity planning is on. Locked
-or done items show it disabled. Runs `RM.placeUnit`, commits with label
-`place`, toasts the note when nothing could move.
+or done items (and done stories) show it disabled. Runs `RM.placeUnit`; when
+anything moved it re-sorts under auto-order, commits with label `place` and
+toasts the success (appending the note for partial placements); otherwise it
+toasts the note as an error, or "Already at its earliest slot".
 
 ### View menu
 
@@ -242,7 +256,11 @@ With capacity planning on, in the Planning view:
   (`.r-mult`) that opens a small inline number input (same pattern as the duration chip) —
   hidden when N is 1 unless hovered.
 - Feature rows at Features level: the same two chips, driving `item.capType`
-  / `item.capMult`. Hidden at Stories level.
+  / `item.capMult`. When every typed story shares one type the feature's type
+  is inherited: the chip and panel label render dimmed with an "inherited from
+  its stories" title and the dropdown says so; a pick still writes
+  `item.capType`, which applies once the stories disagree. Hidden at Stories
+  level.
 
 Both columns are added to the planning column set (`plColOrder` /
 `plColHide`) so they can be hidden like the other chips.
@@ -276,18 +294,20 @@ person mode.
 ### Sticky group bands
 
 `.row.eband` becomes `position: sticky; top: calc(var(--hdr-h) +
-var(--band-real-h)); z-index: 13` with an opaque `var(--paper-2)` background
-on both cells; `.row.eband.sub` sits one band lower
-(`+ var(--eband-real-h)`). Lane grid lines are drawn on the sticky cell
-background so they still align. The next band of the same level slides over
+var(--band-real-h)); z-index: 13` with an opaque `var(--paper-2)` left cell
+and `var(--paper)` lane; `.row.eband.sub` sits one band lower
+(`+ var(--eband-real-h)`). The lane draws sprint-boundary lines from
+`--sprint-px` / `--sprint-off` (published by `renderBgCols`) so they align
+with the board; the Scoping view drops them. The next band of the same level slides over
 the stuck one, exactly as phase bands do.
 
 ## 5. Excel / exports / AI
 
 - `js/excel.js`: hidden JSON carries the new fields automatically. The
-  visible Stories sheet gains a "Capacity type" and "Multiplier" column;
-  the Team sheet gains "Points". `reconcileVisibleEdits` reads them back.
-- `js/export-png.js`: the capacity row renders the new `d / s` text.
+  visible Stories sheet gains "Capacity type" and "Multiplier" columns and
+  the Team sheet "Points per sprint". On tool files these are export-only
+  (the hidden JSON wins, as for every field except story title and done);
+  the template path reads Points back.
 - `js/ai.js`: the state summary lists the demand mode and each phase's auto
   flag; the tool schema drops `capLimit`.
 
