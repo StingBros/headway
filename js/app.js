@@ -6296,6 +6296,7 @@
             if (st) { st.startDay = null; st.durDays = null; }
           });
         } } : null,
+        placeEntry(stmItemId, stmId),
         { icon: RM.typeOf(state, stm, 'story').icon, label: 'Type: ' + esc(RM.typeOf(state, stm, 'story').label) + '…', fn: function () {
           openContextMenu(cx, cy, typeMenuItems('story', stm.type, function (k) { setStoryType(stmItemId, stmId, k); }));
         } },
@@ -6328,6 +6329,7 @@
         { icon: 'plus', label: 'New phase…', fn: function () { phaseModal(null); } },
         { sep: true },
         { icon: 'folder-input', label: 'Move to phase…', fn: function () { openContextMenu(cx, cy, movePhaseMenu(itemId)); } },
+        placeEntry(itemId, null),
         { icon: 'tag', label: 'Set epic…', fn: function () { openContextMenu(cx, cy, setEpicMenu(itemId, false)); } },
         { icon: RM.typeOf(state, it, 'feature').icon, label: 'Type: ' + esc(RM.typeOf(state, it, 'feature').label) + '…', fn: function () {
           openContextMenu(cx, cy, typeMenuItems('feature', it.type, function (k) { setItemType(itemId, k); }));
@@ -6768,6 +6770,19 @@
         $('[data-m=ok]', host).onclick = function () { var r = ta.value; closeModal(); setFlag(itemId, stId, { reason: r }); };
         ta.addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('[data-m=ok]', host).click(); });
       });
+  }
+  // one item or story to its earliest dependency- and capacity-valid slot
+  function placeEntry(itemId, storyId) {
+    if (!state.meta.capacityEnabled) return null;
+    var it = RM.itemById(state, itemId);
+    if (!it) return null;
+    return { icon: 'zap', label: 'Place at earliest slot', disabled: !!it.locked || !!it.done, fn: function () {
+      var r = RM.placeUnit(state, itemId, storyId || null);
+      if (r.note) { toast(r.note, 'err'); return; }
+      if (!r.changed) { toast('Already at its earliest slot'); return; }
+      replaceState('place', r.state);
+      toast('Placed at the earliest slot');
+    } };
   }
   function flagMenuEntries(itemId, stId) {
     var x = flagTarget(state, itemId, stId);

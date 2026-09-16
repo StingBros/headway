@@ -10,6 +10,7 @@ Format: short sections, bullets, one bold title per notable change —
 ## Unreleased
 
 - **Auto timeline**: flag a phase as Auto (phase dialog or right-click its band) and its items follow their dependencies under the roster's capacity — on open, when the flag goes on, and after every change. Needs capacity planning.
+- **Place at earliest slot**: right-click any feature or story → Place at earliest slot moves just that one to the first slot its dependencies and the roster's capacity allow (any phase, capacity planning on).
 - Auto-order rows by start now also applies when a document opens.
 - The Auto-schedule dialog is gone; Auto timeline and Place at earliest slot replace it.
 - Flagged rows are tinted light orange in the left pane, darker when selected.

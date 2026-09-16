@@ -3941,6 +3941,31 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok(window.HeadwayApp.ai.state().phases[0].auto === false, 'capacity off clears the Auto flag');
     undo(); undo();
   }
+  // Place at earliest slot: right-click a feature row
+  {
+    window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
+    const plRow = doc.querySelector('#rows .row.item');
+    plRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    ok(![...doc.querySelectorAll('#popover .menu-list button[data-mi]')].some((b) => /Place at earliest slot/.test(b.textContent)),
+      'with capacity planning off the row menu has no Place at earliest slot');
+    doc.querySelector('#popover').hidden = true;
+    window.HeadwayApp.ai.commit('cap on', (s) => { s.meta.capacityEnabled = true; });
+    const plRow2 = doc.querySelector('#rows .row.item');
+    plRow2.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    const entry = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Place at earliest slot/.test(b.textContent));
+    ok(!!entry, 'feature context menu offers Place at earliest slot when capacity planning is on');
+    doc.querySelector('#popover').hidden = true;
+    const withSt = window.HeadwayApp.ai.state().items.find((i) => i.stories.length);
+    if (!doc.querySelector('#rows .row.story[data-story]')) {
+      click(doc.querySelector('#rows .row.item[data-id="' + withSt.id + '"] [data-act="stories"]'));
+    }
+    const plStRow = doc.querySelector('#rows .row.story[data-story]');
+    plStRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    ok([...doc.querySelectorAll('#popover .menu-list button[data-mi]')].some((b) => /Place at earliest slot/.test(b.textContent)),
+      'the story context menu offers it too');
+    doc.querySelector('#popover').hidden = true;
+    undo(); undo();
+  }
   // standalone HTML: one file with the styles and scripts inlined and the document embedded
   const idx = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const files = { 'css/app.css': 'body{}', 'js/vendor/lucide.min.js': 'L', 'js/core.js': 'C', 'js/excel.js': 'X', 'js/export-png.js': 'P',
