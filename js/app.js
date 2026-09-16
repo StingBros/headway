@@ -489,6 +489,29 @@
     h.push(en);
     if (h.length > RM.HISTORY_MAX) h.splice(0, h.length - RM.HISTORY_MAX);
   }
+  function anyAutoPhase() {
+    return !!state.meta.capacityEnabled && state.phases.some(function (p) { return p.auto && !p.bucket; });
+  }
+  // the auto features: rows follow the timeline (auto-order) and Auto phases
+  // follow dependencies + capacity (auto timeline). Runs inside a commit so
+  // the moves share its history entry. Returns the number of moved units.
+  var applyingAuto = false;
+  function applyAutoRules() {
+    if (applyingAuto) return 0;
+    applyingAuto = true;
+    var moved = 0;
+    try {
+      // the flag only lives on a real phase under capacity planning — the same
+      // rule normalize enforces, applied here for edits that skip it
+      state.phases.forEach(function (p) { if (p.auto && (!state.meta.capacityEnabled || p.bucket)) p.auto = false; });
+      if (anyAutoPhase()) {
+        var r = RM.autoTimeline(state);
+        if (r.changed) { state = r.state; moved = r.changed; }
+      }
+      if (autoOrder && moved) RM.sortItemsByStart(state);
+    } finally { applyingAuto = false; }
+    return moved;
+  }
   function commit(label, mutate) {
     if (readOnly) { viewOnlyToast(); return; }
     var prev = JSON.stringify(state);
@@ -496,6 +519,7 @@
     if (undoStack.length > 120) undoStack.shift();
     redoStack.length = 0;
     if (mutate) mutate(state);
+    applyAutoRules();
     recordHistory(label, prev);
     afterChange();
     maybeAskName();
@@ -508,6 +532,7 @@
     redoStack.length = 0;
     state = next;
     multiSel = null; // ids from the previous document mean nothing here
+    applyAutoRules();
     recordHistory(label, prev);
     afterChange();
     maybeAskName();
@@ -522,6 +547,17 @@
     redoStack.length = 0;
     docSaved = true;
     sessionEdited = false;
+    // auto features apply on open: order the rows, lay out the Auto phases
+    var prevJson = JSON.stringify(state);
+    if (autoOrder) RM.sortItemsByStart(state);
+    var moved = applyAutoRules();
+    if (JSON.stringify(state) !== prevJson) {
+      undoStack.length = 0; redoStack.length = 0;
+      recordHistory('auto', prevJson);
+      docSaved = false;
+      sessionEdited = true;
+      if (moved) toast('Auto timeline moved ' + moved + ' item' + (moved === 1 ? '' : 's'));
+    }
     validation = RM.validate(state);
     saveLocal();
     render();
@@ -4000,6 +4036,7 @@
         '<span class="band-name">' + esc(p.name) + '</span>' +
         '<span class="band-count">' + items.length + '</span>' +
         (p.bucket ? '<span class="band-bucket-tag">backlog</span>' : '') +
+        (p.auto ? '<span class="band-bucket-tag band-auto" title="Auto timeline: items follow dependencies and capacity">auto</span>' : '') +
         '<button class="band-add" data-act="phase-additem" title="' + esc('Add a ' + lvl('feature').toLowerCase() + ' to this phase') + '">+ ' + esc(lvl('feature').toLowerCase()) + '</button>' +
         '<button class="band-edit" data-act="phase-edit" title="Edit phase">edit</button>' +
         '</div>' +
@@ -4768,7 +4805,7 @@
     return '<div class="menu-list' + (search ? ' has-search' : '') + '"' + (minW ? ' style="min-width:' + minW + 'px"' : '') + '>' +
       search + items.map(function (m, i) {
         if (m.sep) return '<div class="menu-sep"></div>';
-        return '<button data-mi="' + i + '"' + (m.checked ? ' class="on"' : '') + '>' +
+        return '<button data-mi="' + i + '"' + (m.disabled ? ' disabled' : '') + (m.checked ? ' class="on"' : '') + '>' +
           (m.dot ? '<span class="dd-dot" style="background:' + m.dot + '"></span>' : '') +
           (m.pre || '') +
           (m.icon ? '<i data-lucide="' + esc(m.icon) + '"></i>' : '') +
@@ -6219,6 +6256,16 @@
         { icon: 'plus', label: 'New phase…', fn: function () { phaseModal(null); } },
         { sep: true },
         { icon: 'pencil', label: 'Edit phase…', fn: function () { phaseModal(phaseId); } },
+        (function () {
+          var ph = state.phases.filter(function (p) { return p.id === phaseId; })[0];
+          if (!ph || ph.bucket) return null;
+          return { icon: 'zap', label: 'Auto timeline', checked: !!ph.auto, disabled: !state.meta.capacityEnabled,
+            fn: function () {
+              var on = !ph.auto;
+              commit('auto timeline', function (s) { s.phases.forEach(function (p) { if (p.id === phaseId) p.auto = on; }); });
+              toast('Auto timeline ' + (on ? 'on — ' + ph.name + ' follows dependencies and capacity' : 'off for ' + ph.name));
+            } };
+        })(),
         { icon: 'trash-2', label: 'Delete phase…', fn: function () { deletePhaseConfirm(phaseId); } }
       ];
     } else if (rowEl.dataset.kind === 'eband') {
@@ -8545,6 +8592,7 @@
         else renderTopbar();
         toast('Auto-order ' + (autoOrder ? 'on — rows follow the timeline' : 'off'));
       } },
+      state.meta.capacityEnabled ? { icon: 'zap', label: 'Auto timeline is set per phase (right-click a phase band)', disabled: true, fn: function () {} } : null,
       { sep: true },
       { icon: 'zoom-in', label: 'Zoom in', kbd: '⌘scroll', fn: function () { zoomBy(1.2); } },
       { icon: 'zoom-out', label: 'Zoom out', fn: function () { zoomBy(1 / 1.2); } },
@@ -8712,6 +8760,10 @@
       '<div class="m-sec"><label>Description</label><div id="phDescEd">' +
       wysHtml('phdesc', phase ? phase.description : '', 'What this phase delivers\u2026') + '</div></div>' +
       '<div class="m-sec"><label class="p-check"><input type="checkbox" id="phBucket"' + (phase && phase.bucket ? ' checked' : '') + '> Backlog bucket (items parked here aren’t auto-scheduled)</label></div>' +
+      (phase && phase.bucket ? '' :
+        '<div class="m-sec"><label class="p-check' + (state.meta.capacityEnabled ? '' : ' disabled') + '"><input type="checkbox" id="phAuto"' +
+        (phase && phase.auto ? ' checked' : '') + (state.meta.capacityEnabled ? '' : ' disabled') + '> Auto timeline — items follow dependencies and capacity</label>' +
+        (state.meta.capacityEnabled ? '' : '<div class="m-hint">Enable capacity planning in Setup → Capacity first.</div>') + '</div>') +
       '<div class="m-sec"><label>Dates</label><div class="p-grid2">' +
       '<div><label class="p-lab">Start</label><input type="text" readonly class="cal-in" data-cal-clear="Auto" id="phStart" style="width:100%" value="' +
         (phase && phase.startDay != null ? esc(RM.fmtISO(RM.dayToDate(state.meta, phase.startDay))) : '') + '"></div>' +
@@ -8735,6 +8787,8 @@
           var name = $('#phName', host).value.trim() || 'Phase';
           var desc = sanitizeHtml($('#phDescEd .wz-ed', host).innerHTML);
           var bucket = $('#phBucket', host).checked;
+          var auto = !bucket && !!state.meta.capacityEnabled && !!($('#phAuto', host) && $('#phAuto', host).checked);
+          var wasAuto = !!(phase && phase.auto);
           function pinDay(val, isEnd) {
             if (!val) return null;
             var d = RM.dateToDay(state.meta, RM.parseISO(val));
@@ -8746,18 +8800,19 @@
           closeModal();
           if (isNew) {
             commit('add phase', function (s) {
-              s.phases.push({ id: RM.uid('p'), name: name, description: desc, bucket: bucket, collapsed: false, startDay: pStart, endDay: pEnd });
+              s.phases.push({ id: RM.uid('p'), name: name, description: desc, bucket: bucket, auto: auto, collapsed: false, startDay: pStart, endDay: pEnd });
             });
           } else {
             commit('edit phase', function (s) {
               s.phases.forEach(function (p) {
                 if (p.id === phaseId) {
-                  p.name = name; p.description = desc; p.bucket = bucket;
+                  p.name = name; p.description = desc; p.bucket = bucket; p.auto = auto;
                   p.startDay = pStart; p.endDay = pEnd;
                 }
               });
             });
           }
+          if (auto && !wasAuto) toast('Auto timeline on for ' + name);
         };
         var del = $('#phDelete', host);
         if (del) del.onclick = function () {
@@ -9793,6 +9848,7 @@
       return '<div class="su-row" data-key="' + ph.id + '">' + grip() +
         '<span class="su-name">' + esc(ph.name) + '</span>' +
         (ph.bucket ? '<span class="band-bucket-tag">backlog</span>' : '') +
+        (ph.auto ? '<span class="band-bucket-tag band-auto" title="Auto timeline: items follow dependencies and capacity">auto</span>' : '') +
         '<span class="band-count">' + count + '</span>' +
         '<button data-suphedit="' + ph.id + '" title="Edit"><i data-lucide="pencil"></i></button>' +
         '<button data-suphdel="' + ph.id + '" class="danger" title="Delete"><i data-lucide="trash-2"></i></button>' +
@@ -10121,8 +10177,12 @@
     var t = e.target;
     if (t.id === 'suCapEnable') {
       var on = t.checked;
-      commit('capacity feature', function (s2) { s2.meta.capacityEnabled = on; });
-      toast('Capacity planning ' + (on ? 'enabled' : 'disabled'));
+      var hadAuto = state.phases.some(function (p) { return p.auto; }); // normalize clears it below
+      commit('capacity feature', function (s2) {
+        s2.meta.capacityEnabled = on;
+        if (!on) s2.phases.forEach(function (p) { p.auto = false; });
+      });
+      toast('Capacity planning ' + (on ? 'enabled' : 'disabled' + (hadAuto ? ' — Auto timeline switched off' : '')));
       return;
     }
     if (t.id === 'suWsEnable') {
@@ -11628,6 +11688,7 @@
         aiActor = true;
         try { commit(label, mutate); } finally { aiActor = false; }
       },
+      autoTimelineNow: function () { var n = 0; commit('auto', function () { n = applyAutoRules(); }); return n; },
       validation: function () { return validation || RM.validate(state); },
       userName: userName,
       ui: function () {

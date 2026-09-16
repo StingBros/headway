@@ -3924,6 +3924,23 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   ok(/\d+(\.\d)? \/ \d+(\.\d)?/.test(busy.textContent), 'the cell reads demand / supply');
   ok(/people|points/.test(doc.querySelector('#capTypeCell').textContent), 'the row label says the unit');
   undo();
+  // auto timeline: a phase flagged Auto re-lays its items on every commit
+  {
+    window.HeadwayApp.ai.commit('auto setup', (s) => {
+      s.meta.capacityEnabled = true; s.meta.planLevel = 'feature'; s.meta.capMode = 'person';
+      s.team = [{ id: 'solo', name: 'Solo', capType: 'Development', weekHours: {}, capacity: 1 }];
+      s.phases[0].auto = true;
+      s.items.forEach((it) => { if (it.phaseId === s.phases[0].id) { it.locked = false; it.capType = 'Development'; it.capMult = 1; } });
+    });
+    const st = window.HeadwayApp.ai.state();
+    const cap = window.RM.capacity(st);
+    ok(!cap.weeks.some((c) => c.over), 'after the commit no week of the Auto phase is over capacity');
+    ok(/auto/i.test(doc.querySelector('.row.band .band-auto')?.textContent || ''), 'the phase band shows an AUTO tag');
+    // toggling capacity off clears the flag
+    window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
+    ok(window.HeadwayApp.ai.state().phases[0].auto === false, 'capacity off clears the Auto flag');
+    undo(); undo();
+  }
   // standalone HTML: one file with the styles and scripts inlined and the document embedded
   const idx = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const files = { 'css/app.css': 'body{}', 'js/vendor/lucide.min.js': 'L', 'js/core.js': 'C', 'js/excel.js': 'X', 'js/export-png.js': 'P',
@@ -4862,6 +4879,9 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
   const edited = state();
   edited.items[0].feature = 'Renamed on disk';
   // the file carries another machine's prefs (Planning view) — ignored on reload
+  // auto-order runs when a document opens and would legitimately dirty a file
+  // whose rows are not in start order — switch it off to judge the reload alone
+  window.HeadwayApp.ai.setPref('autoOrder', false);
   return window.RMExcel.exportWorkbook(edited, { view: 'planning' }).then((b1) => b1.arrayBuffer ? b1.arrayBuffer() : b1).then((ab1) =>
     window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab1)), 'Roadmap.xlsx', true)
   ).then(() => {
@@ -4875,6 +4895,7 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
     ok(window.HeadwayApp.ai.ui().view === 'scoping', 'disk reload: the view did not change');
     ok(window.HeadwayApp.ai.ui().selectedNum === firstNum, 'disk reload: the selection survived');
     ok(window.HeadwayApp.unsavedNow() === false, 'disk reload: nothing to save');
+    window.HeadwayApp.ai.setPref('autoOrder', true);
     // priority chips and the panel picker carry a color tier class
     const rowIds = [].slice.call(doc.querySelectorAll('#rows .row.item[data-id]')).map((r) => r.dataset.id);
     ok(rowIds.length > 1, 'setup: rows on screen to color');

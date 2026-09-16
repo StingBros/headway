@@ -9,6 +9,9 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- **Auto timeline**: flag a phase as Auto (phase dialog or right-click its band) and its items follow their dependencies under the roster's capacity — on open, when the flag goes on, and after every change. Needs capacity planning.
+- Auto-order rows by start now also applies when a document opens.
+- The Auto-schedule dialog is gone; Auto timeline and Place at earliest slot replace it.
 - Flagged rows are tinted light orange in the left pane, darker when selected.
 - The Planning / Scoping left pane no longer shows #numbers on rows (they stay in the panel header, on cards and on sprint rows).
 - #numbers are gone from Sprinting rows and Prioritizing cards too (the panel header keeps them), and Sprinting rows drop the sprint-number bubble.
