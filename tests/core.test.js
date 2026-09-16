@@ -1400,7 +1400,53 @@ if (!ExcelJS) {
                     eq(rt3.state.items[0].stories[0].tags, [], 'and its stories carry no tags');
                     eq(rt3.state.items[0].stories[1].deps, [], 'a workbook without the Depends on column imports with no story deps');
                     ok(rt3.state.items[0].stories[0].num > 0, 'and normalize assigns fresh story numbers');
-                    finish();
+
+                    // ---- capacity fields round trip (lossless path + the
+                    // visible Stories/Team columns on the template path)
+                    var sX = mkState([{ num: 1, feature: 'f', stories: [{ title: 'a', capType: 'Design', capMult: 2 }] }],
+                      { team: [{ name: 'P', capType: 'Design', points: 7 }] });
+                    sX.meta.capMode = 'points';
+                    return RMExcel.exportWorkbook(sX).then(function (bufX) {
+                      return RMExcel.importWorkbook(bufX).then(function (rx1) {
+                        eq(rx1.state.items[0].stories[0].capMult, 2, 'story multiplier survives the round trip');
+                        eq(rx1.state.team[0].points, 7, 'member points survive the round trip');
+                        eq(rx1.state.meta.capMode, 'points', 'capMode survives the round trip');
+                        var cellStr = function (c) { return c && c.value != null ? String(c.value) : ''; };
+                        var wbX = new ExcelJS.Workbook();
+                        return wbX.xlsx.load(bufX).then(function () {
+                          var swsX = wbX.getWorksheet('Stories');
+                          eq(cellStr(swsX.getCell(1, 10)), 'Capacity type', 'Stories sheet shows a Capacity type column');
+                          eq(cellStr(swsX.getCell(1, 11)), 'Multiplier', 'Stories sheet shows a Multiplier column');
+                          eq(cellStr(swsX.getCell(2, 10)), 'Design', 'the story capacity type is written out');
+                          eq(cellStr(swsX.getCell(2, 11)), '2', 'the story multiplier is written out when it is not 1');
+                          var twsX = wbX.getWorksheet('Team');
+                          eq(cellStr(twsX.getCell(1, 9)), 'Points per sprint', 'Team sheet shows a Points per sprint column');
+                          eq(cellStr(twsX.getCell(2, 9)), '7', 'the member points are written out');
+                          wbX.removeWorksheet(wbX.getWorksheet('_RoadmapTool').id);
+                          return wbX.xlsx.writeBuffer();
+                        }).then(function (bufX2) {
+                          return RMExcel.importWorkbook(bufX2);
+                        }).then(function (rx2) {
+                          ok(rx2.source === 'template', 'the capacity doc without the tool sheet parses as a template');
+                          eq(rx2.state.team[0].points, 7, 'template path re-reads Points per sprint');
+                        });
+                      });
+                    }).then(function () {
+                      // a member with no points cell inherits meta.defaultPoints
+                      var sY = mkState([{ num: 1, feature: 'f' }], { team: [{ name: 'Q' }] });
+                      return RMExcel.exportWorkbook(sY).then(function (bufY) {
+                        var wbY = new ExcelJS.Workbook();
+                        return wbY.xlsx.load(bufY).then(function () {
+                          wbY.removeWorksheet(wbY.getWorksheet('_RoadmapTool').id);
+                          return wbY.xlsx.writeBuffer();
+                        });
+                      }).then(function (bufY2) {
+                        return RMExcel.importWorkbook(bufY2);
+                      }).then(function (ry) {
+                        ok(ry.state.team[0].points === null, 'a blank Points per sprint cell reads back as null (inherit)');
+                        finish();
+                      });
+                    });
                   });
                 });
               });
