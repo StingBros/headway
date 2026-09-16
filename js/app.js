@@ -6776,12 +6776,19 @@
     if (!state.meta.capacityEnabled) return null;
     var it = RM.itemById(state, itemId);
     if (!it) return null;
-    return { icon: 'zap', label: 'Place at earliest slot', disabled: !!it.locked || !!it.done, fn: function () {
+    var st = storyId ? storyById(it, storyId) : null;
+    if (storyId && !st) return null;
+    return { icon: 'zap', label: 'Place at earliest slot',
+      disabled: !!it.locked || !!it.done || !!(st && st.done), fn: function () {
       var r = RM.placeUnit(state, itemId, storyId || null);
-      if (r.note) { toast(r.note, 'err'); return; }
-      if (!r.changed) { toast('Already at its earliest slot'); return; }
-      replaceState('place', r.state);
-      toast('Placed at the earliest slot');
+      // a partial placement still lands what it could — keep it, and say why
+      if (r.changed) {
+        if (autoOrder) RM.sortItemsByStart(r.state); // applyAutoRules only sorts an auto pass
+        replaceState('place', r.state);
+        toast('Placed at the earliest slot' + (r.note ? ' — ' + r.note : ''));
+        return;
+      }
+      toast(r.note || 'Already at its earliest slot', r.note ? 'err' : undefined);
     } };
   }
   function flagMenuEntries(itemId, stId) {

@@ -3964,6 +3964,24 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok([...doc.querySelectorAll('#popover .menu-list button[data-mi]')].some((b) => /Place at earliest slot/.test(b.textContent)),
       'the story context menu offers it too');
     doc.querySelector('#popover').hidden = true;
+    // a locked feature keeps the entry, greyed out
+    const lockId = doc.querySelector('#rows .row.item').dataset.id;
+    window.HeadwayApp.ai.commit('lock it', (s) => { s.items.forEach((i) => { if (i.id === lockId) i.locked = true; }); });
+    doc.querySelector('#rows .row.item[data-id="' + lockId + '"]')
+      .dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    const lockedEntry = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Place at earliest slot/.test(b.textContent));
+    ok(!!lockedEntry && lockedEntry.disabled, 'a locked feature shows the entry disabled');
+    doc.querySelector('#popover').hidden = true;
+    undo();
+    // clicking it reports back — placed, already there, or why it could not
+    [...doc.querySelectorAll('#toasts .toast')].forEach((t) => t.remove());
+    const beforePlace = JSON.stringify(window.HeadwayApp.ai.state());
+    doc.querySelector('#rows .row.item[data-id="' + lockId + '"]')
+      .dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    click([...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Place at earliest slot/.test(b.textContent)));
+    const placeToast = doc.querySelector('#toasts .toast');
+    ok(!!placeToast && /earliest slot/.test(placeToast.textContent), 'clicking it reports back with a toast');
+    if (JSON.stringify(window.HeadwayApp.ai.state()) !== beforePlace) undo();
     undo(); undo();
   }
   // standalone HTML: one file with the styles and scripts inlined and the document embedded
