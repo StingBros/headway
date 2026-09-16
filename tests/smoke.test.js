@@ -3919,10 +3919,6 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     // the capacity row total: features vs stories, counts vs points, and the limit
     s.meta.planLevel = 'feature'; s.meta.capBasis = 'features'; s.meta.capUnit = 'count';
     ok(window.RM.capacity(window.RM.normalizeState(s)).weeks[0].load === 1, 'the row counts features in flight');
-    s.meta.capBasis = 'stories'; s.meta.capUnit = 'points';
-    ok(window.RM.capacity(window.RM.normalizeState(s)).weeks[0].load === 3, 'or story points in flight');
-    s.meta.capLimit = 2;
-    ok(window.RM.capacity(window.RM.normalizeState(s)).weeks[0].over, 'a week past the limit is over');
   }
   // the header row shows the total and colors by the limit
   window.HeadwayApp.ai.commit('cap row', (s) => { s.meta.capacityEnabled = true; s.meta.capBasis = 'features'; s.meta.capUnit = 'count'; s.meta.capLimit = 1; });

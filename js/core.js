@@ -313,6 +313,10 @@
   // take it (a person's capacity type says what they supply)
   RM.DEFAULT_CAP_TYPES = ['Development', 'Design', 'QA', 'Product', 'Data'];
   RM.capTypesOf = function (state) { return state.capTypes || []; };
+  // story points a person supplies per sprint; null falls back to the document default
+  RM.memberPoints = function (state, m) {
+    return m.points != null ? m.points : (state.meta || state).defaultPoints;
+  };
   RM.renameCapType = function (state, oldName, newName) {
     newName = String(newName || '').trim();
     if (!newName || newName === oldName) return false;
@@ -1290,11 +1294,14 @@
     // capacity header row. OFF by default; enabled per-document in Setup.
     m.capacityEnabled = !!m.capacityEnabled;
     m.planLevel = m.planLevel === 'story' ? 'story' : 'feature';
-    // the capacity row's total: features or stories, in points or item counts,
-    // colored against an optional per-week limit
-    m.capBasis = m.capBasis === 'stories' ? 'stories' : 'features';
-    m.capUnit = m.capUnit === 'points' ? 'points' : 'count';
-    m.capLimit = m.capLimit != null && m.capLimit !== '' && isFinite(+m.capLimit) && +m.capLimit > 0 ? +m.capLimit : null;
+    // demand model: a unit in flight costs one person (× its multiplier) or
+    // its story points spread over its weeks against each person's points
+    m.capMode = m.capMode === 'points' ? 'points' : 'person';
+    m.defaultPoints = m.defaultPoints != null && isFinite(+m.defaultPoints) && +m.defaultPoints >= 0 ? +m.defaultPoints : 10;
+    // which capacity types the header row aggregates: 'all' or a list
+    m.capRowTypes = Array.isArray(m.capRowTypes)
+      ? m.capRowTypes.filter(function (t) { return typeof t === 'string' && t; }) : 'all';
+    delete m.capLimit; delete m.capBasis; delete m.capUnit;
     // apps switch (Setup → Apps): which header tabs this project shows. All
     // on by default; Planning is the home view and can never go off.
     var apps = (m.apps && typeof m.apps === 'object') ? m.apps : {};
@@ -1574,6 +1581,9 @@
         name: p.name || 'Phase',
         description: p.description || '',
         bucket: !!p.bucket,
+        // Auto timeline: items follow dependencies under the roster's
+        // capacity. Needs capacity planning; buckets are never auto
+        auto: !!p.auto && !!m.capacityEnabled && !p.bucket,
         collapsed: !!p.collapsed,
         startDay: ps,
         endDay: pe
@@ -1628,6 +1638,9 @@
         headcount: it.headcount != null && it.headcount > 0 ? it.headcount : 1,
         // role is descriptive metadata (capacity is role-agnostic); empty = any role
         teamType: it.teamType != null && it.teamType !== '' ? String(it.teamType) : '',
+        // capacity type / multiplier used when planning at the feature level
+        capType: it.capType != null ? String(it.capType) : '',
+        capMult: it.capMult != null && isFinite(+it.capMult) && +it.capMult > 0 ? +it.capMult : 1,
         // milestones are fixed dates: zero-duration diamonds on the timeline
         milestone: !!it.milestone,
         // item type (Feature / Bug / …): a key into meta.itemTypes. Unknown
@@ -1704,6 +1717,7 @@
             assignees: Array.isArray(s.assignees) ? s.assignees.map(String) : [],
             // capacity type: what the story drains and who can take it
             capType: s.capType != null ? String(s.capType) : '',
+            capMult: s.capMult != null && isFinite(+s.capMult) && +s.capMult > 0 ? +s.capMult : 1,
             tags: RM.normalizeTags(s.tags),
             // stories carry their own hard deadline, same shape as items
             deadline: /^\d{4}-\d{2}-\d{2}$/.test(String(s.deadline || '')) ? String(s.deadline) : null,
@@ -1905,6 +1919,9 @@
         // 0 (or blank) is allowed and contributes nothing
         capacity: mbr.capacity != null && mbr.capacity !== '' && isFinite(+mbr.capacity) && +mbr.capacity >= 0
           ? +mbr.capacity : 1,
+        // story points per sprint this person supplies (points mode);
+        // null = the document default
+        points: mbr.points != null && mbr.points !== '' && isFinite(+mbr.points) && +mbr.points >= 0 ? +mbr.points : null,
         // hourly bill rate & hourly cost (budgeting view); 0 = not set
         rate: isFinite(+mbr.rate) && +mbr.rate >= 0 ? +mbr.rate : 0,
         cost: isFinite(+mbr.cost) && +mbr.cost >= 0 ? +mbr.cost : 0,
@@ -1923,6 +1940,9 @@
       (it.stories || []).forEach(function (st) {
         if (st.capType && state.capTypes.indexOf(st.capType) === -1) state.capTypes.push(st.capType);
       });
+    });
+    state.items.forEach(function (it) {
+      if (it.capType && state.capTypes.indexOf(it.capType) === -1) state.capTypes.push(it.capType);
     });
     var teamIds = {};
     state.team.forEach(function (mbr) { teamIds[mbr.id] = true; });
@@ -2404,7 +2424,6 @@
           if (cell.byType[t] > cell.capByType[t] + 1e-9) cell.over = true;
         });
       }
-      if (meta.capLimit != null && cell.load > meta.capLimit + 1e-9) cell.over = true;
     });
     return { weeks: weeks, teamTotal: teamTotal };
   };

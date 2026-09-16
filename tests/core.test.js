@@ -244,6 +244,32 @@ var sS = mkState([
 var rS = RM.snapEarliest(sS, sS.items[1].id);
 eq(RM.itemByNum(rS.state, 2).startDay, 10, 'snapEarliest lands right after dep');
 
+// ------------------------------------------------------------- capacity fields
+section('capacity fields');
+var sF = RM.normalizeState({
+  meta: { timelineStart: '2026-07-27', numWeeks: 8, capLimit: 3, capBasis: 'stories', capUnit: 'points', capacityEnabled: true, capMode: 'points', defaultPoints: 8, capRowTypes: ['Design'] },
+  phases: [{ id: 'p1', auto: true }, { id: 'p2', bucket: true, auto: true }],
+  items: [{ num: 1, feature: 'f', capType: 'Design', capMult: 2, stories: [{ title: 's', capMult: 0 }] }],
+  team: [{ name: 'A', points: 12 }, { name: 'B' }]
+});
+ok(sF.meta.capLimit === undefined && sF.meta.capBasis === undefined && sF.meta.capUnit === undefined, 'weekly limit and row basis/unit fields are gone');
+eq(sF.meta.capMode, 'points', 'capMode kept');
+eq(sF.meta.defaultPoints, 8, 'defaultPoints kept');
+eq(sF.meta.capRowTypes, ['Design'], 'capRowTypes list kept');
+eq(RM.normalizeState({ meta: {}, phases: [{ id: 'p' }], items: [] }).meta.capMode, 'person', 'capMode defaults to person');
+eq(RM.normalizeState({ meta: {}, phases: [{ id: 'p' }], items: [] }).meta.defaultPoints, 10, 'defaultPoints defaults to 10');
+eq(RM.normalizeState({ meta: {}, phases: [{ id: 'p' }], items: [] }).meta.capRowTypes, 'all', 'capRowTypes defaults to all');
+eq(sF.items[0].capType, 'Design', 'feature capType kept');
+eq(sF.items[0].capMult, 2, 'feature capMult kept');
+eq(sF.items[0].stories[0].capMult, 1, 'story capMult below or at 0 falls back to 1');
+eq(sF.team[0].points, 12, 'member points kept');
+eq(sF.team[1].points, null, 'member points default null');
+eq(RM.memberPoints(sF, sF.team[1]), 8, 'memberPoints falls back to the document default');
+ok(sF.phases[0].auto === true, 'phase auto kept when capacity is on');
+ok(sF.phases[1].auto === false, 'bucket phase can never be auto');
+var sF2 = RM.normalizeState({ meta: { capacityEnabled: false }, phases: [{ id: 'p1', auto: true }], items: [] });
+ok(sF2.phases[0].auto === false, 'phase auto cleared when capacity planning is off');
+
 // ------------------------------------------------------------- regressions (adversarial review)
 section('regressions');
 // total calendar helpers
