@@ -346,7 +346,9 @@
     });
     // a removed type can no longer be part of the capacity row's selection
     if (state.meta && Array.isArray(state.meta.capRowTypes)) {
-      state.meta.capRowTypes = state.meta.capRowTypes.filter(function (t) { return t !== name; });
+      var rowLeft = state.meta.capRowTypes.filter(function (t) { return t !== name; });
+      // nothing left to aggregate is not a row showing 0 / 0: fall back to all
+      state.meta.capRowTypes = rowLeft.length ? rowLeft : 'all';
     }
     return true;
   };
@@ -2497,7 +2499,8 @@
     function selected(t) { return sel == null || sel.indexOf(t) !== -1; }
     var weeks = [];
     for (var w = 0; w < meta.numWeeks; w++) {
-      var cell = { demand: 0, supply: 0, over: false, blackout: RM.isBlackoutWeek(meta, w), byType: {}, items: [] };
+      // byType is prototype-free: a type may be named 'constructor'
+      var cell = { demand: 0, supply: 0, over: false, blackout: RM.isBlackoutWeek(meta, w), byType: Object.create(null), items: [] };
       sup.types.forEach(function (t) {
         if (!selected(t)) return;
         cell.byType[t] = { demand: 0, supply: sup.byType[t][w] };
@@ -3058,8 +3061,10 @@
         release(u);
         return;
       }
-      var floor = (u.startDay != null && u.startDay <= today) ? u.startDay : today;
-      if (pFloor != null && pFloor > floor) floor = pFloor;
+      var started = u.startDay != null && u.startDay <= today;
+      var floor = started ? u.startDay : today;
+      // work already under way keeps its start: the phase floor never drags it forward
+      if (!started && pFloor != null && pFloor > floor) floor = pFloor;
       if (floor > est) est = floor;
       var work = RM.unitWorkDays(state, u, ledger.set);
       var s = est;
@@ -3166,19 +3171,20 @@
         var e = depEnd(d);
         if (e != null && e > after) after = e;
       });
+      var pFloor = phaseFloor[u.phaseId];
       if (u.milestone) {
         // a milestone is a fixed date; only dependencies may move it
         if (!u.deps.length) {
           res.note = 'Milestone has no dependencies — nothing to place it after.';
           return;
         }
+        if (pFloor != null && pFloor > after) after = pFloor;
         if (RM.applyUnitPlacement(state, u, after, 0, ledger.set)) res.changed += 1;
         endOf[u.id] = after;
         if (after > maxEnd) maxEnd = after;
         return;
       }
       var work = RM.unitWorkDays(state, u, ledger.set);
-      var pFloor = phaseFloor[u.phaseId];
       var s = Math.max(today, after, pFloor != null ? pFloor : 0), dur = RM.stretchSpan(meta, s, work, ledger.set);
       if (ledger.constrained(u) && RM.unitWeekDemand(state, u, s, dur, ledger.set) > ledger.peak(u.capType) + 1e-9) {
         res.note = 'Asks more ' + u.capType + ' in a week than the roster can ever give, so it never fits — left unchanged.';

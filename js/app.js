@@ -10220,7 +10220,7 @@
           var on = m.capRowTypes !== 'all' && m.capRowTypes.indexOf(t) !== -1;
           return '<label class="p-check"><input type="checkbox" data-sucaprow="' + esc(t) + '"' + (on ? ' checked' : '') + (m.capRowTypes === 'all' ? ' disabled' : '') + '> ' + esc(t) + '</label>';
         }).join('') +
-        '<div class="m-hint">Untick the last type and the row goes back to all types.</div></div>' +
+        (m.capRowTypes === 'all' ? '' : '<div class="m-hint">Untick the last type and the row goes back to all types.</div>') + '</div>' +
         '<div class="m-hint">The row under the header shows each week\u2019s demand against what the roster supplies for these types.</div>' +
         '</section>',
       columns: (function () {

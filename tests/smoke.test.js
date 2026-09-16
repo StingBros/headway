@@ -3920,6 +3920,8 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   lastChk.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().meta.capRowTypes === 'all', 'unticking the last capacity type reverts the row to all types');
   ok(doc.querySelector('#suCapRowAll').checked, 'and the All radio reads checked again');
+  ok(!/Untick the last type/.test(doc.querySelector('#setupView').textContent),
+    'and the hint goes away with the selection it explains');
   undo(); undo();
   undo(); undo(); undo(); undo();
   // people and stories carry a capacity type; assignability follows it
@@ -4069,7 +4071,8 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     const snapToast = doc.querySelector('#toasts .toast');
     ok(state().items.find((i) => i.id === snapIt.id).startDay === snapBefore,
       'the panel Snap earliest leaves a locked row where it is');
-    ok(!!snapToast && /Locked/.test(snapToast.textContent), 'and says it is locked');
+    ok(!!snapToast && /unlock it to place it/.test(snapToast.textContent),
+      'and the panel guard says so in its own words');
     window.__headway.selectItem(null);
     undo(); undo();
   }
