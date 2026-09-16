@@ -406,12 +406,17 @@ ok(doc.querySelector('#panel [data-f=allabove]') === null, '"all items above" ch
   };
   ok(/position:\s*sticky/.test(decl('.row.band')) && /top:\s*var\(--hdr-h\)/.test(decl('.row.band')),
     'phase bands are sticky below the header');
-  // workstream/epic group rows are transparent (grid lines show through)
-  // and scroll with the rows instead of sticking
-  ok(!/position:\s*sticky/.test(decl('.row.eband')),
-    'epic/workstream bands scroll with the rows (not sticky)');
-  ok(/\.row\.eband \.row-lane\s*{[^}]*background:\s*transparent/.test(css),
-    'epic/workstream band lanes are transparent');
+  // second-level group bands pin under the phase band; nested epics one lower
+  ok(/position:\s*sticky/.test(decl('.row.eband')) &&
+     /top:\s*calc\(var\(--hdr-h\)\s*\+\s*var\(--band-real-h/.test(decl('.row.eband')),
+    'epic/workstream bands are sticky under the phase band');
+  ok(/\.row\.eband\.sub\s*{[^}]*var\(--eband-real-h/.test(css),
+    'nested epic bands stack one band lower');
+  ok(/\.row\.eband \.row-lane\s*{[^}]*background-color:\s*var\(--paper\)/.test(css) &&
+     /\.row\.eband \.row-left\s*{[^}]*background:\s*var\(--paper-2\)/.test(css),
+    'group band cells are opaque so rows do not show through when pinned');
+  ok(/\.row\.eband \.row-lane\s*{[^}]*repeating-linear-gradient\([^)]*\)[^}]*var\(--sprint-px/.test(css),
+    'the pinned band lane redraws the sprint grid on the sprint pitch');
 }
 
 // ---------------------------------------------------------------- chips
@@ -937,6 +942,19 @@ window.eval("document.querySelector('[data-menu=\"view\"]').click()");
 const groupBtn = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Group by epic/.test(b.textContent));
 click(groupBtn);
 ok(doc.querySelectorAll('#rows .row.eband').length > 3, 'epic group bands rendered (' + doc.querySelectorAll('#rows .row.eband').length + ')');
+{
+  const eb = doc.querySelector('#rows .row.eband');
+  ok(!!eb, 'an epic band renders with group-by-epic on');
+  // the sprint pitch/phase the pinned band's gradient uses must match #bgcols
+  const rs = doc.documentElement.style;
+  const px = rs.getPropertyValue('--sprint-px'), off = rs.getPropertyValue('--sprint-off');
+  ok(/px$/.test(px) && parseFloat(px) > 0, 'render publishes --sprint-px (' + px + ')');
+  ok(/px$/.test(off), 'render publishes --sprint-off (' + off + ')');
+  const line = doc.querySelector('#bgcols .bg-week.sprint');
+  const at = line && parseFloat((line.getAttribute('style').match(/\+\s*(-?[\d.]+)px/) || [])[1]);
+  ok(typeof at === 'number' && !isNaN(at) && Math.abs((at - parseFloat(off)) % parseFloat(px)) < 0.01,
+    'the drawn sprint lines land on the --sprint-off/--sprint-px lattice (' + at + ')');
+}
 {
   // groups always hold at least one feature, so no group carries an
   // "Add feature" row: the context menu (Insert above/below) adds features

@@ -1418,18 +1418,27 @@ body.panning, body.panning * { cursor: grabbing !important; }
 .seg button.pt-med.on { background: var(--pri-med); color: #fff; }
 .seg button.pt-low.on { background: var(--pri-low); color: #fff; }
 
-/* epic group bands (group-by-epic mode) — sticky under the pinned phase band;
-   nested (.sub) epics stack one band lower, under their workstream band */
-/* workstream/epic group rows are transparent — the sprint grid lines show
-   through their lanes (so they scroll with the rows instead of sticking) */
-.row.eband { height: 26px; }
+/* epic / workstream group bands pin under the phase band while their rows
+   scroll; nested epics (.sub) sit one band lower under their workstream band.
+   The next band of the same level slides over the stuck one. */
+.row.eband { height: 26px; position: sticky; top: calc(var(--hdr-h) + var(--band-real-h, var(--band-h))); z-index: 13; }
+.row.eband.sub { top: calc(var(--hdr-h) + var(--band-real-h, var(--band-h)) + var(--eband-real-h, 26px)); z-index: 12; }
 .row.eband .row-left {
-  background: transparent;
+  background: var(--paper-2);
   border-bottom: 1px solid var(--line-2);
   padding-left: 40px;
 }
-.row.eband .row-lane { background: transparent; border-bottom-color: var(--line); }
-.row.eband.wsband .row-left { background: transparent; padding-left: 30px; }
+/* pinned bands are opaque, so the #bgcols sprint lines can no longer show
+   through: redraw them on the lane at the same pitch/phase renderBgCols uses
+   (--sprint-px / --sprint-off), in the same color as .bg-week */
+.row.eband .row-lane {
+  background-color: var(--paper);
+  border-bottom: 1px solid var(--line);
+  background-image: repeating-linear-gradient(to right,
+    rgba(var(--ink-rgb), .09) 0 1px, transparent 1px var(--sprint-px, var(--week-px)));
+  background-position: var(--sprint-off, 0px) 0;
+}
+.row.eband.wsband .row-left { padding-left: 30px; }
 .row.eband.wsband .eb-name { color: var(--ink); }
 .row.eband.sub .row-left { padding-left: 52px; }
 .eb-name { font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-2); }

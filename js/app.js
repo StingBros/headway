@@ -3669,6 +3669,11 @@
     var html = [];
     // simplified grid: only sprint boundaries (anchor-aligned) get a line
     var firstB = si.anchorWeek - Math.ceil(si.anchorWeek / si.wps) * si.wps;
+    // sticky group bands are opaque, so they redraw this grid themselves:
+    // publish the pitch and phase the lines use (lane-local pixels)
+    var rs = document.documentElement.style;
+    rs.setProperty('--sprint-px', (si.wps * weekPx) + 'px');
+    rs.setProperty('--sprint-off', (firstB * weekPx) + 'px');
     for (var w = firstB; w <= meta.numWeeks; w += si.wps) {
       if (w < 0) continue;
       html.push('<div class="bg-week sprint" style="left:calc(var(--left-w) + ' + (w * weekPx) + 'px)"></div>');
