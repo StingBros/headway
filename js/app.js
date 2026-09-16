@@ -2085,13 +2085,23 @@
       } };
     }));
   }
+  // a feature's planning type comes from its stories while they all agree; then
+  // its own capType is only what it falls back to, so the chip reads inherited
+  function itemCapInherited(it) {
+    return !!it && !it.milestone && RM.itemCapType(state, it) !== (it.capType || '');
+  }
+  var CAP_INHERIT_TITLE = 'Inherited from its stories — set the stories’ types to change it';
   function itemCapMenuItems(itemId) {
-    var cur = (RM.itemById(state, itemId) || {}).capType || '';
-    return [{ label: '<i>— general —</i>', checked: !cur, fn: function () {
-      commit('capacity type', function (s) { RM.itemById(s, itemId).capType = ''; });
-    } }].concat(RM.capTypesOf(state).map(function (t) {
+    var itC = RM.itemById(state, itemId);
+    var cur = (itC || {}).capType || '';
+    var head = itemCapInherited(itC)
+      ? [{ label: '<i>Type follows the stories while they all agree</i>', disabled: true, fn: function () {} }, { sep: true }]
+      : [];
+    return head.concat([{ label: '<i>— general —</i>', checked: !cur, fn: function () {
+      commit('capacity type', function (s) { var t2 = RM.itemById(s, itemId); if (t2) t2.capType = ''; });
+    } }]).concat(RM.capTypesOf(state).map(function (t) {
       return { label: esc(t), checked: cur === t, fn: function () {
-        commit('capacity type', function (s) { RM.itemById(s, itemId).capType = t; });
+        commit('capacity type', function (s) { var t2 = RM.itemById(s, itemId); if (t2) t2.capType = t; });
       } };
     }));
   }
@@ -3985,7 +3995,9 @@
           asg: '<span class="r-asg" tabindex="0" role="button" data-act="asg" title="Assignees">' +
             (avatarStack(it.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>',
           cap: state.meta.capacityEnabled && RM.planLevel(state) === 'feature' && !it.milestone
-            ? '<span class="r-cap' + (RM.itemCapType(state, it) ? '' : ' empty') + '" tabindex="0" role="button" data-act="cap" title="' + esc('Capacity type' + (RM.itemCapType(state, it) ? '\nNow: ' + RM.itemCapType(state, it) : '')) + '">' + (RM.itemCapType(state, it) ? esc(shorten(RM.itemCapType(state, it), 8)) : '·') + '</span>'
+            ? '<span class="r-cap' + (RM.itemCapType(state, it) ? '' : ' empty') + (itemCapInherited(it) ? ' inherited' : '') + '" tabindex="0" role="button" data-act="cap" title="' +
+              esc(itemCapInherited(it) ? CAP_INHERIT_TITLE : 'Capacity type' + (RM.itemCapType(state, it) ? '\nNow: ' + RM.itemCapType(state, it) : '')) + '">' +
+              (RM.itemCapType(state, it) ? esc(shorten(RM.itemCapType(state, it), 8)) : '·') + '</span>'
             : '<span class="r-cap r-blank"></span>',
           mult: state.meta.capacityEnabled && RM.planLevel(state) === 'feature' && !it.milestone && state.meta.capMode !== 'points'
             ? '<span class="r-mult editable' + ((it.capMult || 1) === 1 ? ' one' : '') + '" tabindex="0" role="button" data-act="mult" title="Capacity multiplier — people this needs at once">×' + fmtPe(it.capMult || 1) + '</span>'
@@ -4633,8 +4645,12 @@
       sec('people', 'People', '',
         (state.meta.capacityEnabled && RM.planLevel(state) === 'feature' && !it.milestone
           ? '<label class="p-lab">Capacity type</label>' +
-            ddButton('icap', RM.itemCapType(state, it) ? esc(RM.itemCapType(state, it)) : '<i>— general —</i>', null,
-              'What this feature drains at the feature planning level') +
+            ddButton('icap',
+              RM.itemCapType(state, it)
+                ? (itemCapInherited(it) ? '<span class="inherited">' + esc(RM.itemCapType(state, it)) + '</span>' : esc(RM.itemCapType(state, it)))
+                : '<i>— general —</i>',
+              null,
+              itemCapInherited(it) ? CAP_INHERIT_TITLE : 'What this feature drains at the feature planning level') +
             (state.meta.capMode !== 'points'
               ? '<label class="p-lab" style="margin-top:10px">Multiplier</label>' +
                 '<input type="number" min="0.1" step="0.5" data-f="capMult" value="' + (it.capMult || 1) + '" style="width:80px" title="People this feature needs at once">'

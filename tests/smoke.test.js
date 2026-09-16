@@ -4013,6 +4013,17 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     const itRow = [...doc.querySelectorAll('#rows .row.item[data-id]')]
       .find((r) => !(state().items.find((i) => i.id === r.dataset.id) || {}).milestone);
     ok(!!itRow && !!itRow.querySelector('.r-cap[data-act="cap"]'), 'feature rows show the chip at Features level');
+    // a feature whose stories all agree shows the type as inherited
+    const inhId = [...doc.querySelectorAll('#rows .row.item[data-id]')]
+      .map((r) => state().items.find((i) => i.id === r.dataset.id))
+      .find((i) => i && !i.milestone && (i.stories || []).length).id;
+    window.HeadwayApp.ai.commit('stories agree', (s) => {
+      s.items.forEach((i) => { if (i.id === inhId) { i.capType = ''; i.stories.forEach((st) => { st.capType = 'Design'; }); } });
+    });
+    const inhChip = doc.querySelector('#rows .row.item[data-id="' + inhId + '"] .r-cap[data-act="cap"]');
+    ok(!!inhChip && inhChip.classList.contains('inherited') && /Design/.test(inhChip.textContent),
+      'a feature whose stories all share a type shows it dimmed as inherited');
+    undo();
     // story points mode: the Resources rows gain a points column
     window.HeadwayApp.ai.commit('points mode', (s) => { s.meta.capMode = 'points'; });
     ok(!!doc.querySelector('#resGrid .rrow[data-mid] .res-pts[data-rpts]'), 'story-points mode gives each Resources row a points column');

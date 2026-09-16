@@ -563,7 +563,11 @@ body.ro .bar, body.ro .st-bar, body.ro .sp-card, body.ro .spv-row { cursor: defa
 }
 .r-cap:hover { border-color: var(--line-2); background: var(--surface); }
 .r-cap.empty { color: var(--ink-3); }
+.r-cap.inherited { color: var(--ink-3); font-style: italic; }
+.dd-label .inherited { color: var(--ink-3); font-style: italic; }
 .r-mult { width: 26px; flex: 0 0 26px; text-align: center; font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); border-radius: 5px; }
+.r-mult.editable { cursor: text; }
+.r-mult.editable:hover { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); }
 .r-mult.one { color: var(--ink-3); opacity: .55; }
 .row:hover .r-mult.one { opacity: 1; }
 .res-pts.dflt { color: var(--ink-3); }
