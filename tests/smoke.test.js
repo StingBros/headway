@@ -4001,6 +4001,36 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     if (JSON.stringify(window.HeadwayApp.ai.state()) !== beforePlace) undo();
     undo(); undo();
   }
+  // capacity chips in the Planning left pane
+  {
+    window.HeadwayApp.ai.commit('chips on', (s) => { s.meta.capacityEnabled = true; s.meta.planLevel = 'story'; s.meta.capMode = 'person'; });
+    window.eval("document.querySelector('[data-menu=\"view\"]').click()");
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Expand all features/.test(b.textContent)));
+    const stRow = doc.querySelector('#rows .row.story');
+    ok(!!stRow && !!stRow.querySelector('.r-cap[data-act="st-cap"]'), 'story rows show a capacity type chip');
+    ok(!!stRow.querySelector('.r-mult[data-act="st-mult"]'), 'and a multiplier chip in person mode');
+    window.HeadwayApp.ai.commit('feature level', (s) => { s.meta.planLevel = 'feature'; });
+    const itRow = [...doc.querySelectorAll('#rows .row.item[data-id]')]
+      .find((r) => !(state().items.find((i) => i.id === r.dataset.id) || {}).milestone);
+    ok(!!itRow && !!itRow.querySelector('.r-cap[data-act="cap"]'), 'feature rows show the chip at Features level');
+    // story points mode: the Resources rows gain a points column
+    window.HeadwayApp.ai.commit('points mode', (s) => { s.meta.capMode = 'points'; });
+    ok(!!doc.querySelector('#resGrid .rrow[data-mid] .res-pts[data-rpts]'), 'story-points mode gives each Resources row a points column');
+    window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
+    ok(!doc.querySelector('#rows .r-cap'), 'no chips with capacity planning off');
+    undo(); undo(); undo(); undo();
+  }
+  // a feature created from the UI starts on the first capacity type
+  {
+    window.HeadwayApp.ai.commit('cap default probe', (s) => {
+      s.phases.push({ id: 'ph_capdflt_probe', name: 'Cap default probe', description: '', bucket: false, collapsed: false });
+    });
+    const capAddRow = doc.querySelector('#rows .row.addrow[data-phase="ph_capdflt_probe"]');
+    click(capAddRow.querySelector('.row-left'));
+    const made = state().items.find((i) => i.phaseId === 'ph_capdflt_probe');
+    ok(!!made && made.capType === state().capTypes[0], 'a new feature carries the first capacity type');
+    undo(); undo();
+  }
   // standalone HTML: one file with the styles and scripts inlined and the document embedded
   const idx = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const files = { 'css/app.css': 'body{}', 'js/vendor/lucide.min.js': 'L', 'js/core.js': 'C', 'js/excel.js': 'X', 'js/export-png.js': 'P',

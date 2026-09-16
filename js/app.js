@@ -2039,6 +2039,16 @@
       return '<span class="r-wk editable" tabindex="0" role="button" ' + attr + '="st-wk" title="Story duration">' +
         (storyWeeks(st) || blank) + '</span>';
     }
+    if (key === 'cap') {
+      if (!state.meta.capacityEnabled) return '';
+      return '<span class="r-cap' + (st.capType ? '' : ' empty') + '" tabindex="0" role="button" ' + attr + '="st-cap" title="' +
+        esc('Capacity type' + (st.capType ? '\nNow: ' + st.capType : '')) + '">' + (st.capType ? esc(shorten(st.capType, 8)) : blank) + '</span>';
+    }
+    if (key === 'mult') {
+      if (!state.meta.capacityEnabled || state.meta.capMode === 'points') return '';
+      var mv = st.capMult || 1;
+      return '<span class="r-mult editable' + (mv === 1 ? ' one' : '') + '" tabindex="0" role="button" ' + attr + '="st-mult" title="Capacity multiplier — people this story needs at once">×' + fmtPe(mv) + '</span>';
+    }
     return '';
   }
   // routes a story chip click; returns true when it handled one
@@ -2052,8 +2062,62 @@
     } else if (act === 'st-asg') {
       if (!state.team.length) { toast('Add people in the Resources panel first'); return true; }
       openDropdown(anchor, storyAssignMenuItems(itemId, stId), ASSIGN_DD);
+    } else if (act === 'st-cap') openDropdown(anchor, storyCapMenuItems(itemId, stId));
+    else if (act === 'st-mult') {
+      var stM = storyById(RM.itemById(state, itemId) || {}, stId);
+      inlineMultEditor(anchor, stM ? stM.capMult : 1, function (v) {
+        commit('story multiplier', function (s) {
+          var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
+          if (st2) st2.capMult = v;
+        });
+      });
     } else return false;
     return true;
+  }
+  // the capacity type a story / feature drains: the document's types, or general
+  function storyCapMenuItems(itemId, stId) {
+    var cur = (storyById(RM.itemById(state, itemId) || {}, stId) || {}).capType || '';
+    return [{ label: '<i>— general —</i>', checked: !cur, fn: function () {
+      commit('story capacity type', function (s) { var st2 = storyById(RM.itemById(s, itemId) || {}, stId); if (st2) st2.capType = ''; });
+    } }].concat(RM.capTypesOf(state).map(function (t) {
+      return { label: esc(t), checked: cur === t, fn: function () {
+        commit('story capacity type', function (s) { var st2 = storyById(RM.itemById(s, itemId) || {}, stId); if (st2) st2.capType = t; });
+      } };
+    }));
+  }
+  function itemCapMenuItems(itemId) {
+    var cur = (RM.itemById(state, itemId) || {}).capType || '';
+    return [{ label: '<i>— general —</i>', checked: !cur, fn: function () {
+      commit('capacity type', function (s) { RM.itemById(s, itemId).capType = ''; });
+    } }].concat(RM.capTypesOf(state).map(function (t) {
+      return { label: esc(t), checked: cur === t, fn: function () {
+        commit('capacity type', function (s) { RM.itemById(s, itemId).capType = t; });
+      } };
+    }));
+  }
+  // × multiplier chip edits in place like the duration chip
+  function inlineMultEditor(chip, cur, onSave) {
+    if (chip.querySelector('input')) return;
+    var inp = document.createElement('input');
+    inp.type = 'number'; inp.min = '0.1'; inp.step = '0.5';
+    inp.value = cur != null ? cur : 1;
+    inp.className = 'hc-edit'; inp.style.width = '30px';
+    chip.textContent = '';
+    chip.appendChild(inp);
+    inp.focus(); inp.select();
+    var done = false;
+    var fin = function (saveIt) {
+      if (done) return; done = true;
+      if (!saveIt) { render(); return; }
+      var v = parseFloat(inp.value);
+      onSave(isFinite(v) && v > 0 ? v : 1);
+    };
+    inp.addEventListener('blur', function () { fin(true); });
+    inp.addEventListener('keydown', function (ev) {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') fin(true);
+      if (ev.key === 'Escape') fin(false);
+    });
   }
   // feature twins for the boards that lack the row chips (Sprinting, Prioritizing)
   function itemRiskMenu(anchor, itemId) {
@@ -2112,6 +2176,10 @@
     } else if (act === 'priority') openPriorityEditor(anchor, itemId);
     else if (act === 'risk') itemRiskMenu(anchor, itemId);
     else if (act === 'dur') inlineWeeksEditor(anchor, itA.durDays, function (days) { setItemDur(itemId, days); });
+    else if (act === 'cap') openDropdown(anchor, itemCapMenuItems(itemId));
+    else if (act === 'mult') inlineMultEditor(anchor, itA.capMult, function (v) {
+      commit('multiplier', function (s) { RM.itemById(s, itemId).capMult = v; });
+    });
     else if (act === 'asg') {
       if (!state.team.length) { toast('Add people in the Resources panel first'); return true; }
       openDropdown(anchor, assignMenuItems(itemId), ASSIGN_DD);
@@ -3915,7 +3983,13 @@
             ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone">◆</span>'
             : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration">' + totalWeeks(it) + '</span>',
           asg: '<span class="r-asg" tabindex="0" role="button" data-act="asg" title="Assignees">' +
-            (avatarStack(it.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>'
+            (avatarStack(it.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>',
+          cap: state.meta.capacityEnabled && RM.planLevel(state) === 'feature' && !it.milestone
+            ? '<span class="r-cap' + (RM.itemCapType(state, it) ? '' : ' empty') + '" tabindex="0" role="button" data-act="cap" title="' + esc('Capacity type' + (RM.itemCapType(state, it) ? '\nNow: ' + RM.itemCapType(state, it) : '')) + '">' + (RM.itemCapType(state, it) ? esc(shorten(RM.itemCapType(state, it), 8)) : '·') + '</span>'
+            : '<span class="r-cap r-blank"></span>',
+          mult: state.meta.capacityEnabled && RM.planLevel(state) === 'feature' && !it.milestone && state.meta.capMode !== 'points'
+            ? '<span class="r-mult editable' + ((it.capMult || 1) === 1 ? ' one' : '') + '" tabindex="0" role="button" data-act="mult" title="Capacity multiplier — people this needs at once">×' + fmtPe(it.capMult || 1) + '</span>'
+            : '<span class="r-mult r-blank"></span>'
         };
         return plColsVisible().map(function (k) { return chips[k]; }).join('');
       })()) +
@@ -3945,7 +4019,8 @@
                 (avatarStack(st.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>';
             }
             // keep the column aligned even when the story scale is off
-            return storyChipHtml(k, st, 'data-act') || '<span class="' + (k === 'size' ? 'r-size' : k === 'dur' ? 'r-wk' : 'r-risk') + ' r-blank"></span>';
+            return storyChipHtml(k, st, 'data-act') ||
+              '<span class="' + (k === 'size' ? 'r-size' : k === 'dur' ? 'r-wk' : k === 'cap' ? 'r-cap' : k === 'mult' ? 'r-mult' : 'r-risk') + ' r-blank"></span>';
           }).join('') + (st.flag ? flagBadgeHtml(st) : '<span class="r-warn"></span>')) +
           '</div>' +
           (view === 'scoping'
@@ -4556,7 +4631,16 @@
         '</div>') +
 
       sec('people', 'People', '',
-        '<label class="p-lab">Role</label>' + typeDd +
+        (state.meta.capacityEnabled && RM.planLevel(state) === 'feature' && !it.milestone
+          ? '<label class="p-lab">Capacity type</label>' +
+            ddButton('icap', RM.itemCapType(state, it) ? esc(RM.itemCapType(state, it)) : '<i>— general —</i>', null,
+              'What this feature drains at the feature planning level') +
+            (state.meta.capMode !== 'points'
+              ? '<label class="p-lab" style="margin-top:10px">Multiplier</label>' +
+                '<input type="number" min="0.1" step="0.5" data-f="capMult" value="' + (it.capMult || 1) + '" style="width:80px" title="People this feature needs at once">'
+              : '') +
+            '<label class="p-lab" style="margin-top:10px">Role</label>'
+          : '<label class="p-lab">Role</label>') + typeDd +
         '<label class="p-lab" style="margin-top:10px">Assignees</label>' +
         '<div class="chips">' +
         (it.assignees || []).map(function (aid) {
@@ -4704,6 +4788,10 @@
       sec2('people', 'People',
         '<label class="p-lab">Capacity type</label>' +
         ddButton('stcap', st.capType ? esc(st.capType) : '<i>\u2014 general \u2014</i>', null, 'What this story drains and who can take it') +
+        (state.meta.capacityEnabled && state.meta.capMode !== 'points'
+          ? '<label class="p-lab" style="margin-top:10px">Multiplier</label>' +
+            '<input type="number" min="0.1" step="0.5" data-stf="capMult" value="' + (st.capMult || 1) + '" style="width:80px" title="People this story needs at once">'
+          : '') +
         '<label class="p-lab" style="margin-top:10px">Assignees</label>' +
         '<div class="chips">' +
         (st.assignees || []).map(function (aid) {
@@ -5320,21 +5408,11 @@
         return;
       }
       if (which === 'stcap' && selStory) {
-        var stCapId = selStory;
-        var stCur = (storyById(it, stCapId) || {}).capType || '';
-        openDropdown(dd, [{ label: '<i>\u2014 general \u2014</i>', checked: !stCur, fn: function () {
-          commit('story capacity type', function (s) {
-            var st2 = storyById(RM.itemById(s, it.id) || {}, stCapId);
-            if (st2) st2.capType = '';
-          });
-        } }].concat(RM.capTypesOf(state).map(function (t) {
-          return { label: esc(t), checked: stCur === t, fn: function () {
-            commit('story capacity type', function (s) {
-              var st2 = storyById(RM.itemById(s, it.id) || {}, stCapId);
-              if (st2) st2.capType = t;
-            });
-          } };
-        })));
+        openDropdown(dd, storyCapMenuItems(it.id, selStory));
+        return;
+      }
+      if (which === 'icap') {
+        openDropdown(dd, itemCapMenuItems(it.id));
         return;
       }
       if (which === 'assign') {
@@ -5548,6 +5626,14 @@
         });
         return;
       }
+      if (stf === 'capMult') {
+        var smv = parseFloat(sval);
+        commit('story multiplier', function (s) {
+          var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
+          if (st2) st2.capMult = isFinite(smv) && smv > 0 ? smv : 1;
+        });
+        return;
+      }
       if (stf === 'num') {
         var stNewNum;
         commit('renumber story', function (s) { stNewNum = RM.renumberStory(s, it.id, stId, sval); });
@@ -5629,6 +5715,13 @@
       var wv = Math.max(0.2, parseFloat(val) || 1);
       commit('duration', function (s) {
         RM.itemById(s, it.id).durDays = Math.max(1, Math.round(wv * SPW()));
+      });
+      return;
+    }
+    if (f === 'capMult') {
+      var mvv = parseFloat(val);
+      commit('multiplier', function (s) {
+        RM.itemById(s, it.id).capMult = isFinite(mvv) && mvv > 0 ? mvv : 1;
       });
       return;
     }
@@ -6032,6 +6125,16 @@
               setItemRisk(itemId, sz);
             } };
           })));
+          return;
+        }
+        case 'cap': {
+          openDropdown(act, itemCapMenuItems(itemId));
+          return;
+        }
+        case 'mult': {
+          inlineMultEditor(act, it.capMult, function (v) {
+            commit('multiplier', function (s) { RM.itemById(s, itemId).capMult = v; });
+          });
           return;
         }
         case 'epic': {
@@ -6671,6 +6774,7 @@
       var it = RM.normalizeState({
         meta: s.meta, phases: s.phases,
         items: [{ id: newId, num: RM.nextNum(s), phaseId: anchor.phaseId, feature: '', size: 'M', headcount: 1,
+          capType: s.capTypes[0] || '',
           epic: anchor.epic || '', workstream: anchor.workstream || '', teamType: anchor.teamType }]
       }).items[0];
       it.id = newId;
@@ -8725,6 +8829,7 @@
       var it = RM.normalizeState({
         meta: s.meta, phases: s.phases,
         items: [{ id: newId, num: RM.nextNum(s), phaseId: phaseId, feature: '', size: 'M', headcount: 1,
+          capType: s.capTypes[0] || '',
           epic: group && group.epic != null ? group.epic : '',
           workstream: group && group.workstream != null ? group.workstream : '' }]
       }).items[0];
@@ -8945,9 +9050,11 @@
     pri: ['Pri', 'Priority', 26],
     risk: ['Risk', 'Risk', 26],
     dur: ['Wks', 'Duration in weeks', 34],
-    asg: ['Ppl', 'Assignees', 40]
+    asg: ['Ppl', 'Assignees', 40],
+    cap: ['Cap', 'Capacity type', 58],
+    mult: ['×', 'Capacity multiplier (per-person demand)', 26]
   };
-  var PL_KEYS = ['size', 'pri', 'risk', 'dur', 'asg'];
+  var PL_KEYS = ['size', 'pri', 'risk', 'dur', 'asg', 'cap', 'mult'];
   function orderedCols(order, allKeys) {
     var out = (order || []).filter(function (k) { return allKeys.indexOf(k) !== -1; });
     allKeys.forEach(function (k) { if (out.indexOf(k) === -1) out.push(k); });
@@ -8964,6 +9071,8 @@
       if (k === 'size') return RM.sizingEnabled(state) || RM.sizingEnabled(state, 'story');
       if (k === 'pri') return RM.priorityEnabled(state) || RM.priorityEnabled(state, 'story');
       if (k === 'risk') return RM.riskEnabled(state);
+      if (k === 'cap') return !!state.meta.capacityEnabled;
+      if (k === 'mult') return !!state.meta.capacityEnabled && state.meta.capMode !== 'points';
       return true;
     });
   }
@@ -10728,6 +10837,10 @@
           ? '<span class="res-cap" tabindex="0" role="button" data-rcap="' + m.id +
             '" title="Capacity at full-time hours">' + fmtPe(m.capacity != null ? m.capacity : 1) + '×</span>'
           : '') +
+        (state.meta.capacityEnabled && state.meta.capMode === 'points'
+          ? '<span class="res-cap res-pts' + (m.points == null ? ' dflt' : '') + '" tabindex="0" role="button" data-rpts="' + m.id +
+            '" title="Story points per sprint (blank = document default)">' + fmtPe(RM.memberPoints(state, m)) + ' pt</span>'
+          : '') +
         '</div>' +
         '<div class="rlane" style="width:' + laneW + 'px">' + cells.join('') + '</div>' +
         '</div>');
@@ -11115,6 +11228,45 @@
       if (saveIt && isFinite(v) && v >= 0) {
         commit('role capacity', function (s) {
           s.team.forEach(function (x) { if (x.id === mid) x.capacity = v; });
+        });
+      } else renderResources();
+    }
+    inp.addEventListener('blur', function () { finish(true); });
+    inp.addEventListener('keydown', function (ev) {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') finish(true);
+      if (ev.key === 'Escape') finish(false);
+    });
+  });
+
+  // story points per sprint: same click-to-type chip, blank = document default
+  resGrid.addEventListener('click', function (e) {
+    var chip = e.target.closest('[data-rpts]');
+    if (!chip || chip.querySelector('input')) return;
+    var mid = chip.dataset.rpts;
+    var m = null;
+    state.team.forEach(function (x) { if (x.id === mid) m = x; });
+    if (!m) return;
+    var inp = document.createElement('input');
+    inp.type = 'number';
+    inp.min = '0';
+    inp.step = '1';
+    inp.value = m.points != null ? m.points : '';
+    inp.placeholder = String(RM.memberPoints(state, m));
+    inp.className = 'hc-edit';
+    inp.style.width = '34px';
+    chip.textContent = '';
+    chip.appendChild(inp);
+    inp.focus();
+    inp.select();
+    var done = false;
+    function finish(saveIt) {
+      if (done) return; done = true;
+      var raw = inp.value.trim();
+      var v = raw === '' ? null : parseFloat(raw); // blank = the document default
+      if (saveIt && (v === null || (isFinite(v) && v >= 0))) {
+        commit('role points', function (s) {
+          s.team.forEach(function (x) { if (x.id === mid) x.points = v; });
         });
       } else renderResources();
     }
