@@ -3372,43 +3372,28 @@
         '<span class="sp-date">' + dateTxt + '</span>' + numTag + '</div>');
     }
 
-    // capacity row: each week's TOTAL in flight (features or stories, in
-    // points or counts — Setup → Team), colored by the weekly limit when one
-    // is set, else by size-weighted WIP pressure against the people available
+    // capacity row: each week's demand vs supply for the selected capacity
+    // types (Setup → Capacity), in people or points
     var cap = validation.capacity;
-    var unitPts = meta.capUnit === 'points';
-    var loadWhat = (meta.capBasis === 'stories' ? lvl('story', true) : lvl('feature', true)).toLowerCase();
-    var storyLvl = RM.planLevel(state) === 'story';
+    var unitWord = meta.capMode === 'points' ? 'points' : 'people';
+    var selTypes = meta.capRowTypes === 'all' ? cap.types : meta.capRowTypes;
     for (var w = 0; w < meta.numWeeks; w++) {
       var cell = cap.weeks[w];
-      var avail = cell.cap;
-      var demand = cell.demand;
       var hn = RM.holidaysInWeek(meta, w, hset);
       var cls, txt2 = '', title;
-      var loadTxt = unitPts ? String(fmtPe(cell.load)) : String(cell.load);
-      var loadLine = loadTxt + (unitPts ? ' pt' : '') + ' ' + loadWhat + ' in flight' +
-        (meta.capLimit != null ? ' (limit ' + meta.capLimit + ')' : '');
       if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = 'Holiday week'; }
       else {
-        txt2 = weekPx >= 20 ? loadTxt : '';
-        var haveRoster = cap.teamTotal > 0 && avail !== Infinity;
-        var over = haveRoster && demand > avail + 1e-9;
-        if (meta.capLimit != null) {
-          cls = cell.load > meta.capLimit + 1e-9 ? 'over' : (cell.load / meta.capLimit > 0.85 ? 'mid' : (cell.load ? 'ok' : 'idle'));
-        } else if (!haveRoster) {
-          cls = cell.load ? 'ok' : 'idle';
-        } else {
-          cls = over ? 'over' : (avail > 0 && demand / avail > 0.85 ? 'mid' : (demand === 0 ? 'idle' : 'ok'));
-        }
-        title = loadLine + (haveRoster
-          ? ' · ' + fmtPe(avail) + ' available · ' + fmtPe(demand) + ' focus units' : ' · no roster yet');
-        if (storyLvl && haveRoster) {
-          Object.keys(cell.byType).forEach(function (ct) {
-            if (!ct) return;
-            var have = cell.capByType[ct];
-            title += ' · ' + ct + ' ' + fmtPe(cell.byType[ct]) + (have != null ? '/' + fmtPe(have) : '');
-          });
-        }
+        var ratio = cell.supply > 0 ? cell.demand / cell.supply : (cell.demand > 0 ? Infinity : 0);
+        cls = cell.over ? 'over' : (cell.demand === 0 ? 'idle' : (cell.supply > 0 && ratio > 0.85 ? 'mid' : 'ok'));
+        // demand / supply from the default zoom up; tighter than that, the
+        // ask alone (the tooltip always carries both)
+        txt2 = weekPx >= 28 ? fmtPe(cell.demand) + ' / ' + fmtPe(cell.supply) : (weekPx >= 20 ? fmtPe(cell.demand) : '');
+        title = fmtPe(cell.demand) + ' ' + unitWord + ' asked · ' + fmtPe(cell.supply) + ' available';
+        Object.keys(cell.byType).forEach(function (ct) {
+          var bt = cell.byType[ct];
+          title += ' · ' + (ct || 'untyped') + ' ' + fmtPe(bt.demand) + '/' + fmtPe(bt.supply);
+        });
+        if (!cap.types.length) title += ' · nobody on the roster supplies a capacity type yet';
       }
       hc.push('<div class="cap-cell ' + cls + (hn && !cell.blackout ? ' part' : '') + '" tabindex="0" data-w="' + w +
         '" style="left:' + (w * weekPx + 1) + 'px;width:' + (weekPx - 2) + 'px" title="' +
@@ -3450,9 +3435,8 @@
     $('#hdrSprints').style.width = laneW + 'px';
     $('#hdrCap').innerHTML = hc.join('');
     $('#capTypeCell').innerHTML =
-      '<span class="cap-lab" title="' + esc('Total ' + loadWhat + ' in flight each week' + (unitPts ? ', in points' : '') +
-        (meta.capLimit != null ? ' — colored against the weekly limit of ' + meta.capLimit : ' — colored by the people available')) + '">' +
-      (unitPts ? 'points' : 'in flight') + '</span>';
+      '<span class="cap-lab" title="' + esc('Each week: ' + unitWord + ' asked / available for ' +
+        (meta.capRowTypes === 'all' ? 'all capacity types' : selTypes.join(', ')) + ' — Setup → Capacity') + '">' + unitWord + '</span>';
     if (window.lucide) lucide.createIcons();
   }
 
@@ -8402,22 +8386,6 @@
     if (d != null) scrollLaneTo(d * dayPx());
   }
 
-  function doAuto() {
-    var r = RM.autoSchedule(state);
-    confirmBox('Auto-schedule?',
-      'Reschedules every unlocked item in non-backlog phases:<br>' +
-      '· dependency order first<br>' +
-      '· then earliest start with free capacity (roster of ' + state.team.length + ')<br>' +
-      '· holiday weeks stretch bars, they don’t consume them<br>' +
-      '· risk buffers follow each bar<br><br>' +
-      '<b>' + r.changed + '</b> item(s) would move.' +
-      (r.notes.length ? '<br><br>' + r.notes.slice(0, 4).map(esc).join('<br>') : ''),
-      'Apply', function () {
-        replaceState('auto-schedule', r.state);
-        toast('Auto-scheduled — ' + r.changed + ' item(s) moved');
-      });
-  }
-
   function doAddFeature() {
     if (!state.phases.length) {
       commit('add phase', function (s) {
@@ -8500,7 +8468,6 @@
         { icon: 'plus', label: esc('Add ' + lvl('feature').toLowerCase()), fn: doAddFeature },
         { icon: 'plus', label: 'Add phase…', fn: function () { phaseModal(null); } },
         { sep: true },
-        { icon: 'zap', label: 'Auto-schedule…', fn: doAuto },
         { icon: 'unlink', label: 'Clear all dependencies…', fn: function () {
           var linked = state.items.filter(function (x) { return x.deps.length || (x.depsText || []).length; }).length;
           confirmBox('Clear all dependencies?', 'Removes every dependency link from ' + linked + ' item(s). Undo works.',

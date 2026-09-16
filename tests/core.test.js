@@ -40,6 +40,7 @@ function mkState(items, extras) {
     team: [],
     teamTypes: ['Development', 'Data']
   };
+  if (extras && extras.meta) { Object.keys(extras.meta).forEach(function (k) { base.meta[k] = extras.meta[k]; }); delete extras.meta; }
   if (extras) Object.keys(extras).forEach(function (k) { base[k] = extras[k]; });
   return RM.normalizeState(base);
 }
@@ -132,12 +133,12 @@ ok(!cyc[sC.items[2].id], 'downstream of a cycle is not itself cyclic');
 // ------------------------------------------------------------- validation
 section('validation');
 var sV = mkState([
-  { num: 1, feature: 'base', startDay: 0, durDays: 10, size: 'L' },
+  { num: 1, feature: 'base', startDay: 0, durDays: 10, size: 'L', capType: 'Development' },
   { num: 2, feature: 'early bird', deps: [1], startDay: 5, durDays: 5, size: 'M' },
   { num: 3, feature: 'no size', startDay: 0, durDays: 5 },
   { num: 4, feature: 'ghost dep', deps: [42], startDay: 20, durDays: 5, size: 'M' },
-  { num: 5, feature: 'big ask', startDay: 0, durDays: 25, size: 'XL', teamType: 'Data' }
-], { team: [{ name: 'X', type: 'Development' }, { name: 'Y', type: 'Data' }] });
+  { num: 5, feature: 'big ask', startDay: 0, durDays: 25, size: 'XL', teamType: 'Data', capType: 'Development' }
+], { team: [{ name: 'X', type: 'Development', capType: 'Development' }, { name: 'Y', type: 'Data' }] });
 var v = RM.validate(sV);
 function codes(state, i) { return (v.byItem[state.items[i].id] || []).map(function (x) { return x.code; }); }
 ok(codes(sV, 1).indexOf('DEP_ORDER') !== -1, 'DEP_ORDER: starts before dep ends');
@@ -161,88 +162,66 @@ ok(!(vd.byItem[sDone.items[1].id] || []).some(function (x) { return x.code === '
 
 // ------------------------------------------------------------- capacity
 section('capacity');
-// WIP model: an active item costs focus by its working days / 10 (M = 1,
-// clamped 0.3..2) — 'demand' is size-weighted concurrent work, 'cap' the
-// fractional people available
+// person mode: a unit in flight costs one person of its type × multiplier;
+// supply is the typed roster in people-equivalents, cut by holidays
 var sCap = mkState([
-  { num: 1, feature: 'big', startDay: 0, durDays: 20, size: 'XL' },   // weight 2
-  { num: 2, feature: 'mid', startDay: 5, durDays: 10, size: 'M' }     // weight 1
-], { team: [{ name: 'X', type: 'Development' }, { name: 'Y', type: 'Development' }] });
+  { num: 1, feature: 'big', startDay: 0, durDays: 20, capType: 'Development' },
+  { num: 2, feature: 'mid', startDay: 5, durDays: 10, capType: 'Development', capMult: 2 },
+  { num: 3, feature: 'design', startDay: 5, durDays: 5, capType: 'Design' }
+], { team: [{ name: 'X', capType: 'Development' }, { name: 'Y', capType: 'Development', capacity: 0.5 }] });
+var sup = RM.capSupply(sCap);
+eq(sup.types, ['Development'], 'supplied types come from the roster');
+eq(sup.byType.Development[0], 1.5, 'week 0 supply = 1 + 0.5 heads');
+eq(RM.holidayFactor(META, 16), 0, 'blackout week factor 0');
+var METAF = JSON.parse(JSON.stringify(META)); METAF.holidays = ['2026-08-05'];
+eq(RM.holidayFactor(METAF, 1), 0.8, 'one holiday in a 5-day week = 0.8');
+eq(RM.capSupply(mkState([], { meta: METAF, team: [{ name: 'X', capType: 'Development' }] })).byType.Development[1], 0.8, 'supply scales by the holiday factor');
 var cap = RM.capacity(sCap);
-eq(cap.weeks[0].demand, 2, 'week 0 WIP = 2 focus units (one XL)');
-eq(cap.weeks[1].demand, 3, 'week 1 WIP = 3 (overlap)');
-eq(cap.weeks[0].cap, 2, 'availability = fractional people on the roster');
-ok(cap.weeks[1].over, 'week 1: more WIP than the 2-person team can focus on');
+eq(cap.weeks[0].demand, 1, 'week 0: one Development unit');
+eq(cap.weeks[1].demand, 3, 'week 1: 1 + 2 (multiplier) Development');
+eq(cap.weeks[0].supply, 1.5, 'row supply aggregates all supplied types');
+ok(cap.weeks[1].over, 'week 1 over: 3 asked, 1.5 available');
 ok(!cap.weeks[0].over, 'week 0 fits');
-eq(RM.wipWeight(sCap, { size: 'XS' }), 0.3, 'tiny items still register (clamped floor)');
-eq(RM.wipWeight(sCap, { size: 'XL' }), 2, 'XL clamps at 2 focus units');
-
-// ------------------------------------------------------------- auto-schedule
-section('autoSchedule');
-// dep chain: 2 after 1, capacity 1 person forces serialization of parallel items
-var sA = mkState([
-  { num: 1, feature: 'first', phaseId: 'p1', size: 'M' },
-  { num: 2, feature: 'second', phaseId: 'p1', size: 'M', deps: [1] },
-  { num: 3, feature: 'third', phaseId: 'p1', size: 'M' },
-  { num: 9, feature: 'parked', phaseId: 'p2', size: 'M' }
-], { team: [{ name: 'Solo', type: 'Development' }] });
-var rA = RM.autoSchedule(sA);
-var A = {};
-rA.state.items.forEach(function (it) { A[it.num] = it; });
-eq(A[1].startDay, 0, 'item 1 starts at 0');
-ok(A[2].startDay >= A[1].startDay + A[1].durDays, 'item 2 starts after dep 1 ends');
-// capacity 1: items 1,2,3 cannot overlap at week granularity
-var spans = [A[1], A[2], A[3]].map(function (it) { return [it.startDay, it.startDay + it.durDays]; });
-var overlapWeeks = false;
-for (var i = 0; i < 3; i++) for (var j = i + 1; j < 3; j++) {
-  var wA = [Math.floor(spans[i][0] / 5), Math.floor((spans[i][1] - 1) / 5)];
-  var wB = [Math.floor(spans[j][0] / 5), Math.floor((spans[j][1] - 1) / 5)];
-  if (wA[0] <= wB[1] && wB[0] <= wA[1]) overlapWeeks = true;
-}
-ok(!overlapWeeks, '1-person roster serializes the three items');
-ok(A[9].startDay == null, 'bucket-phase item stays unscheduled');
-
-// locked stays put and is scheduled around
-var sL = mkState([
-  { num: 1, feature: 'locked rock', phaseId: 'p1', size: 'M', startDay: 5, durDays: 5, locked: true },
-  { num: 2, feature: 'flows around', phaseId: 'p1', size: 'M' }
-], { team: [{ name: 'Solo', type: 'Development' }] });
-var rL = RM.autoSchedule(sL);
-var L = {};
-rL.state.items.forEach(function (it) { L[it.num] = it; });
-eq(L[1].startDay, 5, 'locked item did not move');
-var lockWeeks = [1];
-var w2 = [Math.floor(L[2].startDay / 5), Math.floor((L[2].startDay + L[2].durDays - 1) / 5)];
-ok(!(w2[0] <= 1 && 1 <= w2[1]), 'unlocked item avoids the locked week');
-
-// blackout stretch: force start before blackout, size L must stretch
-var sB = mkState([
-  { num: 1, feature: 'pre', phaseId: 'p1', size: 'M', startDay: 70, durDays: 5, locked: true },
-  { num: 2, feature: 'holiday spanner', phaseId: 'p1', size: 'L', deps: [1] }
-]);
-var rB = RM.autoSchedule(sB);
-var B = {};
-rB.state.items.forEach(function (it) { B[it.num] = it; });
-eq(B[2].startDay, 75, 'starts right after dep at day 75 (week 15)');
-eq(B[2].durDays, 30, 'L(20d) stretches to 30 slots across two blackout weeks');
-eq(RM.workInSpan(rB.state.meta, B[2].startDay, B[2].durDays), 20, 'net work still 20 days');
-
-// cycles do not hang
-var sCy = mkState([
-  { num: 1, feature: 'a', deps: [2], size: 'M' },
-  { num: 2, feature: 'b', deps: [1], size: 'M' }
-]);
-var rCy = RM.autoSchedule(sCy);
-ok(rCy.state.items.every(function (it) { return it.startDay != null; }), 'cycle members still get scheduled');
-ok(rCy.notes.length > 0, 'cycle break noted');
-
-// snapEarliest
-var sS = mkState([
-  { num: 1, feature: 'base', startDay: 0, durDays: 10, size: 'L' },
-  { num: 2, feature: 'snapme', deps: [1], startDay: 0, durDays: 5, size: 'M' }
-]);
-var rS = RM.snapEarliest(sS, sS.items[1].id);
-eq(RM.itemByNum(rS.state, 2).startDay, 10, 'snapEarliest lands right after dep');
+ok(cap.weeks[1].byType.Design.demand === 1 && cap.weeks[1].byType.Design.supply === 0, 'a type nobody supplies is listed with zero supply but never marks over');
+ok(cap.weeks[1].items.indexOf(sCap.items[2].id) !== -1, 'items in flight listed');
+// row type filter
+sCap.meta.capRowTypes = ['Design'];
+var capD = RM.capacity(sCap);
+eq(capD.weeks[1].demand, 1, 'filtered row shows only the selected type');
+ok(!capD.weeks[1].over, 'and only the selected types decide over');
+sCap.meta.capRowTypes = 'all';
+// story level: stories carry the demand; the feature bar is ignored
+var sCapS = mkState([
+  { num: 1, feature: 'f', startDay: 0, durDays: 20, capType: 'Development', stories: [
+    { title: 'a', startDay: 0, durDays: 5, capType: 'Design' },
+    { title: 'b', capType: 'Development' }
+  ] }
+], { team: [{ name: 'D', capType: 'Design' }] });
+sCapS.meta.planLevel = 'story';
+var capS = RM.capacity(sCapS);
+eq(capS.weeks[0].demand, 1, 'story level: only the scheduled story counts');
+eq(capS.weeks[1].demand, 0, 'unscheduled stories and the feature bar add nothing');
+eq(RM.capUnits(sCapS).length, 2, 'one unit per story');
+eq(RM.capUnits(mkState([{ num: 1, feature: 'lonely', startDay: 0, durDays: 5 }], { meta: Object.assign({}, META, { planLevel: 'story' }) })).length, 1, 'a story-less feature is one unit of its own at story level');
+// points mode: points spread over the unit's working weeks vs points per sprint
+var sPts = mkState([
+  { num: 1, feature: 'eight', startDay: 0, durDays: 10, size: 8, capType: 'Development' }
+], { team: [{ name: 'X', capType: 'Development' }, { name: 'Y', capType: 'Development', points: 6 }] });
+sPts.meta.capMode = 'points';
+var capP = RM.capacity(sPts);
+eq(capP.weeks[0].demand, 4, '8 points over 2 weeks = 4 per week');
+eq(capP.weeks[0].supply, 8, '(10 + 6) points per 2-week sprint = 8 per week');
+sPts.meta.weeksPerSprint = 0;
+eq(RM.capacity(sPts).weeks[0].supply, 8, 'sprints off: points are per two weeks');
+// feature type rolls up from stories when they agree
+var sRoll = mkState([{ num: 1, feature: 'f', capType: 'Development', stories: [{ title: 'a', capType: 'Design' }, { title: 'b', capType: 'Design' }] }]);
+eq(RM.itemCapType(sRoll, sRoll.items[0]), 'Design', 'all stories Design → feature plans as Design');
+sRoll.items[0].stories[1].capType = 'QA';
+eq(RM.itemCapType(sRoll, sRoll.items[0]), 'Development', 'mixed stories → the feature keeps its own type');
+// validation names the type
+var vCap = RM.validate(sCap).global.filter(function (v) { return v.code === 'OVER_CAP'; });
+ok(vCap.length && /Development/.test(vCap[0].msg), 'OVER_CAP names the type');
+ok(RM.validate(sCap).global.some(function (v) { return v.code === 'CAP_TYPE_UNSUPPLIED' && /Design/.test(v.msg); }), 'CAP_TYPE_UNSUPPLIED for a type nobody supplies');
 
 // ------------------------------------------------------------- capacity fields
 section('capacity fields');
@@ -332,57 +311,6 @@ ok(sHol.meta.holidays.indexOf('2026-08-05') === -1, 'removing a range removes it
 var sSelf = mkState([{ num: 1, feature: 'ouroboros', deps: [1] }]);
 ok((RM.validate(sSelf).byItem[sSelf.items[0].id] || []).some(function (x) { return x.code === 'SELF_DEP'; }),
   'self-dependency produces SELF_DEP warning');
-// snapEarliest: infeasible item (more focus than the roster has) stays put
-var sInf = mkState([
-  { num: 1, feature: 'crowd', startDay: 10, durDays: 15, size: 'L' }
-], { team: [{ name: 'X', type: 'Development', capacity: 0.5 }] });
-var rInf = RM.snapEarliest(sInf, sInf.items[0].id);
-eq(rInf.changed, 0, 'infeasible snap changes nothing');
-eq(RM.itemByNum(rInf.state, 1).startDay, 10, 'infeasible snap keeps the old start');
-ok(!!rInf.note, 'infeasible snap explains itself');
-// snapEarliest: feasible item beyond horizon extends the timeline instead of vanishing
-var packed = [];
-for (var pk = 0; pk < 48; pk++) {
-  packed.push({ num: pk + 1, feature: 'wk' + pk, startDay: pk * 5, durDays: 5, size: 'M', locked: true });
-}
-packed.push({ num: 99, feature: 'late arrival', size: 'M' });
-var sPack = mkState(packed, { team: [{ name: 'Solo', type: 'Development' }] });
-sPack.meta.blackoutWeeks = [];
-var rPack = RM.snapEarliest(sPack, sPack.items[48].id);
-var late = RM.itemByNum(rPack.state, 99);
-eq(late.startDay, 240, 'feasible overflow schedules right after the packed horizon');
-ok(rPack.state.meta.numWeeks >= 49, 'timeline extended to fit (' + rPack.state.meta.numWeeks + 'w)');
-// autoSchedule: infeasible item gets a note and no endless walk
-var sInf2 = mkState([
-  { num: 1, feature: 'crowd', size: 'XL' }
-], { team: [{ name: 'X', type: 'Development', capacity: 0.5 }] });
-var rInf2 = RM.autoSchedule(sInf2);
-ok(rInf2.notes.some(function (nn) { return nn.indexOf('left unscheduled') !== -1; }),
-  'autoSchedule notes the infeasible item');
-eq(RM.itemByNum(rInf2.state, 1).startDay, null, 'infeasible item is left unscheduled, never overallocated');
-
-// hours-aware: a part-time roster (20h = 0.5 people) can't absorb an M's focus
-var sInf3 = mkState([
-  { num: 1, feature: 'full-time ask', size: 'M' }
-], { team: [{ name: 'Half', type: 'Development', weekHours: (function () {
-  var wh = {};
-  for (var w = 0; w < 60; w++) wh[RM.fmtISO(RM.weekStartDate(META, w))] = 20;
-  return wh;
-})() }] });
-var rInf3 = RM.autoSchedule(sInf3);
-eq(RM.itemByNum(rInf3.state, 1).startDay, null, 'part-time-only roster leaves a full-focus item unscheduled');
-ok(rInf3.notes.length > 0, 'shortfall is noted');
-
-// a sufficient roster schedules without tripping the over-capacity check
-var sOk = mkState([
-  { num: 1, feature: 'a', size: 'M' },
-  { num: 2, feature: 'b', size: 'M' }
-], { team: [{ name: 'X', type: 'Development' }] });
-var rOk = RM.autoSchedule(sOk);
-ok(rOk.state.items.every(function (it) { return it.startDay != null; }), 'feasible items all scheduled');
-ok(!RM.validate(rOk.state).global.some(function (g) { return g.code === 'OVER_CAP'; }),
-  'auto-schedule result has no over-capacity week');
-
 // ------------------------------------------------------------- color
 section('colors');
 var sCol = mkState([{ num: 1, feature: 'x', workstream: 'Custom A' }, { num: 2, feature: 'y', workstream: 'Custom B' }, { num: 3, feature: 'z' }]);
@@ -455,7 +383,6 @@ eq(RM.phaseSpan(sPhw, sPhw.phases[0]).hi, 30, 'pinned phase end wins');
 var sOff = mkState([{ num: 1, feature: 'big', phaseId: 'p1', size: 'M', headcount: 9 }],
   { team: [{ name: 'solo', type: 'Development' }] });
 sOff.meta.capacityEnabled = false;
-ok(RM.autoSchedule(sOff).state.items[0].startDay != null, 'capacity off: item schedules despite a tiny roster');
 var vOff = RM.validate(sOff);
 ok(!Object.keys(vOff.byItem).some(function (id) {
   return vOff.byItem[id].some(function (w) { return /^HC_|^OVER_CAP/.test(w.code); });
@@ -471,18 +398,6 @@ eq(sMig.items[0].risk, 'L', 'legacy risk t-shirt migrates to severity (S → L)'
 eq(RM.itemEnd(sMig.items[0]), 10, 'itemEnd = start + durDays, no padding');
 eq(RM.riskEffortDays(sMig, sMig.items[0]), 0, 'risk contributes no effort days');
 
-// auto-schedule: dependents start right after the work span
-var sRk = mkState([
-  { num: 1, feature: 'A', size: 'M', risk: 'S' },
-  { num: 2, feature: 'B', size: 'S', deps: [1] }
-]);
-var rRk = RM.autoSchedule(sRk);
-var K = {};
-rRk.state.items.forEach(function (it) { K[it.num] = it; });
-eq(K[1].durDays, 10, 'A work = M = 2w');
-eq(K[1].riskDays, 0, 'no buffer appended despite risk S');
-eq(K[2].startDay, 10, 'B starts right after A\'s work');
-
 // DEP_ORDER keys off the plain end
 var sRk2 = mkState([
   { num: 1, feature: 'A', startDay: 0, durDays: 10 },
@@ -495,38 +410,38 @@ ok((vRk.byItem[sRk2.items[1].id] || []).some(function (v) { return v.code === 'D
 // ------------------------------------------------------------- resources / time off
 section('time off');
 var sOff = mkState([
-  { num: 1, feature: 'chunky work', startDay: 0, durDays: 15 }
+  { num: 1, feature: 'chunky work', startDay: 0, durDays: 15, capType: 'Development', capMult: 2 }
 ], {
   team: [
-    { id: 'm1', name: 'Ada', type: 'Development', offWeeks: ['2026-07-27'] },
-    { id: 'm2', name: 'Grace', type: 'Development' }
+    { id: 'm1', name: 'Ada', capType: 'Development', offWeeks: ['2026-07-27'] },
+    { id: 'm2', name: 'Grace', capType: 'Development' }
   ]
 });
 var capOff = RM.capacity(sOff);
-eq(capOff.weeks[0].cap, 1, 'off member lowers week 0 capacity');
-ok(capOff.weeks[0].over, '1.5 focus units vs 1 person available is over');
-eq(capOff.weeks[1].cap, 2, 'week 1 back to full roster');
-var snapOff = RM.snapEarliest(sOff, sOff.items[0].id);
-eq(snapOff.state.items[0].startDay, 5, 'snap skips the short-handed week');
+eq(capOff.weeks[0].supply, 1, 'off member lowers week 0 supply');
+eq(capOff.weeks[1].supply, 2, 'week 1 back to full roster');
+ok(capOff.weeks[0].over, '2 people asked in the short-handed week is over');
+ok(!capOff.weeks[1].over, 'the full roster absorbs the same ask');
 
 // ------------------------------------------------------------- hours model
 section('hours');
 var sHr = mkState([
-  { num: 1, feature: 'w', startDay: 0, durDays: 10, teamType: 'Development' }
+  { num: 1, feature: 'w', startDay: 0, durDays: 10, capType: 'Development' }
 ], {
   team: [
-    { id: 'h1', name: 'Ada', type: 'Development', weekHours: { '2026-07-27': 20 } },
-    { id: 'h2', name: 'Grace', type: 'Data' }
+    { id: 'h1', name: 'Ada', capType: 'Development', weekHours: { '2026-07-27': 20 } },
+    { id: 'h2', name: 'Grace', capType: 'Development' }
   ]
 });
 eq(RM.memberHoursForWeek(sHr.meta, sHr.team[0], 0), 20, 'explicit week hours read back');
 eq(RM.memberHoursForWeek(sHr.meta, sHr.team[0], 1), 40, 'unlisted weeks default to 40');
-eq(RM.availForWeek(sHr, 0).total, 1.5, 'total people-equivalents (20h counts as 0.5)');
-ok(!RM.capacity(sHr).weeks[0].over, 'capacity is role-agnostic: 1 focus unit vs 1.5 people is fine');
+eq(RM.memberHeads(sHr, sHr.team[0], 0), 0.5, 'people-equivalents: 20 h of a 40 h week is half a head');
+eq(RM.capSupply(sHr).byType.Development[0], 1.5, 'the typed pool sums to 1.5 people');
+ok(!RM.capacity(sHr).weeks[0].over, 'one person asked of a 1.5-person pool is fine');
 var sHrSolo = mkState([
-  { num: 1, feature: 'w', startDay: 0, durDays: 10, teamType: 'Development' }
-], { team: [{ id: 'h1', name: 'Ada', type: 'Development', weekHours: { '2026-07-27': 20 } }] });
-ok(RM.capacity(sHrSolo).weeks[0].over, 'a 1-focus item vs 0.5 available people is over');
+  { num: 1, feature: 'w', startDay: 0, durDays: 10, capType: 'Development' }
+], { team: [{ id: 'h1', name: 'Ada', capType: 'Development', weekHours: { '2026-07-27': 20 } }] });
+ok(RM.capacity(sHrSolo).weeks[0].over, 'one person asked of 0.5 available is over');
 // legacy offWeeks migrate to zero-hour weeks
 var sOffMig = RM.normalizeState({
   meta: { timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p' }], items: [],
@@ -538,13 +453,13 @@ ok(RM.memberOffWeek(sOffMig.meta, sOffMig.team[0], 1), 'memberOffWeek still answ
 eq(mkState([{ num: 1, feature: 'x' }]).items[0].teamType, '', 'default work type is none');
 
 // capacity factor: PE at 40h scales availability
-var sCf = mkState([], { team: [{ name: 'Half', type: 'Development', capacity: 0.5 }] });
-eq(RM.availForWeek(sCf, 0).total, 0.5, 'capacity 0.5 at 40h = half a head');
+var sCf = mkState([], { team: [{ name: 'Half', capType: 'Development', capacity: 0.5 }] });
+eq(RM.capSupply(sCf).byType.Development[0], 0.5, 'capacity 0.5 at 40h = half a head');
 eq(sCf.team[0].capacity, 0.5, 'capacity survives normalize');
 eq(mkState([], { team: [{ name: 'X', type: 'Development' }] }).team[0].capacity, 1, 'capacity defaults to 1');
 eq(mkState([], { team: [{ name: 'Z', type: 'Development', capacity: 0 }] }).team[0].capacity, 0, 'capacity 0 is allowed');
-eq(RM.availForWeek(mkState([], { team: [{ name: 'Z', type: 'Development', capacity: 0 }] }), 0).total, 0,
-  'a zero-capacity role contributes nothing');
+eq(RM.capSupply(mkState([], { team: [{ name: 'Z', capType: 'Development', capacity: 0 }] })).byType.Development[0], 0,
+  'a zero-capacity person contributes nothing');
 
 // ------------------------------------------------------------- renumbering
 section('renumber');
@@ -681,10 +596,10 @@ eq(RM.msStyleOf(sSty.items[2]), 'diamond', 'msStyleOf defaults to diamond');
 // ------------------------------------------------------------- milestones
 section('milestones');
 var sMs = mkState([
-  { num: 1, feature: 'work', startDay: 0, durDays: 10 },
+  { num: 1, feature: 'work', startDay: 0, durDays: 10, capType: 'Development' },
   { num: 2, feature: 'launch', milestone: true, startDay: 10, durDays: 0, deps: [1] },
-  { num: 3, feature: 'after', startDay: 10, durDays: 5, deps: [2] }
-]);
+  { num: 3, feature: 'after', startDay: 10, durDays: 5, deps: [2], capType: 'Development' }
+], { team: [{ name: 'X', capType: 'Development' }] });
 eq(sMs.items[1].milestone, true, 'milestone flag survives normalize');
 eq(sMs.items[1].durDays, 0, 'milestone keeps zero duration');
 eq(RM.itemSpan(sMs.items[1]), 0, 'milestone span is zero');
@@ -694,10 +609,8 @@ var msWarns = (vMs.byItem[sMs.items[1].id] || []).map(function (v) { return v.co
 eq(msWarns.indexOf('NO_SIZE'), -1, 'no size warnings at all');
 var depWarns = (vMs.byItem[sMs.items[2].id] || []).map(function (v) { return v.code; });
 eq(depWarns.indexOf('DEP_ORDER'), -1, 'dependent may start on the milestone day');
-var msAuto = RM.autoSchedule(sMs);
-eq(RM.itemById(msAuto.state, sMs.items[1].id).startDay, 10, 'auto-schedule leaves milestones fixed');
 var msCap = RM.capacity(sMs);
-eq(msCap.weeks[2].demand, 0.5, 'milestone consumes no capacity (only the 5-day item registers)');
+eq(msCap.weeks[2].demand, 1, 'milestone consumes no capacity (only the 5-day item registers)');
 var sMsStory = mkState([{ num: 1, feature: 'a', stories: [{ title: 's', custom: { c1: 'v' } }] }]);
 eq(sMsStory.items[0].stories[0].custom.c1, 'v', 'story custom fields survive normalize');
 
@@ -712,8 +625,8 @@ eq(RM.stretchSpan(sWw.meta, 0, 5), 5, 'no phantom off slots — 5 work days = 5 
 eq(RM.fmtISO(RM.dayToDate(sWw.meta, 4)), '2026-08-03', 'slot 4 = the second week Monday (Mon-Thu week)');
 eq(RM.hoursPerDay(sWw.meta), 8, '32 h over 4 days = 8 h/day');
 eq(RM.memberHoursForWeek(sWw.meta, {}, 0), 32, 'default member week = the project full-time week');
-sWw.team = [{ id: 't1', name: 'A', type: 'Development', capacity: 1, weekHours: {} }];
-eq(RM.availForWeek(sWw, 0).total, 1, '32 h at a 32 h full-time week = 1 person');
+sWw.team = [{ id: 't1', name: 'A', capType: 'Development', capacity: 1, weekHours: {} }];
+eq(RM.capSupply(sWw).byType.Development[0], 1, '32 h at a 32 h full-time week = 1 person');
 var sWw5 = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8, weekHours: 32, daysPerWeek: 4 }, phases: [{ id: 'p' }], items: [] });
 eq(sWw5.meta.weekHours, 32, 'weekHours survives normalize');
 eq(sWw5.meta.daysPerWeek, 4, 'daysPerWeek survives normalize');

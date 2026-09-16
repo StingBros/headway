@@ -796,8 +796,8 @@ ok(doc.querySelectorAll('#resGrid .rh').length === 48, 'hour cells for every wee
   capInp.value = '0.5';
   capInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   ok(state().team[0].capacity === 0.5, 'capacity commits (0.5)');
-  const avail = window.RM.availForWeek(state(), 0);
-  ok(Math.abs(avail.total - 0.5) < 1e-9, 'availability scales by the capacity factor (' + avail.total + ')');
+  const heads = window.RM.memberHeads(state(), state().team[0], 0);
+  ok(Math.abs(heads - 0.5) < 1e-9, 'availability scales by the capacity factor (' + heads + ')');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
 }
 
@@ -3898,34 +3898,31 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   undo();
   // capacity: story level plans on the stories and drains per type
   {
-    const s = JSON.parse(JSON.stringify(state()));
-    s.meta.capacityEnabled = true;
-    s.meta.planLevel = 'story';
+    const s = window.RM.clone(window.HeadwayApp.ai.state());
+    s.meta.capacityEnabled = true; s.meta.planLevel = 'story'; s.meta.capMode = 'person'; s.meta.capRowTypes = 'all';
     s.team = [{ id: 'p1', name: 'A', capType: 'Design', weekHours: {}, capacity: 1 }];
-    const it = s.items.find(i => !i.milestone && (i.stories || []).length);
-    s.items.forEach(i => { i.startDay = null; i.durDays = null; (i.stories || []).forEach(st => { st.startDay = null; st.durDays = null; }); });
-    it.startDay = 0; it.durDays = 20; it.size = 'XL';
-    it.stories[0].startDay = 0; it.stories[0].durDays = 5; it.stories[0].capType = 'Design'; it.stories[0].size = '3';
+    const it = s.items.find((i) => i.startDay != null && !i.milestone);
+    it.stories = [{ title: 'design it', startDay: it.startDay, durDays: 5, capType: 'Design' }, { title: 'later', capType: 'Design' }];
     const capS = window.RM.capacity(window.RM.normalizeState(s));
-    ok(capS.weeks[0].items.length === 1 && Math.abs(capS.weeks[0].demand - 0.5) < 1e-9, 'story level: only the scheduled story counts (5 days = 0.5 focus), the feature\'s own span is ignored');
-    ok(capS.weeks[0].byType.Design != null && capS.weeks[0].capByType.Design === 1, 'demand and supply are tracked per capacity type');
-    s.items.find(i => i.id === it.id).stories[0].capType = 'Development';
-    s.items.find(i => i.id === it.id).stories[0].durDays = 15; // 1.5 focus units
-    const capS2 = window.RM.capacity(window.RM.normalizeState(s));
-    ok(capS2.weeks[0].over, 'a type nobody supplies is checked against the whole team (1.5 focus vs 1 person is over)');
-    s.team[0].capType = 'Development'; s.team.push({ id: 'p2', name: 'B', capType: 'Design', weekHours: {}, capacity: 1 });
-    const capS3 = window.RM.capacity(window.RM.normalizeState(s));
-    ok(capS3.weeks[0].over, 'a typed pool that is over-asked flags the week even though the team as a whole has room');
-    // the capacity row total: features vs stories, counts vs points, and the limit
-    s.meta.planLevel = 'feature'; s.meta.capBasis = 'features'; s.meta.capUnit = 'count';
-    ok(window.RM.capacity(window.RM.normalizeState(s)).weeks[0].load === 1, 'the row counts features in flight');
+    const wk = Math.floor(it.startDay / 5);
+    ok(capS.weeks[wk].demand === 1 && capS.weeks[wk].supply === 1, 'story level: one Design story vs one Design person');
+    s.items.find((i) => i.id === it.id).stories[0].capMult = 2;
+    ok(window.RM.capacity(window.RM.normalizeState(s)).weeks[wk].over, 'a ×2 story over-asks a one-person pool');
+    s.meta.capRowTypes = ['Development'];
+    ok(!window.RM.capacity(window.RM.normalizeState(s)).weeks[wk].over, 'the row only judges the selected types');
   }
-  // the header row shows the total and colors by the limit
-  window.HeadwayApp.ai.commit('cap row', (s) => { s.meta.capacityEnabled = true; s.meta.capBasis = 'features'; s.meta.capUnit = 'count'; s.meta.capLimit = 1; });
+  // the header row shows demand / supply for the selected types
+  window.HeadwayApp.ai.commit('cap row', (s) => {
+    s.meta.capacityEnabled = true; s.meta.planLevel = 'feature'; s.meta.capMode = 'person'; s.meta.capRowTypes = 'all';
+    s.team = [{ id: 'p1', name: 'A', capType: 'Development', weekHours: {}, capacity: 1 }];
+    s.items.forEach((i) => { if (!i.milestone) { i.capType = 'Development'; i.capMult = 1; } });
+    s.phases.forEach((p) => { p.auto = false; });
+  });
   const cells = [...doc.querySelectorAll('#hdrCap .cap-cell')];
-  const busy = cells.find(c => c.classList.contains('over'));
-  ok(!!busy && /in flight/.test(busy.getAttribute('title')) && /limit 1/.test(busy.getAttribute('title')), 'a week with more features than the limit reads over, with the total in its tooltip');
-  ok(/in flight/.test(doc.querySelector('#capTypeCell').textContent), 'the row label says what it totals');
+  const busy = cells.find((c) => c.classList.contains('over'));
+  ok(!!busy && /Development/.test(busy.getAttribute('title')), 'an over-asked week reads over and names the type in its tooltip');
+  ok(/\d+(\.\d)? \/ \d+(\.\d)?/.test(busy.textContent), 'the cell reads demand / supply');
+  ok(/people|points/.test(doc.querySelector('#capTypeCell').textContent), 'the row label says the unit');
   undo();
   // standalone HTML: one file with the styles and scripts inlined and the document embedded
   const idx = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');

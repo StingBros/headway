@@ -2309,125 +2309,206 @@
     return RM.memberHoursForWeek(meta, member, week) === 0;
   };
 
-  // Roster availability for one week, in PEOPLE-EQUIVALENTS (hours ÷ the
-  // project's full-time week): the fractional headcount actually available.
-  RM.availForWeek = function (state, week) {
-    var total = 0;
-    var full = RM.weekHoursOf(state.meta);
-    state.team.forEach(function (m) {
-      var pe = (RM.memberHoursForWeek(state.meta, m, week) / full) * (m.capacity != null ? m.capacity : 1);
-      if (pe > 0) total += pe;
-    });
-    return { total: total };
-  };
-
-  // How much team focus one active item consumes, in "focus units".
-  // Grounded in Kanban WIP-limit practice (and Little's Law): a team's
-  // throughput collapses when concurrent work outgrows the people available,
-  // and BIG items eat disproportionate focus — most teams can only run a
-  // couple of large initiatives at once. An M (2 working weeks) counts as 1
-  // unit; weight scales with the item's working days ÷ 10, clamped to
-  // [0.3, 2] so a swarm of XS chores still registers and an XL can't demand
-  // more than two people-equivalents of attention.
-  RM.wipWeight = function (state, it) {
-    var days = it.startDay != null && it.durDays != null
-      ? RM.workInSpan(state.meta, it.startDay, it.durDays)
-      : (RM.itemSizeDays(state, it) || it.durDays || 5);
-    return Math.max(0.3, Math.min(2, days / 10));
-  };
-
-  // Weekly size-weighted WIP vs the people available. Blackout weeks carry
-  // no demand and no check; member off-weeks lower that week's availability.
-  // people available in a week, split by the capacity type they supply
-  RM.availByTypeForWeek = function (state, week) {
-    var full = RM.weekHoursOf(state.meta);
-    var out = {};
-    state.team.forEach(function (m) {
-      var pe = (RM.memberHoursForWeek(state.meta, m, week) / full) * (m.capacity != null ? m.capacity : 1);
-      if (pe <= 0) return;
-      var t = m.capType || '';
-      out[t] = (out[t] || 0) + pe;
-    });
-    return out;
-  };
-  // a story's focus weight: its effort days ÷ 10, same clamp as features
-  RM.storyWipWeight = function (state, st) {
-    var days = st.startDay != null && st.durDays != null
-      ? RM.workInSpan(state.meta, st.startDay, st.durDays)
-      : RM.storyEffortDays(state, st);
-    return Math.max(0.3, Math.min(2, days / 10));
-  };
   // numeric points on a sized thing (T-shirt labels count for nothing)
   RM.pointsOf = function (obj) {
     var n = obj && obj.size != null && obj.size !== '' ? Number(obj.size) : NaN;
     return isNaN(n) ? 0 : n;
   };
+  // share of a week's working days that are not holidays (0 on blackout weeks)
+  RM.holidayFactor = function (meta, week, set) {
+    var S = RM.slotsOf(meta);
+    if (!S) return 0;
+    return (S - RM.holidaysInWeek(meta, week, set)) / S;
+  };
+
+  // one person's people-equivalents in a week: hours ÷ the full-time week ×
+  // their capacity (a 0.5 seat is half a head even at 40 h)
+  RM.memberHeads = function (state, m, week) {
+    var full = RM.weekHoursOf(state.meta);
+    return (RM.memberHoursForWeek(state.meta, m, week) / full) * (m.capacity != null ? m.capacity : 1);
+  };
+
+  RM.sprintWeeksForPoints = function (meta) {
+    return meta.weeksPerSprint > 0 ? meta.weeksPerSprint : 2;
+  };
+
+  // supply per capacity type per week. Person mode: heads. Points mode:
+  // points per sprint ÷ sprint weeks. Both cut by the holiday factor.
+  RM.capSupply = function (state, horizonWeeks) {
+    var meta = state.meta;
+    var weeks = horizonWeeks || meta.numWeeks;
+    var set = RM.holidayDaySet(meta);
+    var points = meta.capMode === 'points';
+    var sw = RM.sprintWeeksForPoints(meta);
+    var byType = {};
+    var types = [];
+    state.team.forEach(function (m) {
+      var t = m.capType || '';
+      if (!t) return; // untyped people supply nothing in the typed model
+      if (!byType[t]) { byType[t] = new Array(weeks); for (var i = 0; i < weeks; i++) byType[t][i] = 0; types.push(t); }
+      for (var w = 0; w < weeks; w++) {
+        var heads = RM.memberHeads(state, m, w);
+        if (heads <= 0) continue;
+        var unit = points ? heads * RM.memberPoints(state, m) / sw : heads;
+        byType[t][w] += unit * RM.holidayFactor(meta, w, set);
+      }
+    });
+    return { types: types, weeks: weeks, byType: byType };
+  };
+
+  // the type a feature plans as at the feature level: its stories' shared
+  // type when they all agree, else its own
+  RM.itemCapType = function (state, it) {
+    var t = null;
+    var mixed = false;
+    (it.stories || []).forEach(function (st) {
+      if (!st.capType) return;
+      if (t == null) t = st.capType;
+      else if (t !== st.capType) mixed = true;
+    });
+    return (t != null && !mixed) ? t : (it.capType || '');
+  };
+
+  // demand units: stories (story level) or features (feature level).
+  // Milestones and done things carry no demand and are not units.
+  RM.capUnits = function (state) {
+    var storyLevel = RM.planLevel(state) === 'story';
+    var units = [];
+    var storyUnitByNum = {};
+    var unitsByItem = {};
+    state.items.forEach(function (it, idx) {
+      if (it.milestone) return;
+      if (!storyLevel) {
+        var u = { id: 'i:' + it.id, itemId: it.id, storyId: null, capType: RM.itemCapType(state, it),
+          mult: it.capMult || 1, points: RM.pointsOf(it), startDay: it.startDay, durDays: it.durDays,
+          riskDays: it.riskDays || 0, deps: [], locked: !!it.locked, done: !!it.done, milestone: false,
+          phaseId: it.phaseId, order: [idx, 0] };
+        units.push(u);
+        unitsByItem[it.id] = [u];
+        return;
+      }
+      var mine = [];
+      (it.stories || []).forEach(function (st, si) {
+        var su = { id: 's:' + st.id, itemId: it.id, storyId: st.id, capType: st.capType || '',
+          mult: st.capMult || 1, points: RM.pointsOf(st), startDay: st.startDay, durDays: st.durDays,
+          riskDays: 0, deps: [], locked: !!it.locked, done: !!it.done || !!st.done, milestone: false,
+          phaseId: it.phaseId, order: [idx, si], _st: st };
+        if (st.num != null) storyUnitByNum[st.num] = su;
+        units.push(su); mine.push(su);
+      });
+      if (!mine.length) {
+        var lone = { id: 'i:' + it.id, itemId: it.id, storyId: null, capType: it.capType || '',
+          mult: it.capMult || 1, points: RM.pointsOf(it), startDay: it.startDay, durDays: it.durDays,
+          riskDays: it.riskDays || 0, deps: [], locked: !!it.locked, done: !!it.done, milestone: false,
+          phaseId: it.phaseId, order: [idx, 0] };
+        units.push(lone); mine.push(lone);
+      }
+      unitsByItem[it.id] = mine;
+    });
+    // milestones are units too (zero work) so dependents can chain on them
+    state.items.forEach(function (it, idx) {
+      if (!it.milestone) return;
+      var mu = { id: 'i:' + it.id, itemId: it.id, storyId: null, capType: '', mult: 0, points: 0,
+        startDay: it.startDay, durDays: 0, riskDays: 0, deps: [], locked: !!it.locked, done: !!it.done,
+        milestone: true, phaseId: it.phaseId, order: [idx, 0] };
+      units.push(mu);
+      unitsByItem[it.id] = [mu];
+    });
+    // dependencies: feature deps expand to every unit of the dependency
+    // feature; story deps point at the story's unit
+    units.forEach(function (u) {
+      var it = RM.itemById(state, u.itemId);
+      RM.resolveDeps(state, it).deps.forEach(function (dep) {
+        (unitsByItem[dep.id] || []).forEach(function (du) { if (u.deps.indexOf(du.id) === -1) u.deps.push(du.id); });
+      });
+      if (u._st) {
+        RM.resolveStoryDeps(state, u._st).deps.forEach(function (ref) {
+          var du = storyUnitByNum[ref.st.num];
+          if (du && u.deps.indexOf(du.id) === -1) u.deps.push(du.id);
+        });
+        delete u._st;
+      }
+    });
+    return units;
+  };
+
+  // working days a unit needs: its current bar's work, else its estimate
+  RM.unitWorkDays = function (state, u) {
+    if (u.milestone) return 0;
+    var meta = state.meta;
+    if (u.startDay != null && u.durDays != null) return Math.max(1, RM.workInSpan(meta, u.startDay, u.durDays));
+    if (u.storyId) {
+      var it = RM.itemById(state, u.itemId);
+      var st = it && (it.stories || []).filter(function (s) { return s.id === u.storyId; })[0];
+      return Math.max(1, st ? RM.storyEffortDays(state, st) : RM.sprintDays(meta));
+    }
+    return Math.max(1, RM.effortDays(state, RM.itemById(state, u.itemId)));
+  };
+
+  // non-blackout weeks a bar covers (min 1)
+  RM.workingWeeksInSpan = function (meta, startDay, durDays) {
+    var S = RM.slotsOf(meta);
+    var w0 = Math.floor(startDay / S), w1 = Math.floor((startDay + Math.max(1, durDays) - 1) / S);
+    var n = 0;
+    for (var w = w0; w <= w1; w++) if (!RM.isBlackoutWeek(meta, w)) n += 1;
+    return Math.max(1, n);
+  };
+
+  // what a unit asks of its type in each in-flight week
+  RM.unitWeekDemand = function (state, u, startDay, durDays) {
+    if (u.milestone) return 0;
+    if (state.meta.capMode === 'points') {
+      return u.points > 0 ? u.points / RM.workingWeeksInSpan(state.meta, startDay, durDays) : 0;
+    }
+    return u.mult > 0 ? u.mult : 1;
+  };
+
+  // the header row: per week, demand vs supply for the selected types
   RM.capacity = function (state) {
     var meta = state.meta;
-    var weeks = [];
-    var teamTotal = state.team.length;
-    var storyLevel = RM.planLevel(state) === 'story';
-    var basisStories = meta.capBasis === 'stories';
-    var unitPoints = meta.capUnit === 'points';
     var S = RM.slotsOf(meta);
-    var w;
-    for (w = 0; w < meta.numWeeks; w++) {
-      var avail = RM.availForWeek(state, w);
-      weeks.push({
-        demand: 0, items: [],
-        cap: teamTotal > 0 ? avail.total : Infinity,
-        // per capacity type (story level): demand vs the people supplying it
-        byType: {}, capByType: storyLevel ? RM.availByTypeForWeek(state, w) : {},
-        // the row's total in the chosen basis and unit (features or stories,
-        // points or counts)
-        load: 0,
-        blackout: RM.isBlackoutWeek(meta, w),
-        over: false
+    var sup = RM.capSupply(state);
+    var sel = meta.capRowTypes === 'all' ? null : meta.capRowTypes;
+    function selected(t) { return sel == null || sel.indexOf(t) !== -1; }
+    var weeks = [];
+    for (var w = 0; w < meta.numWeeks; w++) {
+      var cell = { demand: 0, supply: 0, over: false, blackout: RM.isBlackoutWeek(meta, w), byType: {}, items: [] };
+      sup.types.forEach(function (t) {
+        if (!selected(t)) return;
+        cell.byType[t] = { demand: 0, supply: sup.byType[t][w] };
+        cell.supply += sup.byType[t][w];
       });
+      weeks.push(cell);
     }
-    function eachWeek(obj, fn) {
-      if (obj.startDay == null || obj.durDays == null) return;
-      var w0 = Math.floor(obj.startDay / S);
-      var w1 = Math.floor((obj.startDay + obj.durDays - 1) / S);
+    RM.capUnits(state).forEach(function (u) {
+      if (u.done || u.milestone || u.startDay == null || u.durDays == null) return;
+      var t = u.capType || '';
+      if (t && !selected(t)) return;
+      if (!t && sel != null) return; // untyped work shows under 'all' only
+      var d = RM.unitWeekDemand(state, u, u.startDay, u.durDays);
+      // the row's own total covers what it can be judged against: the picked
+      // types, or — under 'all' — the ones the roster actually supplies.
+      // Untyped and unsupplied work still lands in byType, for the tooltip
+      var inRow = sel != null || sup.types.indexOf(t) !== -1;
+      var w0 = Math.floor(u.startDay / S), w1 = Math.floor((u.startDay + Math.max(1, u.durDays) - 1) / S);
       for (var wk = Math.max(0, w0); wk <= Math.min(meta.numWeeks - 1, w1); wk++) {
-        if (!weeks[wk].blackout) fn(weeks[wk]);
+        var cell = weeks[wk];
+        if (cell.blackout) continue;
+        if (inRow) cell.demand += d;
+        if (cell.items.indexOf(u.itemId) === -1) cell.items.push(u.itemId);
+        if (!cell.byType[t]) cell.byType[t] = { demand: 0, supply: 0 };
+        cell.byType[t].demand += d;
       }
-    }
-    state.items.forEach(function (it) {
-      if (it.done || it.milestone) return;
-      // feature level: features carry the demand. Story level: the stories
-      // do, and feature weights and durations are ignored
-      if (!storyLevel) {
-        var wt = RM.wipWeight(state, it);
-        eachWeek(it, function (cell) { cell.demand += wt; cell.items.push(it.id); });
-      }
-      if (!basisStories) eachWeek(it, function (cell) { cell.load += unitPoints ? RM.pointsOf(it) : 1; });
-      (it.stories || []).forEach(function (st) {
-        if (st.done) return;
-        if (storyLevel) {
-          var swt = RM.storyWipWeight(state, st);
-          eachWeek(st, function (cell) {
-            cell.demand += swt;
-            if (cell.items.indexOf(it.id) === -1) cell.items.push(it.id);
-            var t = st.capType || '';
-            cell.byType[t] = (cell.byType[t] || 0) + swt;
-          });
-        }
-        if (basisStories) eachWeek(st, function (cell) { cell.load += unitPoints ? RM.pointsOf(st) : 1; });
-      });
     });
     weeks.forEach(function (cell) {
-      if (cell.demand > cell.cap + 1e-9) cell.over = true;
-      // a typed pool that is over-asked flags the week even when the team as
-      // a whole has room (a type nobody supplies falls back to the whole team)
-      if (storyLevel && teamTotal > 0) {
-        Object.keys(cell.byType).forEach(function (t) {
-          if (!t || cell.capByType[t] == null) return;
-          if (cell.byType[t] > cell.capByType[t] + 1e-9) cell.over = true;
-        });
-      }
+      Object.keys(cell.byType).forEach(function (t) {
+        // only a supplied type can be over-asked; untyped and unsupplied work
+        // is dependency-only
+        if (sup.types.indexOf(t) === -1) return;
+        if (cell.byType[t].demand > cell.byType[t].supply + 1e-9) cell.over = true;
+      });
     });
-    return { weeks: weeks, teamTotal: teamTotal };
+    return { weeks: weeks, teamTotal: state.team.length, types: sup.types };
   };
 
   // ------------------------------------------------------------ dependency risk
@@ -2675,17 +2756,33 @@
     }
 
     var cap = RM.capacity(state);
-    cap.weeks.forEach(function (cell, w) {
-      if (!state.meta.capacityEnabled || !cell.over) return;
-      var d = RM.weekStartDate(state.meta, w);
-      function r1(x) { return Math.round(x * 10) / 10; }
-      var what = r1(cell.demand) + ' focus units vs ' + r1(cell.cap) + ' people available';
-      global.push({
-        level: 'warn', code: 'OVER_CAP', week: w,
-        msg: 'Week of ' + RM.fmtShort(d) + ' looks like too much concurrent work (' + what + ')',
-        items: cell.items
+    function r1(x) { return Math.round(x * 10) / 10; }
+    var unitWord = state.meta.capMode === 'points' ? 'points' : 'people';
+    if (state.meta.capacityEnabled) {
+      cap.weeks.forEach(function (cell, w) {
+        if (!cell.over) return;
+        var d = RM.weekStartDate(state.meta, w);
+        Object.keys(cell.byType).forEach(function (t) {
+          var bt = cell.byType[t];
+          if (cap.types.indexOf(t) === -1 || bt.demand <= bt.supply + 1e-9) return;
+          global.push({
+            level: 'warn', code: 'OVER_CAP', week: w, capType: t,
+            msg: t + ': ' + r1(bt.demand) + ' ' + unitWord + ' asked, ' + r1(bt.supply) + ' available (week of ' + RM.fmtShort(d) + ')',
+            items: cell.items
+          });
+        });
       });
-    });
+      // a type that scheduled work drains but nobody supplies
+      var unsupplied = {};
+      RM.capUnits(state).forEach(function (u) {
+        if (u.done || u.milestone || u.startDay == null || !u.capType) return;
+        if (cap.types.indexOf(u.capType) === -1) unsupplied[u.capType] = true;
+      });
+      Object.keys(unsupplied).forEach(function (t) {
+        global.push({ level: 'warn', code: 'CAP_TYPE_UNSUPPLIED', capType: t,
+          msg: 'Nobody on the roster supplies "' + t + '" — its work is planned by dependencies only' });
+      });
+    }
 
     var counts = { error: 0, warn: 0, info: 0 };
     Object.keys(byItem).forEach(function (id) {
@@ -2694,266 +2791,6 @@
     global.forEach(function (v) { counts[v.level] += 1; });
 
     return { byItem: byItem, global: global, capacity: cap, counts: counts };
-  };
-
-  // ------------------------------------------------------------ scheduling
-  // Auto-schedule all unlocked items in non-bucket phases: topological order by
-  // dependencies, earliest-start greedy placement under weekly capacity, bars
-  // stretched across blackout weeks. Locked/bucket/done items keep their dates
-  // and pre-consume capacity. Mutates a clone; returns { state, changed, notes }.
-  RM.autoSchedule = function (inputState) {
-    var state = RM.clone(inputState);
-    var meta = state.meta;
-    var notes = [];
-
-    var phaseIdxById = {};
-    state.phases.forEach(function (p, i) { phaseIdxById[p.id] = i; });
-
-    var considered = [];
-    var fixed = [];
-    state.items.forEach(function (it, idx) {
-      it._idx = idx;
-      var phase = state.phases[phaseIdxById[it.phaseId]];
-      // milestones are fixed dates: never moved, dependents plan around them
-      if (!phase.bucket && !it.locked && !it.done && !it.milestone) considered.push(it);
-      else if (it.startDay != null && it.durDays != null && !it.done) fixed.push(it);
-    });
-
-    // capacity ledger (capacity feature off → schedule by dependencies only)
-    var teamTotal = state.meta.capacityEnabled ? state.team.length : 0;
-    var HORIZON_WEEKS = meta.numWeeks + 104; // allow spill; UI can extend the grid
-    var ledgerTotal = new Array(HORIZON_WEEKS);
-    for (var w = 0; w < HORIZON_WEEKS; w++) ledgerTotal[w] = 0;
-
-    var SLOTS = RM.slotsOf(meta);
-    function occupy(it, startDay, durDays) {
-      var wWt = RM.wipWeight(state, it);
-      var w0 = Math.floor(startDay / SLOTS);
-      var w1 = Math.floor((startDay + durDays - 1) / SLOTS);
-      for (var wk = w0; wk <= w1 && wk < HORIZON_WEEKS; wk++) {
-        if (RM.isBlackoutWeek(meta, wk)) continue;
-        ledgerTotal[wk] += wWt;
-      }
-    }
-    fixed.forEach(function (it) { occupy(it, it.startDay, it.durDays); });
-
-    function fits(it, startDay, durDays) {
-      if (teamTotal === 0) return true; // no roster -> no capacity constraint
-      var wWt = RM.wipWeight(state, it);
-      var w0 = Math.floor(startDay / SLOTS);
-      var w1 = Math.floor((startDay + durDays - 1) / SLOTS);
-      for (var wk = w0; wk <= w1; wk++) {
-        if (wk >= HORIZON_WEEKS) return true;
-        if (RM.isBlackoutWeek(meta, wk)) continue;
-        var avail = RM.availForWeek(state, wk);
-        if (ledgerTotal[wk] + wWt > avail.total + 1e-9) return false;
-      }
-      return true;
-    }
-
-    // topo order over considered items (deps to fixed items are satisfied by date)
-    var consideredById = {};
-    considered.forEach(function (it) { consideredById[it.id] = it; });
-    var pendingDeps = {}; // id -> count of unscheduled considered deps
-    var dependents = {};  // id -> [considered items depending on it]
-    considered.forEach(function (it) {
-      var deps = RM.resolveDeps(state, it).deps;
-      var n = 0;
-      deps.forEach(function (dep) {
-        if (consideredById[dep.id]) {
-          n += 1;
-          (dependents[dep.id] = dependents[dep.id] || []).push(it);
-        }
-      });
-      pendingDeps[it.id] = n;
-    });
-
-    function priority(a, b) {
-      var pa = phaseIdxById[a.phaseId], pb = phaseIdxById[b.phaseId];
-      if (pa !== pb) return pa - pb;
-      return a._idx - b._idx;
-    }
-
-    var ready = considered.filter(function (it) { return pendingDeps[it.id] === 0; }).sort(priority);
-    var remaining = considered.filter(function (it) { return pendingDeps[it.id] > 0; });
-    var endById = {};
-    fixed.concat(state.items.filter(function (it) { return it.done; })).forEach(function (it) {
-      var e = RM.itemEnd(it);
-      if (e != null) endById[it.id] = e;
-    });
-
-    var changed = 0;
-    var maxDay = 0;
-
-    // An item that can NEVER fit the roster — WIP weight above the PEAK
-    // weekly availability (hours-based people-equivalents) — must not
-    // trigger an endless capacity walk. Peaks are hours-aware, so a roster
-    // of part-time people counts fractionally.
-    var peakTotal = 0;
-    if (teamTotal > 0) {
-      for (var pw = 0; pw < HORIZON_WEEKS; pw++) {
-        var pa = RM.availForWeek(state, pw);
-        if (pa.total > peakTotal) peakTotal = pa.total;
-        if (pw > meta.numWeeks && pa.total === peakTotal) break; // hours settle after overrides end
-      }
-    }
-    function infeasible(it) {
-      if (teamTotal === 0) return false;
-      return RM.wipWeight(state, it) > peakTotal + 1e-9;
-    }
-
-    function place(it) {
-      var deps = RM.resolveDeps(state, it).deps;
-      var est = 0;
-      deps.forEach(function (dep) {
-        if (dep.done) return;
-        var e = endById[dep.id] != null ? endById[dep.id] : RM.itemEnd(dep);
-        if (e != null && e > est) est = e;
-      });
-      var work = RM.effortDays(state, it);
-      var s = est;
-      var guard = 0;
-      var dur = RM.stretchSpan(meta, s, work);
-      // with a roster set, the scheduler NEVER overallocates: an item the
-      // roster can't absorb is left unscheduled instead of forced in
-      function leaveUnscheduled(why) {
-        notes.push('#' + it.num + ' (' + it.feature + ') ' + why + ' — left unscheduled.');
-        if (it.startDay != null) changed += 1;
-        it.startDay = null;
-        it.durDays = null;
-        it.riskDays = 0;
-        (dependents[it.id] || []).forEach(function (child) {
-          pendingDeps[child.id] -= 1;
-          if (pendingDeps[child.id] === 0) {
-            ready.push(child);
-            ready.sort(priority);
-            remaining = remaining.filter(function (r) { return r.id !== child.id; });
-          }
-        });
-      }
-      if (infeasible(it)) {
-        leaveUnscheduled('needs more capacity than the roster ever has in a week');
-        return;
-      }
-      while (!fits(it, s, dur) && guard < HORIZON_WEEKS * SLOTS) {
-        s += 1;
-        dur = RM.stretchSpan(meta, s, work);
-        guard += 1;
-      }
-      if (guard >= HORIZON_WEEKS * SLOTS) {
-        leaveUnscheduled('could not find a capacity-valid slot');
-        return;
-      }
-      var riskSpan = RM.stretchSpan(meta, s + dur, RM.riskEffortDays(state, it));
-      if (it.startDay !== s || it.durDays !== dur || (it.riskDays || 0) !== riskSpan) changed += 1;
-      if (it.startDay != null) RM.shiftStories(it, s - it.startDay);
-      it.startDay = s;
-      it.durDays = dur;
-      it.riskDays = riskSpan;
-      occupy(it, s, dur); // the risk buffer is contingency — it books no capacity
-      endById[it.id] = s + dur + riskSpan;
-      if (s + dur + riskSpan > maxDay) maxDay = s + dur + riskSpan;
-      (dependents[it.id] || []).forEach(function (child) {
-        pendingDeps[child.id] -= 1;
-        if (pendingDeps[child.id] === 0) {
-          ready.push(child);
-          ready.sort(priority);
-          remaining = remaining.filter(function (r) { return r.id !== child.id; });
-        }
-      });
-    }
-
-    var guard2 = 0;
-    while ((ready.length || remaining.length) && guard2 < 5000) {
-      guard2 += 1;
-      if (!ready.length) {
-        // dependency cycle — break it deterministically at the lowest-priority entry
-        remaining.sort(priority);
-        var forced = remaining.shift();
-        notes.push('#' + forced.num + ' is in a dependency cycle; scheduled by row order.');
-        pendingDeps[forced.id] = 0;
-        ready.push(forced);
-      }
-      var it = ready.shift();
-      place(it);
-    }
-
-    var neededWeeks = Math.ceil(maxDay / SLOTS);
-    if (neededWeeks > meta.numWeeks) {
-      meta.numWeeks = neededWeeks;
-      RM.syncEndDate(meta);
-      notes.push('Timeline extended to ' + neededWeeks + ' weeks to fit the schedule.');
-    }
-
-    state.items.forEach(function (it) { delete it._idx; });
-    return { state: state, changed: changed, notes: notes };
-  };
-
-  // Earliest dependency- and capacity-valid slot for one item, others fixed.
-  // Returns { state, changed, note }; an item the roster can never absorb is
-  // left untouched (note explains why) instead of being pushed off the grid.
-  RM.snapEarliest = function (inputState, itemId) {
-    var state = RM.clone(inputState);
-    var it = RM.itemById(state, itemId);
-    if (!it) return { state: state, changed: 0, note: null };
-    var meta = state.meta;
-    var teamTotal = state.meta.capacityEnabled ? state.team.length : 0;
-
-    var snapWt = RM.wipWeight(state, it);
-    if (teamTotal > 0 && snapWt > teamTotal) {
-      return { state: state, changed: 0, note: 'Needs more focus than the roster of ' + teamTotal + ' can give — no slot can ever fit. Left unchanged.' };
-    }
-
-    var stash = { startDay: it.startDay, durDays: it.durDays, riskDays: it.riskDays || 0 };
-    it.startDay = null; it.durDays = null; // free own capacity
-    var deps = RM.resolveDeps(state, it).deps;
-    var est = 0;
-    deps.forEach(function (dep) {
-      var e = RM.itemEnd(dep);
-      if (!dep.done && e != null && e > est) est = e;
-    });
-    // a milestone occupies no working days — it snaps to the dependency floor
-    var work = it.milestone ? 0 : RM.effortDays(state, it);
-
-    var capData = RM.capacity(state);
-    var snapS = RM.slotsOf(meta);
-    var LIMIT = (meta.numWeeks + 104) * snapS;
-    function fits(s, dur) {
-      if (teamTotal === 0) return true;
-      var w0 = Math.floor(s / snapS), w1 = Math.floor((s + dur - 1) / snapS);
-      for (var wk = w0; wk <= w1; wk++) {
-        if (RM.isBlackoutWeek(meta, wk)) continue;
-        var cell = wk < capData.weeks.length ? capData.weeks[wk] : null;
-        var availTotal = cell ? cell.cap : RM.availForWeek(state, wk).total;
-        var demand = cell ? cell.demand : 0;
-        if (demand + snapWt > availTotal + 1e-9) return false;
-      }
-      return true;
-    }
-
-    var s = est, guard = 0;
-    var dur = RM.stretchSpan(meta, s, work);
-    while (!fits(s, dur) && s + dur < LIMIT && guard < LIMIT) {
-      s += 1; dur = RM.stretchSpan(meta, s, work); guard += 1;
-    }
-    if (!fits(s, dur)) {
-      it.startDay = stash.startDay; it.durDays = stash.durDays; it.riskDays = stash.riskDays;
-      return { state: state, changed: 0, note: 'No free slot found — left unchanged.' };
-    }
-    var riskSpan = RM.stretchSpan(meta, s + dur, RM.riskEffortDays(state, it));
-    var note = null;
-    var neededWeeks = Math.ceil((s + dur + riskSpan) / snapS);
-    if (neededWeeks > meta.numWeeks) {
-      meta.numWeeks = neededWeeks;
-      RM.syncEndDate(meta);
-      note = 'Timeline extended to ' + neededWeeks + ' weeks to fit it.';
-    }
-    var changed = (stash.startDay !== s || stash.durDays !== dur || stash.riskDays !== riskSpan) ? 1 : 0;
-    if (stash.startDay != null) RM.shiftStories(it, s - stash.startDay);
-    it.startDay = s;
-    it.durDays = dur;
-    it.riskDays = riskSpan;
-    return { state: state, changed: changed, note: note };
   };
 
   // Renumber an item. An invalid or already-taken number falls back to the
