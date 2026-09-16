@@ -326,6 +326,7 @@
     state.capTypes[i] = newName;
     state.team.forEach(function (m) { if (m.capType === oldName) m.capType = newName; });
     state.items.forEach(function (it) {
+      if (it.capType === oldName) it.capType = newName;
       (it.stories || []).forEach(function (st) { if (st.capType === oldName) st.capType = newName; });
     });
     return true;
@@ -336,6 +337,7 @@
     state.capTypes.splice(i, 1);
     state.team.forEach(function (m) { if (m.capType === name) m.capType = ''; });
     state.items.forEach(function (it) {
+      if (it.capType === name) it.capType = '';
       (it.stories || []).forEach(function (st) { if (st.capType === name) st.capType = ''; });
     });
     return true;
@@ -1297,7 +1299,7 @@
     // demand model: a unit in flight costs one person (× its multiplier) or
     // its story points spread over its weeks against each person's points
     m.capMode = m.capMode === 'points' ? 'points' : 'person';
-    m.defaultPoints = m.defaultPoints != null && isFinite(+m.defaultPoints) && +m.defaultPoints >= 0 ? +m.defaultPoints : 10;
+    m.defaultPoints = m.defaultPoints != null && m.defaultPoints !== '' && isFinite(+m.defaultPoints) && +m.defaultPoints >= 0 ? +m.defaultPoints : 10;
     // which capacity types the header row aggregates: 'all' or a list
     m.capRowTypes = Array.isArray(m.capRowTypes)
       ? m.capRowTypes.filter(function (t) { return typeof t === 'string' && t; }) : 'all';

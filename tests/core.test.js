@@ -269,6 +269,15 @@ ok(sF.phases[0].auto === true, 'phase auto kept when capacity is on');
 ok(sF.phases[1].auto === false, 'bucket phase can never be auto');
 var sF2 = RM.normalizeState({ meta: { capacityEnabled: false }, phases: [{ id: 'p1', auto: true }], items: [] });
 ok(sF2.phases[0].auto === false, 'phase auto cleared when capacity planning is off');
+eq(RM.normalizeState({ meta: { defaultPoints: '' }, phases: [{ id: 'p' }], items: [] }).meta.defaultPoints, 10, 'a blank defaultPoints falls back to 10');
+// a capacity type used by a feature follows a rename / removal
+var sCT = RM.normalizeState({ meta: {}, phases: [{ id: 'p' }], items: [{ num: 1, feature: 'f', capType: 'Design' }] });
+ok(RM.renameCapType(sCT, 'Design', 'UX'), 'renameCapType reports the rename');
+eq(sCT.items[0].capType, 'UX', 'a feature capType follows the rename');
+eq(RM.normalizeState(sCT).capTypes.indexOf('Design'), -1, 'renormalizing does not resurrect the old type');
+ok(RM.removeCapType(sCT, 'UX'), 'removeCapType reports the removal');
+eq(sCT.items[0].capType, '', 'a feature capType is cleared on removal');
+eq(RM.normalizeState(sCT).capTypes.indexOf('UX'), -1, 'renormalizing does not resurrect the removed type');
 
 // ------------------------------------------------------------- regressions (adversarial review)
 section('regressions');
