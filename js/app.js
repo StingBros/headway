@@ -1970,7 +1970,7 @@
     withStory('story size', itemId, stId, function (st2, s) {
       st2.size = sz;
       // a 0-point size is zero effort but still one day on the grid
-      if (sz && st2.startDay != null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, Math.max(1, RM.sizeDays(s, sz, 'story')));
+      if (sz && st2.startDay != null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, snapUpDays(Math.max(1, RM.sizeDays(s, sz, 'story')), 'story'));
     });
   }
   function setStoryRisk(itemId, stId, rv) {
@@ -4314,6 +4314,8 @@
   }
   function sizeMatches(it) {
     if (!it.size || !isScheduled(it)) return true;
+    // a derived size is whatever the bar says it is — never a mismatch
+    if (RM.sizeRollup(state) || RM.autoSized(state, it)) return true;
     var work = RM.workInSpan(state.meta, it.startDay, it.durDays);
     return work === RM.itemSizeDays(state, it, snapOpts());
   }
@@ -6106,7 +6108,7 @@
               var sd2 = RM.dateToDay(s.meta, RM.parseISO(iso));
               if (sd2 == null) return;
               st2.startDay = Math.max(0, sd2);
-              if (st2.durDays == null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, Math.max(1, RM.storyEffortDays(s, st2)));
+              if (st2.durDays == null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, snapUpDays(Math.max(1, RM.storyEffortDays(s, st2)), 'story'));
             });
           }, { allowClear: true, clearLabel: 'Unschedule' });
       } else if (act.dataset.act === 'st-dl') {

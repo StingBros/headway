@@ -2325,6 +2325,12 @@ section('snapped placement');
   var stS = RM.itemByNum(rSpr.state, 1).stories[0];
   eq(stS.startDay, 10, 'sprint snap lands on the next two-week boundary');
   eq(stS.durDays, 10, 'and fills the sprint');
+  // work already under way is left alone by the auto pass
+  var sIn = autoState([{ num: 1, feature: 'F', phaseId: 'p1', capType: 'Development',
+    stories: [{ num: 101, title: 'a', startDay: 3, durDays: 5, capType: 'Development' }] }],
+    [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
+  var stIn = RM.itemByNum(RM.autoTimeline(sIn, { today: 6, snap: { story: 'week', feature: 'week' } }).state, 1).stories[0];
+  eq([stIn.startDay, stIn.durDays], [3, 5], 'an in-flight story keeps its start and duration under a snap');
   var sPl = snapSt();
   var stId = sPl.items[0].stories[0].id;
   var rPl = RM.placeUnit(sPl, sPl.items[0].id, stId, { today: 2, snap: { story: 'week', feature: 'week' } });

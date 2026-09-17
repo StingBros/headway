@@ -5190,6 +5190,27 @@ ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'co
   window.HeadwayApp.ai.commit('hand size', (s) => { s.items.find(i => i.id === f0.id).size = 'XS'; });
   ok(ff().size === sizeWas, 'a hand-written size is re-derived on the next commit');
 
+  // a derived size is whatever the bar says: never the mismatch tint, however
+  // much rounding the feature snap adds. A 3-day hull under a week feature
+  // snap derives from 5 days, so the raw comparison would disagree.
+  const s3 = window.RM.sizeOrderOf(state(), 'story').find(l => window.RM.sizeDays(state(), l, 'story') === 3);
+  // (locked so the Auto pass leaves the hand-built 3-day hull alone)
+  window.HeadwayApp.ai.commit('three-day story', (s) => {
+    const t = s.items.find(i => i.id === f0.id);
+    t.stories.forEach((st, ix) => {
+      st.size = ix ? null : s3; st.locked = true; st.startDay = 0; st.durDays = ix ? 1 : 3;
+    });
+  });
+  const rawH = window.RM.itemSizeDays(state(), ff());
+  const roundH = window.RM.itemSizeDays(state(), ff(), { snap: { feature: 'week' } });
+  ok(roundH > rawH, 'the week snap rounds the short hull up (' + rawH + ' → ' + roundH + ')');
+  window.HeadwayApp.ai.setPref('snapFeat', 'week');
+  window.HeadwayApp.ai.commit('re-derive', (s) => { s.items.find(i => i.id === f0.id).size = 'XS'; });
+  const szB = doc.querySelector('#rows .row.item[data-id="' + f0.id + '"] [data-act="size"]');
+  ok(!!szB && !szB.classList.contains('custom'),
+    'a derived size never reads as a size/bar mismatch under a week feature snap');
+  window.HeadwayApp.ai.setPref('snapFeat', 'day');
+
   // a story buys whole snap units: 3 days under a week snap stores 5
   window.HeadwayApp.ai.setPref('snapStory', 'week');
   const stId0 = ff().stories[0].id;
@@ -5207,6 +5228,17 @@ ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'co
       'a 3-day story under the week snap buys a whole week (' + stNow().durDays + ')');
   } else {
     ok(false, 'the story panel offers a duration field for a scheduled story');
+  }
+  // …and so does a 3-day story SIZE
+  const szChipS = doc.querySelector('#rows .row.story[data-story="' + stId0 + '"] [data-act="st-size"]');
+  if (s3 && szChipS && stNow().startDay != null) {
+    click(szChipS);
+    const opt = [...doc.querySelectorAll('#popover .menu-list button')].find(b => b.textContent.trim().indexOf(s3) === 0);
+    click(opt);
+    ok(window.RM.workInSpan(state().meta, stNow().startDay, stNow().durDays) === 5,
+      'a 3-day story size under the week snap buys a whole week too (' + stNow().durDays + ')');
+  } else {
+    ok(false, 'the story row offers a size chip with a 3-day option');
   }
   window.HeadwayApp.ai.setPref('snapStory', prevSnapStory);
   window.HeadwayApp.ai.setPref('snapFeat', prevSnapFeat);

@@ -106,7 +106,9 @@
     var off = mode === 'sprint' ? ((RM.sprintInfo(m).anchorWeek * RM.slotsOf(m)) % u + u) % u : 0;
     return Math.ceil((d - off) / u) * u + off;
   };
-  // a COUNT of working days, rounded up to a whole number of snap units
+  // A COUNT of working days, rounded up to a whole number of snap units.
+  // The unit is a count of day-space SLOTS (5 for a week), so a week holding a
+  // holiday only has 4 working days and this over-buys it by one.
   RM.snapUpDays = function (metaOrState, days, mode) {
     var u = RM.snapUnitDays(metaOrState, mode);
     return u <= 1 || days == null ? days : Math.ceil(days / u) * u;
@@ -3168,9 +3170,11 @@
       // work already under way keeps its start: the phase floor never drags it forward
       if (!started && pFloor != null && pFloor > floor) floor = pFloor;
       if (floor > est) est = floor;
-      // the snap grid (when the caller passed one) moves the start to the next
-      // boundary and buys whole units of work
-      var snapMode = RM.snapModeOf(opts, u.storyId ? 'story' : 'feature');
+      // The snap grid (when the caller passed one) moves the start to the next
+      // boundary and buys whole units of work. Work already under way is
+      // exempt: an automatic pass never shoves in-flight work forward (the
+      // explicit Place at earliest slot still snaps it).
+      var snapMode = started ? 'day' : RM.snapModeOf(opts, u.storyId ? 'story' : 'feature');
       var work = RM.snapUpDays(meta, RM.unitWorkDays(state, u, ledger.set), snapMode);
       var s = RM.snapUpDay(meta, est, snapMode);
       var dur = RM.stretchSpan(meta, s, work, ledger.set);
