@@ -2886,6 +2886,29 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(!JSON.parse(window.localStorage.getItem('headway-ui-v1')).plColW.size,
     'Reset columns clears the planning widths too');
   ok(plLeftW() === plBaseLeftW, 'hiding them again restores the stored pane width');
+
+  // dragging the pane must continue from the width actually on screen, and a
+  // drag narrower than the columns need must preview the floor it will keep
+  plMenu(/^Workstream/);
+  plMenu(/^Epic/);
+  const plDerived = plLeftW();
+  ok(plDerived > plBaseLeftW, 'two wide columns push the pane past the stored width');
+  const plRz = doc.querySelector('#leftRz');
+  const paneDrag = (from, to) => {
+    plRz.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: from }));
+    window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: to }));
+    return plLeftW();
+  };
+  const plWider = paneDrag(700, 710);
+  ok(plWider === plDerived + 10,
+    'a pane drag continues from the derived width (' + plDerived + ' + 10 → ' + plWider + ')');
+  window.dispatchEvent(new window.MouseEvent('pointerup', {}));
+  ok(plLeftW() === plDerived + 10, 'and the dragged width survives pointerup');
+  ok(paneDrag(700, 700 - (plDerived + 10 - plBaseLeftW)) === plDerived,
+    'dragging narrower than the columns need previews the floor, not a squeeze');
+  window.dispatchEvent(new window.MouseEvent('pointerup', {}));
+  plMenu(/Reset columns/);
+  ok(plLeftW() === plBaseLeftW, 'and the stored width returns once the columns are hidden');
 }
 
 
@@ -2935,6 +2958,20 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const pptxSrc = fs.readFileSync(path.join(ROOT, 'js/export-pptx.js'), 'utf8');
   ok(/BAND = '#E3DFD5'/.test(pngSrc) && !/#F4F6F8/.test(pngSrc), 'the PNG export paints a light phase band');
   ok(/BAND = 'E3DFD5'/.test(pptxSrc) && !/'F4F6F8'/.test(pptxSrc), 'the PPTX export paints a light phase band');
+
+  // the title floor and the hover tints are Planning's, not Scoping's
+  ok(/body\[data-view="planning"\] #rows \.r-main,\s*\n\s*body\[data-view="planning"\] \.hl-title\.pl-title\s*{[^}]*min-width:\s*120px/.test(cssRamp),
+    'the title floor is scoped to Planning');
+  ok(!/\n\.row\.item:not\(\.selected\)/.test(cssRamp) &&
+     /body:not\(\[data-view="scoping"\]\) \.row\.item:not\(\.selected\)/.test(cssRamp) &&
+     /body:not\(\[data-view="scoping"\]\) \.row\.story:not\(\.selected\)/.test(cssRamp),
+    'the ramp hover tints skip Scoping');
+  // one definition of Planning's pane width, shared by render, the drag and resize
+  const appSrc = fs.readFileSync(path.join(ROOT, 'js/app.js'), 'utf8');
+  ok((appSrc.match(/planLeftW\(\)/g) || []).length >= 4, 'planLeftW is the single source of the pane width');
+  ok(/addEventListener\('resize'[^}]*planLeftW\(\)/.test(appSrc.replace(/\n/g, ' ')) ||
+     /setTimeout[\s\S]{0,240}planLeftW\(\)/.test(appSrc),
+    'a debounced resize listener re-derives the pane width');
 
   // titles show no box until they are being renamed
   ok(!/span\.r-name:hover\s*\{[^}]*border-color/.test(cssRamp),

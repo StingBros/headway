@@ -1514,9 +1514,8 @@
     document.body.classList.toggle('no-size', !RM.sizingEnabled(state));
     var boardView = view === 'planning' || view === 'scoping' || view === 'budget';
     document.body.classList.toggle('left-collapsed', leftCollapsed && boardView);
-    // Planning's pane grows to fit its columns; the width is derived every
-    // render and never persisted, so the user's own drag stays the floor
-    var planW = Math.max(leftWPlan, Math.min(Math.round(window.innerWidth * 0.7), plColsWidth()));
+    // Planning's pane grows to fit its columns (see planLeftW)
+    var planW = planLeftW();
     document.documentElement.style.setProperty('--left-w',
       (leftCollapsed && boardView ? 0
         : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : planW)) + 'px');
@@ -9208,6 +9207,11 @@
     plColsVisible().forEach(function (k) { sum += plW(k); });
     return PL_ROW_CHROME + sum + PL_TITLE_MIN;
   }
+  // the wider of the user's dragged width and what the visible columns need,
+  // capped at 70vw. Derived, never persisted: leftWPlan stays the user's floor
+  function planLeftW() {
+    return Math.max(leftWPlan, Math.min(Math.round(window.innerWidth * 0.7), plColsWidth()));
+  }
   // the column-label strip is rendered per view: labels, tooltips, resize
   // handles (budget), and drag-to-reorder all live here
   function renderHlCols() {
@@ -11068,7 +11072,7 @@
   (function () {
     var lrs = null;
     function startLeftRz(e) {
-      lrs = { x0: e.clientX, w0: view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan };
+      lrs = { x0: e.clientX, w0: view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : planLeftW() };
       e.preventDefault();
       e.stopPropagation();
     }
@@ -11076,14 +11080,30 @@
     $('#leftRzLine').addEventListener('pointerdown', startLeftRz);
     window.addEventListener('pointermove', function (e) {
       if (!lrs) return;
-      var w = Math.max(240, Math.min(window.innerWidth * 0.7, lrs.w0 + (e.clientX - lrs.x0)));
-      if (view === 'scoping') leftWScope = Math.round(w);
-      else if (view === 'budget') leftWBudget = Math.round(w);
-      else leftWPlan = Math.round(w);
-      document.documentElement.style.setProperty('--left-w', Math.round(w) + 'px');
+      var w = Math.round(Math.max(240, Math.min(window.innerWidth * 0.7, lrs.w0 + (e.clientX - lrs.x0))));
+      var shown = w;
+      if (view === 'scoping') leftWScope = w;
+      else if (view === 'budget') leftWBudget = w;
+      // the raw drag is the user's floor; the column floor still applies to
+      // what is shown, so a narrow drag previews exactly what pointerup keeps
+      else { leftWPlan = w; shown = planLeftW(); }
+      document.documentElement.style.setProperty('--left-w', shown + 'px');
     });
     window.addEventListener('pointerup', function () {
       if (lrs) { lrs = null; saveLocal(); render(); }
+    });
+  })();
+
+  // 70vw moves with the window, so Planning's derived width has to follow it
+  (function () {
+    var t = null;
+    window.addEventListener('resize', function () {
+      if (t) clearTimeout(t);
+      t = setTimeout(function () {
+        t = null;
+        if (view !== 'planning' || leftCollapsed) return;
+        document.documentElement.style.setProperty('--left-w', planLeftW() + 'px');
+      }, 120);
     });
   })();
 

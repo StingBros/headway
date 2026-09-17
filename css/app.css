@@ -808,7 +808,8 @@ body.cap-off .hc-lab { display: none !important; }
 #rows .row.item .row-left .r-num, #rows .row.story .row-left .r-num { display: none; }
 /* the title never squeezes to nothing, however many chip columns are on —
    render() widens the pane to match (see plColsWidth) */
-#rows .r-main, .hl-title.pl-title { min-width: 120px; }
+body[data-view="planning"] #rows .r-main,
+body[data-view="planning"] .hl-title.pl-title { min-width: 120px; }
 /* story rows drag by their grip (reorder, or move to another feature) */
 .st-grip {
   position: absolute; left: 0; top: 0; bottom: 0; width: 18px;
@@ -836,8 +837,8 @@ body.cap-off .hc-lab { display: none !important; }
 .row.flagged.selected .row-left, .row.story.flagged.selected .row-left { background: var(--flag-sel); box-shadow: inset 3px 0 0 var(--flag); }
 /* hover has to beat the ramp now that both row kinds carry a tint of their
    own; selected, flagged and link-source rows keep the colour that says so */
-.row.item:not(.selected):not(.flagged):not(.link-source):hover .row-left { background: var(--lvl-feature-hover); }
-.row.story:not(.selected):not(.flagged):hover .row-left { background: var(--lvl-story-hover); }
+body:not([data-view="scoping"]) .row.item:not(.selected):not(.flagged):not(.link-source):hover .row-left { background: var(--lvl-feature-hover); }
+body:not([data-view="scoping"]) .row.story:not(.selected):not(.flagged):hover .row-left { background: var(--lvl-story-hover); }
 /* the + sits LEFT of the text so the input's text starts exactly where
    story titles do (68 + 12 icon + 5 gap = 85) */
 .row.story-add .st-pad { width: 68px; flex: 0 0 68px; }
