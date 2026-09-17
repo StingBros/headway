@@ -412,8 +412,8 @@ ok(doc.querySelector('#panel [data-f=allabove]') === null, '"all items above" ch
     'epic/workstream bands are sticky under the phase band');
   ok(/\.row\.eband\.sub\s*{[^}]*var\(--eband-real-h/.test(css),
     'nested epic bands stack one band lower');
-  ok(/\.row\.eband \.row-lane\s*{[^}]*background-color:\s*var\(--paper\)/.test(css) &&
-     /\.row\.eband \.row-left\s*{[^}]*background:\s*var\(--paper-2\)/.test(css),
+  ok(/\.row\.eband \.row-lane\s*{[^}]*background-color:\s*var\(--lvl-epic\)/.test(css) &&
+     /\.row\.eband \.row-left\s*{[^}]*background:\s*var\(--lvl-epic\)/.test(css),
     'group band cells are opaque so rows do not show through when pinned');
   ok(/\.row\.eband \.row-lane\s*{[^}]*repeating-linear-gradient\([^)]*\)[^}]*var\(--sprint-px/.test(css),
     'the pinned band lane redraws the sprint grid on the sprint pitch');
@@ -2837,6 +2837,26 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     'Reset columns clears the planning widths too');
 }
 
+
+// ------------------------------------- row depth ramp (stylesheet)
+{
+  const cssRamp = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  const lightRoot = cssRamp.slice(cssRamp.indexOf(':root'), cssRamp.indexOf('html[data-theme="dark"]'));
+  const darkRoot = cssRamp.slice(cssRamp.indexOf('html[data-theme="dark"]'), cssRamp.indexOf('* { box-sizing'));
+  ['--lvl-phase', '--lvl-ws', '--lvl-epic', '--lvl-feature', '--lvl-story'].forEach((t) => {
+    ok(lightRoot.indexOf(t + ':') !== -1 && darkRoot.indexOf(t + ':') !== -1,
+      'both palettes define ' + t);
+  });
+  ok(/--band:\s*var\(--lvl-phase\)/.test(lightRoot) && !/--band:\s*#1A1F26/.test(lightRoot),
+    'the light phase band is no longer a dark literal');
+  ok(/--band-ink:\s*var\(--ink\)/.test(lightRoot), 'light bands carry dark ink');
+  ok(/\.row\.story \.row-left[^{}]*\{[^}]*var\(--lvl-story\)/.test(cssRamp),
+    'story rows paint from --lvl-story');
+  ok(/\.row\.item \.row-left[^{}]*\{[^}]*var\(--lvl-feature\)/.test(cssRamp),
+    'feature rows paint from --lvl-feature');
+  ok(/\.row\.eband\.wsband[^{}]*\{[^}]*var\(--lvl-ws\)/.test(cssRamp),
+    'workstream bands paint from --lvl-ws');
+}
 
 // ------------------------------------------------- batch 11: detail modes
 {

@@ -17,13 +17,21 @@
   --line: #E5E0D5;
   --line-2: #CFC9BB;
   --line-3: #B9B2A2;    /* hovered borders */
-  --band: #1A1F26;
-  --band-ink: #F4F6F8;
-  --band-ink-2: #8D97A1;
-  --band-ink-3: #B9C2CA;
-  --band-line: #444C55;
-  --band-hover: #2A3138;
-  --band-edge: #000;
+  /* row-depth ramp: every row kind steps down from the phase band to the
+     white of a story, in both the left pane and the lane */
+  --lvl-phase: #E3DFD5;
+  --lvl-ws: #ECE9E2;
+  --lvl-epic: #F3F1EC;
+  --lvl-feature: #FAFAF8;
+  --lvl-story: #FFFFFF;
+  /* the phase band is the top of that ramp here, so its ink is ordinary ink */
+  --band: var(--lvl-phase);
+  --band-ink: var(--ink);
+  --band-ink-2: var(--ink-2);
+  --band-ink-3: var(--ink-3);
+  --band-line: var(--line-2);
+  --band-hover: #D8D3C6;
+  --band-edge: var(--line-2);
   --blue: #0057B8;
   --blue-hover: #0064D2;
   --blue-soft: #E3EDF9;
@@ -84,12 +92,18 @@ html[data-theme="dark"] {
   --line: #2A323B;
   --line-2: #3A434E;
   --line-3: #4A545F;
-  --band: #0E1216;
+  /* the same ramp, mirrored: story rows sit at the page's own dark */
+  --lvl-phase: #2A323C;
+  --lvl-ws: #242C36;
+  --lvl-epic: #1F2630;
+  --lvl-feature: #191E24;
+  --lvl-story: #14181D;
+  --band: var(--lvl-phase);
   --band-ink: #E4E9EE;
-  --band-ink-2: #7C8791;
-  --band-ink-3: #97A2AC;
-  --band-line: #333C46;
-  --band-hover: #232B33;
+  --band-ink-2: #97A2AC;
+  --band-ink-3: #B2BCC5;
+  --band-line: #414B56;
+  --band-hover: #333C47;
   --band-edge: #000;
   --blue: #2E7FE0;
   --blue-hover: #3D8FF0;
@@ -302,7 +316,10 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
 #board { flex: 1; overflow: auto; overscroll-behavior: none; }
 #grid { position: relative; width: max-content; min-width: 100%; }
 
-#bgcols { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+/* the row lanes are tinted now, so the grid draws ABOVE them: #bgcols shares
+   z2 with #arrows and .st-bar but comes first in the DOM, so bars, arrows and
+   the sticky left pane (z10) still paint over it */
+#bgcols { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
 /* simplified grid: only sprint boundaries are drawn */
 #bgcols .bg-week {
   position: absolute; top: 0; bottom: 0;
@@ -359,7 +376,7 @@ body[data-view="scoping"] #todayLine { display: none !important; }
   opacity: .82;
 }
 .ph-cell:hover { opacity: 1; cursor: grab; }
-.ph-cell.pinned { outline: 1px solid rgba(255, 255, 255, .55); outline-offset: -1px; }
+.ph-cell.pinned { outline: 1px solid rgba(var(--ink-rgb), .35); outline-offset: -1px; }
 .ph-cell .ph-h { position: absolute; top: 0; bottom: 0; width: 6px; cursor: ew-resize; }
 .ph-cell .ph-h.l { left: 0; }
 .ph-cell .ph-h.r { right: 0; }
@@ -447,6 +464,8 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
   cursor: default;
 }
 .row-lane { position: relative; flex: 1; border-bottom: 1px solid rgba(var(--ink-rgb), .045); }
+/* feature rows sit one step above stories in the ramp, on BOTH sides */
+.row.item .row-left, .row.item .row-lane { background: var(--lvl-feature); }
 .row:hover .row-left { background: var(--paper-2); }
 .row.selected .row-left { background: var(--blue-soft); box-shadow: inset 3px 0 0 var(--blue); }
 /* parent feature of the selected story: the guide bar only — the selected
@@ -723,7 +742,7 @@ body.cap-off .hc-lab { display: none !important; }
 .row.band { height: auto; min-height: var(--band-h); position: sticky; top: var(--hdr-h); z-index: 14; }
 .row.band .row-lane { display: flex; align-items: center; }
 .row.band .row-left, .row.band .row-lane {
-  background: var(--band);
+  background: var(--lvl-phase);
   border-bottom: 1px solid var(--band-edge);
   color: var(--band-ink);
 }
@@ -749,7 +768,7 @@ body.cap-off .hc-lab { display: none !important; }
 #resHead { cursor: pointer; }
 #resHead #resManage { cursor: pointer; }
 .band-chev.open { transform: rotate(90deg); }
-.band-chev:hover { color: var(--ink-inverse); }
+.band-chev:hover { color: var(--band-ink); }
 .band-bucket-tag {
   font-size: 9px; letter-spacing: .08em; text-transform: uppercase;
   border: 1px solid var(--band-line); color: var(--band-ink-2);
@@ -765,7 +784,8 @@ body.cap-off .hc-lab { display: none !important; }
 
 /* story rows */
 .row.story { height: var(--story-h); }
-.row.story .row-left { background: var(--paper-2); border-bottom-color: var(--line); }
+.row.story .row-left, .row.story .row-lane { background: var(--lvl-story); }
+.row.story .row-left { border-bottom-color: var(--line); }
 .row.story .row-lane { border-bottom-color: transparent; }
 /* 53px = grip 18 + chev 20 + dot 15; the story's #number holds the remaining
    32px, so story titles still line up with the feature titles above them */
@@ -795,7 +815,7 @@ body.cap-off .hc-lab { display: none !important; }
 .st-del { opacity: 0; border: 0; background: transparent; color: var(--ink-3); font-size: 11px; padding: 0 7px; }
 .row.story:hover .st-del { opacity: 1; }
 .st-del:hover { color: var(--err); }
-.row.story-add .row-left { background: var(--paper-2); border-bottom-color: var(--line); }
+.row.story-add .row-left { background: var(--lvl-story); border-bottom-color: var(--line); }
 /* flagged rows: a light orange left pane, darker when selected — the same
    roles the gray hover / blue selection play for ordinary rows */
 .row.flagged .row-left, .row.story.flagged .row-left { background: var(--flag-soft); }
@@ -1465,7 +1485,7 @@ body.panning, body.panning * { cursor: grabbing !important; }
 .row.eband { height: 26px; position: sticky; top: calc(var(--hdr-h) + var(--band-real-h, var(--band-h))); z-index: 13; }
 .row.eband.sub { top: calc(var(--hdr-h) + var(--band-real-h, var(--band-h)) + var(--eband-real-h, 26px)); z-index: 12; }
 .row.eband .row-left {
-  background: var(--paper-2);
+  background: var(--lvl-epic);
   border-bottom: 1px solid var(--line-2);
   padding-left: 40px;
 }
@@ -1473,7 +1493,7 @@ body.panning, body.panning * { cursor: grabbing !important; }
    through: redraw them on the lane at the same pitch/phase renderBgCols uses
    (--sprint-px / --sprint-off), in the same color as .bg-week */
 .row.eband .row-lane {
-  background-color: var(--paper);
+  background-color: var(--lvl-epic);
   border-bottom: 1px solid var(--line);
   background-image: repeating-linear-gradient(to right,
     rgba(var(--ink-rgb), .09) 0 1px, transparent 1px var(--sprint-px, var(--week-px)));
@@ -1488,6 +1508,7 @@ body[data-view="scoping"] .row.eband .row-lane {
   background-color: var(--surface);
   background-image: none;
 }
+.row.eband.wsband .row-left, .row.eband.wsband .row-lane { background-color: var(--lvl-ws); }
 .row.eband.wsband .row-left { padding-left: 30px; }
 .row.eband.wsband .eb-name { color: var(--ink); }
 .row.eband.sub .row-left { padding-left: 52px; }
