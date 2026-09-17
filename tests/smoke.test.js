@@ -4424,6 +4424,29 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   if (ce) { ce.focus(); key(']', ce); ok(!doc.querySelector('#panel').hidden, 'brackets are ignored inside a rich editor'); ce.blur(); }
 }
 
+// ------------------------------------------- assistant close clears the panel peek toggle
+// #panelPeek floats over the drawer's top-right corner, so #aiClose would sit
+// under it. jsdom has no layout engine — the two boxes both measure 0 — so this
+// asserts the state class the fix keys on plus the CSS rule that reads it.
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const cssPk = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  const bracket = () => doc.body.dispatchEvent(new window.KeyboardEvent('keydown', { key: ']', bubbles: true, cancelable: true }));
+  ok(!doc.body.classList.contains('peek-on'), 'no peek-on class while the right panel is open');
+  bracket();
+  ok(!doc.querySelector('#panelPeek').hidden && doc.body.classList.contains('peek-on'),
+    'collapsing the right panel marks the body peek-on');
+  click(doc.querySelector('#btnAI'));
+  ok(!doc.querySelector('#aiDrawer').hidden && doc.body.classList.contains('peek-on'),
+    'opening the assistant leaves the peek toggle (and the class) in place');
+  const mPk = cssPk.match(/body\.peek-on\s+\.ai-head\s*\{([^}]*)\}/);
+  ok(!!mPk && /padding-right:\s*(4[0-9]|[5-9]\d)px/.test(mPk[1]),
+    'body.peek-on .ai-head reserves 40px+ on the right so #aiClose lands left of #panelPeek');
+  click(doc.querySelector('#aiDrawer #aiClose'));
+  if (doc.activeElement && doc.activeElement.blur) doc.activeElement.blur(); // the drawer focused its composer
+  bracket();
+  ok(!doc.body.classList.contains('peek-on'), 'reopening the right panel drops the class again');
+}
 // ---------------------------------------------------------------- milestone styles (UI)
 {
   const schedRow = Array.from(doc.querySelectorAll('#rows .row.item')).find(r => {

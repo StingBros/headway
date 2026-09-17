@@ -4480,6 +4480,12 @@
     var ae = document.activeElement;
     var refocus = reloadingDoc && ae && panel && panel.contains(ae) ? panelFieldSelector(ae) : null;
     renderPanelInner();
+    // #panelPeek floats over the top-right corner of the board, which is where
+    // the assistant drawer's close button lands too. Flag the state on <body>
+    // so CSS can pad .ai-head clear of the toggle (Prioritizing hides the
+    // toggle in CSS, so it never counts).
+    var peekEl = $('#panelPeek');
+    document.body.classList.toggle('peek-on', !!(peekEl && !peekEl.hidden) && view !== 'prio');
     if (panel && !panel.hidden && keepTop) panel.scrollTop = keepTop;
     if (refocus) {
       var el = panel.querySelector(refocus);

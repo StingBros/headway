@@ -2456,6 +2456,9 @@ body.no-size .sz-lab { visibility: hidden; }
   color: var(--ink-3);
 }
 #panelPeek svg.lucide { width: 14px; height: 14px; display: block; }
+/* the toggle floats over the assistant drawer's header: keep #aiClose left of
+   it (28px button + its 12px right offset + a 6px gap) */
+body.peek-on .ai-head { padding-right: 46px; }
 #panelPeek:hover { color: var(--ink); box-shadow: var(--shadow-1); }
 body[data-view="budget"] #panelPeek, body[data-view="reports"] #panelPeek,
 body[data-view="prio"] #panelPeek,
