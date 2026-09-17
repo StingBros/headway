@@ -532,7 +532,8 @@ span.r-name {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   cursor: text;
 }
-span.r-name:hover { border-color: var(--line-2); background: var(--surface); }
+/* the plain-text title shows no box: the border belongs to the editor that
+   a double-click swaps in (input.r-name), so hovering never suggests a field */
 /* an untitled row shows a quiet placeholder */
 span.r-name.r-ph, .st-title.r-ph { color: var(--ink-3); }
 .row.done .r-name-txt { text-decoration: line-through; }
@@ -806,12 +807,11 @@ body.cap-off .hc-lab { display: none !important; }
 .st-grip:hover { color: var(--ink); }
 .st-title { flex: 1; min-width: 0; font-size: 12px; color: color-mix(in srgb, var(--ink) 62%, var(--ink-2)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; }
 .st-title.done { text-decoration: line-through; }
-/* a story title renames on double-click too — the same quiet hover box */
+/* a story title renames on double-click too — boxless until it does */
 .st-title-txt {
   border: 1px solid transparent; border-radius: 5px;
   padding: 1px 5px; margin-left: -5px;
 }
-.st-title-txt:hover { border-color: var(--line-2); background: var(--surface); }
 .st-del { opacity: 0; border: 0; background: transparent; color: var(--ink-3); font-size: 11px; padding: 0 7px; }
 .row.story:hover .st-del { opacity: 1; }
 .st-del:hover { color: var(--err); }

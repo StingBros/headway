@@ -2838,7 +2838,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 }
 
 
-// ------------------------------------- row depth ramp (stylesheet)
+// ------------------------------------- row depth ramp + quiet title hover (stylesheet)
 {
   const cssRamp = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
   const lightRoot = cssRamp.slice(cssRamp.indexOf(':root'), cssRamp.indexOf('html[data-theme="dark"]'));
@@ -2856,6 +2856,12 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     'feature rows paint from --lvl-feature');
   ok(/\.row\.eband\.wsband[^{}]*\{[^}]*var\(--lvl-ws\)/.test(cssRamp),
     'workstream bands paint from --lvl-ws');
+
+  // titles show no box until they are being renamed
+  ok(!/span\.r-name:hover\s*\{[^}]*border-color/.test(cssRamp),
+    'plain-text row titles draw no hover outline');
+  ok(!/\.st-title-txt:hover\s*\{[^}]*border-color/.test(cssRamp),
+    'story titles draw no hover outline either');
 }
 
 // ------------------------------------------------- batch 11: detail modes
