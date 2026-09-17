@@ -10,6 +10,9 @@ Format: short sections, bullets, one bold title per notable change —
 ## Unreleased
 
 - The assistant's close button no longer sits under the right-panel toggle.
+- **Auto-sized features**: at the Stories planning level, a feature in an Auto phase with at least one sized story is sized from its stories automatically — the nearest label on the feature scale for the working days its stories' timelines span (parallel stories do not add up); its size chip reads as derived.
+- Auto-sized features round up to the feature snap (day / week / sprint).
+- Stories snap to the story snap when created, auto-placed or placed at the earliest slot.
 - **Planning columns**: the left pane's chip columns have headers, resize by dragging the header edge, reorder by dragging the label, and show/hide from the header's right-click menu or the + at its end — now including Workstream, Epic, Start and Deadline.
 - Phase bands are light in light mode, and rows step down phase → workstream → epic → feature → story to white, across both the left pane and the timeline.
 - Row titles no longer show an outline on hover; the box appears only while renaming.

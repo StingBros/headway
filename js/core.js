@@ -88,18 +88,79 @@
     });
     return any ? sum : null;
   };
-  // under the rollup scheme every feature's size is derived; run after any
-  // change (normalize + commit) so the stored field always reads right
-  RM.applySizeRollup = function (state) {
-    if (!RM.sizeRollup(state)) return;
+  // The snap grid the UI offers, in day-space slots. Core never reads UI
+  // prefs, so callers hand the mode down through an opts.snap object;
+  // a missing mode means 'day', i.e. no rounding at all.
+  RM.snapUnitDays = function (metaOrState, mode) {
+    var m = metaOrState && metaOrState.meta ? metaOrState.meta : metaOrState;
+    if (mode === 'week') return RM.slotsOf(m);
+    if (mode === 'sprint') return RM.sprintDays(m);
+    return 1;
+  };
+  // the first snap boundary at or after a day (the app's snapTo anchor:
+  // sprints follow the sprint anchor, weeks follow day 0)
+  RM.snapUpDay = function (metaOrState, d, mode) {
+    var m = metaOrState && metaOrState.meta ? metaOrState.meta : metaOrState;
+    var u = RM.snapUnitDays(m, mode);
+    if (u <= 1) return d;
+    var off = mode === 'sprint' ? ((RM.sprintInfo(m).anchorWeek * RM.slotsOf(m)) % u + u) % u : 0;
+    return Math.ceil((d - off) / u) * u + off;
+  };
+  // a COUNT of working days, rounded up to a whole number of snap units
+  RM.snapUpDays = function (metaOrState, days, mode) {
+    var u = RM.snapUnitDays(metaOrState, mode);
+    return u <= 1 || days == null ? days : Math.ceil(days / u) * u;
+  };
+  RM.snapModeOf = function (opts, kind) {
+    return (opts && opts.snap && opts.snap[kind]) || 'day';
+  };
+
+  // At the Stories level a feature in an Auto phase takes its size from its
+  // stories: the plan already says when they run, so a hand-picked bucket
+  // would only drift. Needs at least one story whose size has known days.
+  RM.autoSized = function (state, it) {
+    if (!it || it.milestone) return false;
+    if (RM.planLevel(state) !== 'story') return false;
+    if (RM.sizeRollup(state)) return false;   // the rollup scheme derives it already
+    if (!RM.sizingEnabled(state)) return false; // 'none' writes nothing
+    var ph = null;
+    (state.phases || []).forEach(function (p) { if (p.id === it.phaseId) ph = p; });
+    if (!ph || !ph.auto) return false;
+    return (it.stories || []).some(function (st) { return st && RM.sizeDays(state, st.size, 'story') != null; });
+  };
+  // Working days behind an auto-sized feature: the span its scheduled stories
+  // cover — earliest start to latest end, so stories running in parallel do
+  // NOT add up — else their days summed. Rounded up to the feature snap.
+  RM.autoSizeDays = function (state, it, opts) {
+    var lo = null, hi = null;
+    (it.stories || []).forEach(function (st) {
+      if (!st || st.startDay == null || st.durDays == null) return;
+      if (lo == null || st.startDay < lo) lo = st.startDay;
+      var e = st.startDay + Math.max(1, st.durDays);
+      if (hi == null || e > hi) hi = e;
+    });
+    var days = lo != null ? RM.workInSpan(state.meta, lo, hi - lo) : RM.rollupDays(state, it);
+    if (days == null) return null;
+    return RM.snapUpDays(state.meta, days, RM.snapModeOf(opts, 'feature'));
+  };
+  // every derived feature size, rewritten; run after any change (normalize +
+  // commit) so the stored field always reads right
+  RM.applySizeRollup = function (state, opts) {
+    var rollup = RM.sizeRollup(state);
     (state.items || []).forEach(function (it) {
       if (!it || it.milestone) return;
-      it.size = RM.rollupSize(state, it);
+      if (rollup) { it.size = RM.rollupSize(state, it); return; }
+      if (!RM.autoSized(state, it)) return;
+      var d = RM.autoSizeDays(state, it, opts);
+      if (d != null) it.size = RM.sizeForDays(state, d);
     });
   };
-  // the working days an item's size stands for (rolled up, or looked up)
-  RM.itemSizeDays = function (state, it) {
-    return RM.sizeRollup(state) ? RM.rollupDays(state, it) : RM.sizeDays(state, it.size);
+  // the working days an item's size stands for (rolled up, derived from the
+  // stories' span, or looked up)
+  RM.itemSizeDays = function (state, it, opts) {
+    if (RM.sizeRollup(state)) return RM.rollupDays(state, it);
+    if (RM.autoSized(state, it)) return RM.autoSizeDays(state, it, opts);
+    return RM.sizeDays(state, it.size);
   };
   // Features and stories size on SEPARATE scales: features under
   // meta.sizeScheme / sizeOrder / sizeDays, stories under the story* twins.
@@ -3107,8 +3168,11 @@
       // work already under way keeps its start: the phase floor never drags it forward
       if (!started && pFloor != null && pFloor > floor) floor = pFloor;
       if (floor > est) est = floor;
-      var work = RM.unitWorkDays(state, u, ledger.set);
-      var s = est;
+      // the snap grid (when the caller passed one) moves the start to the next
+      // boundary and buys whole units of work
+      var snapMode = RM.snapModeOf(opts, u.storyId ? 'story' : 'feature');
+      var work = RM.snapUpDays(meta, RM.unitWorkDays(state, u, ledger.set), snapMode);
+      var s = RM.snapUpDay(meta, est, snapMode);
       var dur = RM.stretchSpan(meta, s, work, ledger.set);
       if (ledger.constrained(u) && RM.unitWeekDemand(state, u, s, dur, ledger.set) > ledger.peak(u.capType) + 1e-9) {
         var it0 = RM.itemById(state, u.itemId);
@@ -3125,7 +3189,7 @@
       var guard = 0;
       while (guard < HORIZON * S) {
         if (!RM.offDay(meta, s, ledger.set) && ledger.fits(u, s, dur)) break;
-        s += 1; dur = RM.stretchSpan(meta, s, work, ledger.set); guard += 1;
+        s = RM.snapUpDay(meta, s + 1, snapMode); dur = RM.stretchSpan(meta, s, work, ledger.set); guard += 1;
       }
       if (RM.applyUnitPlacement(state, u, s, dur, ledger.set)) out.changed += 1;
       touchedItems[u.itemId] = true;
@@ -3225,8 +3289,10 @@
         if (after > maxEnd) maxEnd = after;
         return;
       }
-      var work = RM.unitWorkDays(state, u, ledger.set);
-      var s = Math.max(today, after, pFloor != null ? pFloor : 0), dur = RM.stretchSpan(meta, s, work, ledger.set);
+      var snapMode = RM.snapModeOf(opts, u.storyId ? 'story' : 'feature');
+      var work = RM.snapUpDays(meta, RM.unitWorkDays(state, u, ledger.set), snapMode);
+      var s = RM.snapUpDay(meta, Math.max(today, after, pFloor != null ? pFloor : 0), snapMode);
+      var dur = RM.stretchSpan(meta, s, work, ledger.set);
       if (ledger.constrained(u) && RM.unitWeekDemand(state, u, s, dur, ledger.set) > ledger.peak(u.capType) + 1e-9) {
         res.note = 'Asks more ' + u.capType + ' in a week than the roster can ever give, so it never fits — left unchanged.';
         if (u.startDay != null && u.durDays != null) {
@@ -3238,7 +3304,7 @@
       var guard = 0;
       while (guard < HORIZON * S) {
         if (!RM.offDay(meta, s, ledger.set) && ledger.fits(u, s, dur)) break;
-        s += 1; dur = RM.stretchSpan(meta, s, work, ledger.set); guard += 1;
+        s = RM.snapUpDay(meta, s + 1, snapMode); dur = RM.stretchSpan(meta, s, work, ledger.set); guard += 1;
       }
       if (RM.applyUnitPlacement(state, u, s, dur, ledger.set)) res.changed += 1;
       ledger.book(u, s, dur, 1);

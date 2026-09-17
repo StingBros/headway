@@ -5151,6 +5151,74 @@ ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'co
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
+// ------------------------------------------------ auto-sized features + story snap (Stories level)
+{
+  const restore = JSON.stringify(state());
+  const prevSnapStory = window.HeadwayApp.ai.ui().snapStory;
+  const prevSnapFeat = window.HeadwayApp.ai.ui().snapFeat;
+  window.HeadwayApp.ai.setPref('snapFeat', 'day');
+  window.HeadwayApp.ai.setPref('snapStory', 'day');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const f0 = [...doc.querySelectorAll('#rows .row.item[data-id]')]
+    .map(r => state().items.find(i => i.id === r.dataset.id))
+    .find(i => i && !i.milestone && (i.stories || []).length >= 1);
+  const stSizes = window.RM.sizeOrderOf(state(), 'story').filter(l => window.RM.sizeDays(state(), l, 'story') >= 3);
+  const stSize = stSizes[0];
+  window.HeadwayApp.ai.commit('auto-sized setup', (s) => {
+    s.meta.planLevel = 'story';
+    s.meta.capacityEnabled = true;
+    s.phases.forEach((p) => { p.auto = p.id === f0.phaseId && !p.bucket; });
+    const t = s.items.find(i => i.id === f0.id);
+    t.size = 'XL';
+    t.stories.forEach((st) => { st.size = null; });
+    t.stories[0].size = stSize;
+  });
+  const ff = () => state().items.find(i => i.id === f0.id);
+  ok(window.RM.autoSized(state(), ff()), 'a feature in an Auto phase with a sized story is auto-sized');
+  ok(ff().size === window.RM.sizeForDays(state(), window.RM.itemSizeDays(state(), ff())),
+    'its size is the nearest label for the span its stories cover, not the hand-picked XL');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const szA = doc.querySelector('#rows .row.item[data-id="' + f0.id + '"] [data-act="size"]');
+  ok(!!szA && szA.classList.contains('ro'), 'its size chip reads as derived (.ro)');
+  ok(szA.getAttribute('title') === 'Sized from its stories (Auto timeline, Stories level)', 'and the tooltip says where the size comes from');
+  click(szA);
+  ok(!doc.querySelector('#popover .menu-list'), 'clicking the chip opens no size menu');
+  window.__headway.selectItem(f0.id);
+  ok(!!doc.querySelector('#panel .p-rollup') && !doc.querySelector('#panel [data-f="size"]'),
+    'the panel shows the derived size instead of the size buttons');
+  const sizeWas = ff().size;
+  window.HeadwayApp.ai.commit('hand size', (s) => { s.items.find(i => i.id === f0.id).size = 'XS'; });
+  ok(ff().size === sizeWas, 'a hand-written size is re-derived on the next commit');
+
+  // a story buys whole snap units: 3 days under a week snap stores 5
+  window.HeadwayApp.ai.setPref('snapStory', 'week');
+  const stId0 = ff().stories[0].id;
+  if (!doc.querySelector('#rows .row.story[data-story="' + stId0 + '"]')) {
+    click(doc.querySelector('#rows .row.item[data-id="' + f0.id + '"] .r-chev'));
+  }
+  const stRowA = doc.querySelector('#rows .row.story[data-story="' + stId0 + '"]');
+  if (stRowA) click(stRowA.querySelector('.row-left') || stRowA);
+  const durIn = doc.querySelector('#panel [data-stf="durWeeks"]');
+  const stNow = () => ff().stories.find(st => st.id === stId0);
+  if (durIn && stNow().startDay != null) {
+    durIn.value = '0.6'; // 3 days
+    durIn.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(window.RM.workInSpan(state().meta, stNow().startDay, stNow().durDays) === 5,
+      'a 3-day story under the week snap buys a whole week (' + stNow().durDays + ')');
+  } else {
+    ok(false, 'the story panel offers a duration field for a scheduled story');
+  }
+  window.HeadwayApp.ai.setPref('snapStory', prevSnapStory);
+  window.HeadwayApp.ai.setPref('snapFeat', prevSnapFeat);
+  window.HeadwayApp.ai.commit('restore', (s) => {
+    const d = JSON.parse(restore);
+    s.meta = d.meta; s.phases = d.phases; s.items = d.items;
+  });
+  window.__headway.selectItem(null);
+  ok(state().items.find(i => i.id === f0.id).size === JSON.parse(restore).items.find(i => i.id === f0.id).size,
+    'the document is back the way the suite found it');
+}
+
 // ---------------------------------------------------------------- tags (panel editor + filter)
 let tagFilterChecks = () => Promise.resolve();
 let taggedForXlsx = null;

@@ -2229,3 +2229,106 @@ section('zero points');
     phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
   eq(RM.sizeOrderOf(sZFO).join(','), '0.5,1,2,3,5,8,13', 'an older feature Fibonacci scale gains 0.5 only');
 }
+
+// -------------------------------------------- auto-sized features (Stories level)
+section('auto-sized features');
+{
+  var TSHIRT = { XS: 2, S: 5, M: 10, L: 20, XL: 40 };
+  function asMeta(over) {
+    var m = { planLevel: 'story', sizeScheme: 'tshirt', sizeOrder: ['XS', 'S', 'M', 'L', 'XL'], sizeDays: JSON.parse(JSON.stringify(TSHIRT)),
+      storySizeScheme: 'fibonacci' };
+    if (over) Object.keys(over).forEach(function (k) { m[k] = over[k]; });
+    return m;
+  }
+  function asState(stories, over, phases) {
+    return autoState([{ num: 1, feature: 'F', phaseId: 'p1', capType: 'Development', size: 'XL', stories: stories }],
+      [{ name: 'Solo', capType: 'Development' }], asMeta(over), phases);
+  }
+  var f1 = function (s) { return RM.itemByNum(s, 1); };
+
+  // parallel stories don't add up: the size follows the span their bars cover
+  var sPar = asState([
+    { num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' },
+    { num: 102, title: 'b', size: '5', startDay: 0, durDays: 5, capType: 'Development' }
+  ]);
+  ok(RM.autoSized(sPar, f1(sPar)), 'a feature in an Auto phase with a sized story is auto-sized');
+  eq(RM.itemSizeDays(sPar, f1(sPar)), 5, 'two parallel 5-day stories span 5 working days');
+  eq(f1(sPar).size, 'S', 'and the derived size is the nearest label (S)');
+
+  var sSeq = asState([
+    { num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' },
+    { num: 102, title: 'b', size: '5', startDay: 5, durDays: 5, capType: 'Development' }
+  ]);
+  eq(RM.itemSizeDays(sSeq, f1(sSeq)), 10, 'two sequential 5-day stories span 10 working days');
+  eq(f1(sSeq).size, 'M', 'which reads as M');
+
+  // nothing scheduled: fall back to the sized stories added up
+  var sUns = asState([
+    { num: 101, title: 'a', size: '5', capType: 'Development' },
+    { num: 102, title: 'b', size: '5', capType: 'Development' }
+  ]);
+  eq(RM.itemSizeDays(sUns, f1(sUns)), 10, 'unscheduled sized stories fall back to their days summed');
+  eq(f1(sUns).size, 'M', 'and size from that sum');
+
+  // (ii) no sized story at all: the hand size stands
+  var sNo = asState([{ num: 101, title: 'a', startDay: 0, durDays: 5, capType: 'Development' }]);
+  ok(!RM.autoSized(sNo, f1(sNo)), 'no sized story means no auto-sizing');
+  eq(f1(sNo).size, 'XL', 'and the hand size survives');
+
+  // (iii) feature level, or a phase that is not Auto
+  var sFeat = asState([{ num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' }], { planLevel: 'feature' });
+  ok(!RM.autoSized(sFeat, f1(sFeat)) && f1(sFeat).size === 'XL', 'the Features level keeps the hand size');
+  var sManual = asState([{ num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' }], null,
+    [{ id: 'p1', name: 'Alpha', bucket: false, auto: false }, { id: 'p3', name: 'Next', bucket: true }]);
+  ok(!RM.autoSized(sManual, f1(sManual)) && f1(sManual).size === 'XL', 'a phase without Auto keeps the hand size');
+
+  // (iv) the "none" scheme writes nothing
+  var sNone = asState([{ num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' }],
+    { sizeScheme: 'none', sizeOrder: [], sizeDays: {} });
+  ok(!RM.autoSized(sNone, f1(sNone)), 'the none scheme is never auto-sized');
+
+  // (v) turning Auto off hands the size back
+  var sOff = asState([{ num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' }]);
+  eq(f1(sOff).size, 'S', 'auto-sized while the phase is Auto');
+  sOff.phases[0].auto = false;
+  f1(sOff).size = 'XL';
+  RM.applySizeRollup(sOff);
+  eq(f1(sOff).size, 'XL', 'with Auto off a hand edit sticks');
+
+  // (A) the derived day count rounds UP to the feature snap
+  var sSnap = asState([{ num: 101, title: 'a', size: '5', startDay: 0, durDays: 6, capType: 'Development' }]);
+  eq(RM.itemSizeDays(sSnap, f1(sSnap)), 6, 'day snap leaves the 6-day hull alone');
+  eq(f1(sSnap).size, 'S', 'and 6 days reads as S');
+  eq(RM.itemSizeDays(sSnap, f1(sSnap), { snap: { feature: 'week' } }), 10, 'week snap rounds the 6-day hull up to 10');
+  RM.applySizeRollup(sSnap, { snap: { feature: 'week' } });
+  eq(f1(sSnap).size, 'M', 'so the feature reads as the two-week label');
+  eq(RM.snapUnitDays(sSnap.meta, 'day'), 1, 'snapUnitDays: a day is one slot');
+  eq(RM.snapUnitDays(sSnap.meta, 'week'), 5, 'snapUnitDays: a week is the work week');
+  eq(RM.snapUnitDays(sSnap.meta, 'sprint'), 10, 'snapUnitDays: a sprint is its weeks');
+}
+
+// -------------------------------------------- snapped placement
+section('snapped placement');
+{
+  function snapSt() {
+    return autoState([{ num: 1, feature: 'F', phaseId: 'p1', capType: 'Development',
+      stories: [{ num: 101, title: 'a', durDays: 3, capType: 'Development' }] }],
+      [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
+  }
+  var rPlain = RM.autoTimeline(snapSt(), { today: 2 });
+  eq(RM.itemByNum(rPlain.state, 1).stories[0].startDay, 2, 'without a snap the story starts the day it is ready');
+  var rWeek = RM.autoTimeline(snapSt(), { today: 2, snap: { story: 'week', feature: 'week' } });
+  var stW = RM.itemByNum(rWeek.state, 1).stories[0];
+  eq(stW.startDay, 5, 'week snap pushes a story ready on day 2 to the next week');
+  eq(stW.durDays, 5, 'and rounds its 3 days up to a whole week');
+  var rSpr = RM.autoTimeline(snapSt(), { today: 2, snap: { story: 'sprint', feature: 'sprint' } });
+  var stS = RM.itemByNum(rSpr.state, 1).stories[0];
+  eq(stS.startDay, 10, 'sprint snap lands on the next two-week boundary');
+  eq(stS.durDays, 10, 'and fills the sprint');
+  var sPl = snapSt();
+  var stId = sPl.items[0].stories[0].id;
+  var rPl = RM.placeUnit(sPl, sPl.items[0].id, stId, { today: 2, snap: { story: 'week', feature: 'week' } });
+  var stP = RM.itemByNum(rPl.state, 1).stories[0];
+  eq(stP.startDay, 5, 'Place at earliest slot snaps too');
+  eq(stP.durDays, 5, 'and rounds the duration up');
+}

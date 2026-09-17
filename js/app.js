@@ -507,8 +507,8 @@
       // rule normalize enforces, applied here for edits that skip it
       state.phases.forEach(function (p) { if (p.auto && (!state.meta.capacityEnabled || p.bucket)) p.auto = false; });
       if (anyAutoPhase()) {
-        RM.applySizeRollup(state); // rolled-up sizes size the bars the layout places
-        var r = RM.autoTimeline(state);
+        RM.applySizeRollup(state, snapOpts()); // derived sizes size the bars the layout places
+        var r = RM.autoTimeline(state, snapOpts());
         if (r.changed) { state = r.state; moved = r.changed; }
       }
       if (autoOrder && moved) RM.sortItemsByStart(state);
@@ -629,7 +629,7 @@
   function afterChange() {
     docSaved = false;
     sessionEdited = true;
-    RM.applySizeRollup(state); // rolled-up feature sizes follow their stories
+    RM.applySizeRollup(state, snapOpts()); // derived feature sizes follow their stories
     validation = RM.validate(state);
     saveLocal();
     render();
@@ -1980,7 +1980,10 @@
   function setStoryDur(itemId, stId, days) {
     withStory('story duration', itemId, stId, function (st2, s) {
       if (days == null) { st2.durDays = null; st2.startDay = null; }
-      else st2.durDays = st2.startDay != null ? RM.stretchSpan(s.meta, st2.startDay, days) : days;
+      else {
+        var want = snapUpDays(days, 'story'); // a story buys whole snap units
+        st2.durDays = st2.startDay != null ? RM.stretchSpan(s.meta, st2.startDay, want) : want;
+      }
     });
   }
   function storySizeMenu(anchor, itemId, stId) {
@@ -2170,7 +2173,7 @@
     if (it.milestone) return '';
     if (key === 'size') {
       if (!RM.sizingEnabled(state)) return '';
-      return '<span class="r-size' + sizeRoCls() + '" tabindex="0" role="button" ' + attr + '="size" title="' + sizeChipTitle() + '">' + (it.size ? esc(it.size) : '·') + '</span>';
+      return '<span class="r-size' + sizeRoCls(it) + '" tabindex="0" role="button" ' + attr + '="size" title="' + sizeChipTitle(it) + '">' + (it.size ? esc(it.size) : '·') + '</span>';
     }
     if (key === 'pri') {
       if (!RM.priorityEnabled(state)) return '';
@@ -2197,7 +2200,7 @@
     var itA = RM.itemById(state, itemId);
     if (!itA) return false;
     if (act === 'size') {
-      if (sizeLocked()) return true;
+      if (sizeLocked(itA)) return true;
       openDropdown(anchor, [{ label: '<i>no size</i>', checked: !itA.size, fn: function () { setItemSize(itemId, null); } }]
         .concat(RM.sizeOrderOf(state).map(function (sz) {
           return { label: esc(sz) + ' <small>' + sizeHuman(sz) + '</small>', checked: itA.size === sz, fn: function () { setItemSize(itemId, sz); } };
@@ -2306,7 +2309,7 @@
       fields + stories +
       '<div class="pr-chips">' +
       (prChipOn('size') // the column field's chip is redundant; hidden chips come from the Fields menu
-        ? '<span class="r-size' + sizeRoCls() + '" tabindex="0" role="button" data-pract="size" title="' + sizeChipTitle() + '">' +
+        ? '<span class="r-size' + sizeRoCls(it) + '" tabindex="0" role="button" data-pract="size" title="' + sizeChipTitle(it) + '">' +
           (it.size ? esc(it.size) : '·') + '</span>' : '') +
       (prChipOn('priority')
         ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) +
@@ -2744,7 +2747,7 @@
       if (!itC) return;
       var act = chip.dataset.pract;
       if (act === 'size') {
-        if (sizeLocked()) return;
+        if (sizeLocked(itC)) return;
         openDropdown(chip, [{ label: '<i>no size</i>', checked: !itC.size, fn: function () {
           setItemSize(cid, null);
         } }].concat(RM.sizeOrderOf(state).map(function (sz) {
@@ -3943,7 +3946,7 @@
       var epIco2 = RM.iconForEpic(state, it.epic);
       var fixedContent = {
         size: it.milestone ? '<span class="r-size r-blank"></span>'
-          : '<span class="r-size' + sizeCls + sizeRoCls() + '" tabindex="0" role="button" data-act="size" title="' + sizeChipTitle() + '">' + (it.size ? esc(it.size) : '') + '</span>',
+          : '<span class="r-size' + sizeCls + sizeRoCls(it) + '" tabindex="0" role="button" data-act="size" title="' + sizeChipTitle(it) + '">' + (it.size ? esc(it.size) : '') + '</span>',
         risk: riskChipHtml(),
         duration: it.milestone
           ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone">0w</span>'
@@ -4025,7 +4028,7 @@
         // the planning chips follow the user's column order/visibility
         var chips = {
           size: RM.sizingEnabled(state) && !it.milestone
-            ? '<span class="r-size' + sizeCls + sizeRoCls() + '" tabindex="0" role="button" data-act="size" title="' + sizeChipTitle() + '">' + (it.size ? esc(it.size) : '·') + '</span>'
+            ? '<span class="r-size' + sizeCls + sizeRoCls(it) + '" tabindex="0" role="button" data-act="size" title="' + sizeChipTitle(it) + '">' + (it.size ? esc(it.size) : '·') + '</span>'
             : '<span class="r-size r-blank"></span>',
           pri: RM.priorityEnabled(state) && !it.milestone
             ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) + '" tabindex="0" role="button" data-act="priority" title="' + esc(priChipTitle(it)) + '">' + (priChipContent(it) || '·') + '</span>'
@@ -4312,7 +4315,7 @@
   function sizeMatches(it) {
     if (!it.size || !isScheduled(it)) return true;
     var work = RM.workInSpan(state.meta, it.startDay, it.durDays);
-    return work === RM.itemSizeDays(state, it);
+    return work === RM.itemSizeDays(state, it, snapOpts());
   }
 
   // ------------------------------------------------------------ arrows
@@ -4553,9 +4556,14 @@
       (it.epic ? esc(it.epic) : '<i>— none —</i>'), null, 'Epic');
     var typeDd = ddButton('teamType', it.teamType ? esc(it.teamType) : 'Any role', null, 'Which role works this item');
 
+    var sizeAutoP = sizeAuto(it);
     var sizeBtns = RM.sizeRollup(state)
       ? '<span class="p-rollup" title="Sum of the story points">' +
         (it.size ? esc(it.size) + ' pt <small>' + esc(fmtDays(RM.rollupDays(state, it) || 0)) + '</small>' : '<i>no sized ' + esc(lvl('story', true).toLowerCase()) + '</i>') +
+        '</span>'
+      : sizeAutoP
+      ? '<span class="p-rollup" title="' + esc(SIZE_AUTO_TIP) + '">' +
+        (it.size ? esc(it.size) + ' <small>' + esc(fmtDays(RM.itemSizeDays(state, it, snapOpts()) || 0)) + '</small>' : '<i>not sized yet</i>') +
         '</span>'
       : RM.sizeOrderOf(state).map(function (s) {
         return '<button data-f="size" data-v="' + esc(s) + '"' + (it.size === s ? ' class="on"' : '') +
@@ -4724,7 +4732,7 @@
       sec('schedule', it.milestone || !RM.sizingEnabled(state) ? 'Schedule' : 'Size &amp; schedule', '',
         (it.milestone || !RM.sizingEnabled(state) ? '' :
           '<label class="p-lab">Size</label>' +
-          (RM.sizeRollup(state)
+          (RM.sizeRollup(state) || sizeAutoP
             ? '<div style="margin-bottom:8px">' + sizeBtns + '</div>'
             : '<div class="seg" style="margin-bottom:8px">' + sizeBtns +
               '<button data-f="size" data-v=""' + (!it.size ? ' class="on"' : '') + ' title="No size">—</button></div>')) +
@@ -5563,7 +5571,7 @@
     var f = btn.dataset.f;
     if (f === 'close') { select(null); return; }
     if (f === 'size') {
-      if (sizeLocked()) return;
+      if (sizeLocked(it)) return;
       var v = btn.dataset.v || null;
       commit('size', function (s) {
         var t = RM.itemById(s, it.id);
@@ -5601,7 +5609,7 @@
         toast(it.locked ? 'Locked — unlock it to place it' : 'Already done — nothing to place', 'err');
         return;
       }
-      var r = RM.placeUnit(state, it.id, null);
+      var r = RM.placeUnit(state, it.id, null, snapOpts());
       if (r.changed) {
         if (autoOrder) RM.sortItemsByStart(r.state);
         replaceState('snap', r.state);
@@ -5643,7 +5651,7 @@
         t.size = null; t.priority = null; // milestones carry neither
       } else if (t.durDays != null) {
         // back to a bar: restore a duration from the size (else one week)
-        var days = RM.itemSizeDays(s, t) || 5;
+        var days = RM.itemSizeDays(s, t, snapOpts()) || 5;
         t.durDays = RM.stretchSpan(s.meta, t.startDay, days);
       }
     });
@@ -5736,7 +5744,7 @@
         var swv = Math.max(0.2, parseFloat(sval) || 1);
         commit('story duration', function (s) {
           var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
-          if (st2 && st2.startDay != null) st2.durDays = Math.max(1, Math.round(swv * SPW()));
+          if (st2 && st2.startDay != null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, snapUpDays(Math.max(1, Math.round(swv * SPW())), 'story'));
         });
         return;
       }
@@ -6220,7 +6228,7 @@
           return;
         }
         case 'size': {
-          if (sizeLocked()) return;
+          if (sizeLocked(it)) return;
           openDropdown(act, [{ label: '<i>no size</i>', checked: !it.size, fn: function () {
             setItemSize(itemId, null);
           } }].concat(RM.sizeOrderOf(state).map(function (sz) {
@@ -6386,15 +6394,22 @@
   // set size / risk from the chip dropdowns
   // under the rollup scheme feature sizes derive from the stories: every
   // size editor says so instead of opening
-  function sizeLocked() {
+  // …and at the Stories level an Auto phase's feature takes its size from the
+  // span of its stories: that editor is read-only too
+  var SIZE_AUTO_TIP = 'Sized from its stories (Auto timeline, Stories level)';
+  function sizeAuto(it) { return !!it && !RM.sizeRollup(state) && RM.autoSized(state, it); }
+  function sizeLocked(it) {
+    if (sizeAuto(it)) { toast(SIZE_AUTO_TIP); return true; }
     if (!RM.sizeRollup(state)) return false;
     toast(lvl('feature') + ' sizes roll up from ' + lvl('story', true).toLowerCase() + ' \u2014 size the ' + lvl('story', true).toLowerCase() + ' instead');
     return true;
   }
-  function sizeRoCls() { return RM.sizeRollup(state) ? ' ro' : ''; }
-  function sizeChipTitle() { return RM.sizeRollup(state) ? 'Size (sum of story points)' : 'Size'; }
+  function sizeRoCls(it) { return RM.sizeRollup(state) || sizeAuto(it) ? ' ro' : ''; }
+  function sizeChipTitle(it) {
+    return RM.sizeRollup(state) ? 'Size (sum of story points)' : sizeAuto(it) ? SIZE_AUTO_TIP : 'Size';
+  }
   function setItemSize(itemId, sz) {
-    if (sizeLocked()) return;
+    if (sizeLocked(RM.itemById(state, itemId))) return;
     commit('size', function (s) {
       var t = RM.itemById(s, itemId);
       t.size = sz;
@@ -6998,7 +7013,7 @@
     if (storyId && !st) return null;
     return { icon: 'zap', label: 'Place at earliest slot',
       disabled: !!it.locked || !!it.done || !!(st && st.done), fn: function () {
-      var r = RM.placeUnit(state, itemId, storyId || null);
+      var r = RM.placeUnit(state, itemId, storyId || null, snapOpts());
       // a partial placement still lands what it could — keep it, and say why
       if (r.changed) {
         if (autoOrder) RM.sortItemsByStart(r.state); // applyAutoRules only sorts an auto pass
@@ -8043,6 +8058,10 @@
   // follow the sprint anchor in Setup
   var SNAP_LABELS = { day: 'day', week: 'week', sprint: 'sprint' };
   function snapModeFor(kind) { return kind === 'story' ? snapStory : snapFeat; }
+  // core never reads UI prefs: hand the snap modes down explicitly
+  function snapOpts() { return { snap: { feature: snapFeat, story: snapStory } }; }
+  // a working-day count, rounded up to a whole number of the kind's snap unit
+  function snapUpDays(days, kind) { return days == null ? days : RM.snapUpDays(state.meta, days, snapModeFor(kind)); }
   function setSnapMode(kind, mode) { if (kind === 'story') snapStory = mode; else snapFeat = mode; }
   function snapUnit(kind) {
     var mode = snapModeFor(kind);
