@@ -192,7 +192,25 @@ sCap.meta.capRowTypes = ['Design'];
 var capD = RM.capacity(sCap);
 eq(capD.weeks[1].demand, 1, 'filtered row shows only the selected type');
 ok(!capD.weeks[1].over, 'and only the selected types decide over');
+// tracked capacity types: one row each
+eq(RM.trackedCapTypes(sCap), ['Design'], 'a set list is what is tracked');
+sCap.meta.capRowTypes = ['Design', 'Development'];
+eq(RM.trackedCapTypes(sCap), ['Development', 'Design'], 'tracked types come back in capacity-type order');
+var capTwo = RM.capacity(sCap);
+eq(capTwo.types, ['Development', 'Design'], 'one row per tracked type');
+eq(capTwo.rows.Development[1].demand, 3, 'the Development row carries only Development demand');
+eq(capTwo.rows.Development[1].supply, 1.5, 'and only Development supply');
+eq(capTwo.rows.Design[1].demand, 1, 'the Design row carries only Design demand');
+eq(capTwo.rows.Design[1].supply, 0, 'nobody supplies Design');
+ok(capTwo.rows.Design[1].over, 'a tracked type nobody supplies is over as soon as anything asks for it');
+ok(capTwo.rows.Development[1].over && !capTwo.rows.Development[0].over, 'a supplied row is over only in the week that over-asks');
+ok(capTwo.rows.Design[1].items.indexOf(sCap.items[2].id) !== -1, 'each row lists its own items');
+eq(capTwo.weeks[1].demand, 4, 'the aggregate week sums every tracked type');
+ok(capTwo.rows.Development[16].blackout, 'rows carry the blackout weeks too');
 sCap.meta.capRowTypes = 'all';
+eq(RM.trackedCapTypes(sCap), ['Development'], 'under "all" the tracked types are the ones the roster supplies');
+eq(RM.trackedCapTypes(mkState([], { team: [] })), RM.capTypesOf(sCap),
+  'with nobody supplying anything, every capacity type is tracked');
 // story level: stories carry the demand; the feature bar is ignored
 var sCapS = mkState([
   { num: 1, feature: 'f', startDay: 0, durDays: 20, capType: 'Development', stories: [
@@ -324,6 +342,17 @@ ok(!RM.capacity(rT.state).weeks.some(function (c) { return c.over; }), 'never ov
 eq(RM.autoTimeline(sT, { today: 0, phaseIds: [] }).changed, 0, 'no target phases → nothing changes');
 var sOff = autoState([{ num: 1, feature: 'a', phaseId: 'p1', durDays: 5 }], [], { capacityEnabled: false });
 eq(RM.autoTimeline(sOff, { today: 0 }).changed, 0, 'capacity off → nothing changes');
+// only TRACKED types are constrained; other work is dependency-only
+function trackState(rowTypes) {
+  return autoState([
+    { num: 1, feature: 'dsn a', phaseId: 'p1', durDays: 5, capType: 'Design' },
+    { num: 2, feature: 'dsn b', phaseId: 'p1', durDays: 5, capType: 'Design' }
+  ], [{ name: 'D', capType: 'Development' }, { name: 'S', capType: 'Design' }], { capRowTypes: rowTypes });
+}
+eq(byNum(RM.autoTimeline(trackState(['Development']), { today: 0 }).state)[2].startDay, 0,
+  'an untracked type is dependency-only: both Design units start in the same week');
+eq(byNum(RM.autoTimeline(trackState(['Development', 'Design']), { today: 0 }).state)[2].startDay, 5,
+  'tracking Design makes the second Design unit wait for the week to free up');
 // cap 2: two run together, third waits
 var s2 = autoState([
   { num: 1, feature: 'a', phaseId: 'p1', durDays: 5, capType: 'Development' },

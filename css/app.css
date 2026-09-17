@@ -410,7 +410,16 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
 .hdr-sprints .hdr-lane { background: var(--paper-2); }
 .hdr-weeks { height: 24px; }
 .hdr-cap { height: 22px; }
+/* the column legend sits below the capacity rows, right above the rows it
+   labels; its lane is empty but paints like every other header lane */
+.hdr-legend { height: 22px; }
 .hdr-sprints .hdr-left { border-bottom: 0; }
+.hdr-cap .hdr-left { border-bottom: 0; justify-content: flex-end; }
+/* one label per capacity row, in the column-legend type */
+.cap-row-lab {
+  font-size: 10.5px; font-weight: 700; color: var(--ink);
+  text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .hdr-weeks .hdr-left { border-bottom: 0; }
 .hl-title { font-weight: 700; font-size: 12px; letter-spacing: .02em; color: var(--ink-2); }
 /* label widths mirror the row chips exactly (size 34 · risk 26 · hc 30 · warn 22) */
@@ -445,6 +454,8 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
   position: absolute; top: 3px; bottom: 3px;
   border-radius: 3px;
   font-family: var(--mono); font-size: 9px;
+  /* one line always: a wrapped "3 / 1" would spill into the row below it */
+  white-space: nowrap; overflow: hidden;
   display: flex; align-items: center; justify-content: center;
   color: var(--ink-2);
   cursor: default;
@@ -456,8 +467,6 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
 .cap-cell.idle { background: rgba(var(--ink-rgb), .04); }
 .cap-cell { cursor: pointer; }
 .cap-cell.part { box-shadow: inset 0 -2px 0 rgba(166, 106, 0, .5); } /* week with some holiday days */
-#capTypeCell .dd-btn { padding: 2px 7px; font-size: 10px; border-color: var(--line); }
-#capTypeCell .dd-btn svg.lucide { width: 11px; height: 11px; }
 
 /* rows — no z-index: children (sticky left cells z10, bars z3) must interleave
    with the arrows overlay (z2) inside the #grid stacking context */
@@ -1647,8 +1656,8 @@ body[data-view="scoping"] #resPanel { display: none; }
 
 /* scoping view: spreadsheet of description-oriented columns */
 body[data-view="scoping"] .hdr-weeks,
-body[data-view="scoping"] .hdr-cap { display: none; }
-body.no-cap .hdr-cap { display: none; }
+body[data-view="scoping"] #hdrCapRows { display: none; }
+body.no-cap #hdrCapRows { display: none; }
 
 body[data-view="scoping"] .row.item { height: auto; min-height: 72px; } /* grows with content */
 /* left-pane children all center within one 26px first-line strip, matched to

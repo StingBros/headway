@@ -313,6 +313,29 @@
   // take it (a person's capacity type says what they supply)
   RM.DEFAULT_CAP_TYPES = ['Development', 'Design', 'QA', 'Product', 'Data'];
   RM.capTypesOf = function (state) { return state.capTypes || []; };
+  // the capacity types this document tracks: one header row each, and the
+  // only types Auto timeline / Place at earliest slot constrain. The stored
+  // list when there is one ('all' is the sentinel for "whatever the roster
+  // supplies"); with nobody supplying anything, every type is tracked.
+  RM.trackedCapTypes = function (state) {
+    var all = RM.capTypesOf(state);
+    var sel = state.meta && state.meta.capRowTypes;
+    var list = null;
+    if (Array.isArray(sel)) {
+      list = sel.filter(function (t) { return all.indexOf(t) !== -1; });
+      if (!list.length) list = null;
+    }
+    if (!list) {
+      var sup = RM.capSupply(state).types;
+      list = sup.length ? sup : all;
+    }
+    // one row per type, in capacity-type order (prototype-free: a type may be
+    // named 'constructor')
+    var seen = Object.create(null), out = [];
+    all.forEach(function (t) { if (list.indexOf(t) !== -1 && !seen[t]) { seen[t] = true; out.push(t); } });
+    list.forEach(function (t) { if (!seen[t]) { seen[t] = true; out.push(t); } });
+    return out;
+  };
   // story points a person supplies per sprint; null falls back to the document default
   RM.memberPoints = function (state, m) {
     return m.points != null ? m.points : (state.meta || state).defaultPoints;
@@ -2490,53 +2513,62 @@
     return u.mult > 0 ? u.mult : 1;
   };
 
-  // the header row: per week, demand vs supply for the selected types
+  // the header rows: one per tracked capacity type, each with per-week demand
+  // vs supply. `weeks` keeps the aggregate over the tracked types (validation
+  // and the older readers use it); `rows` is what the header draws.
   RM.capacity = function (state) {
     var meta = state.meta;
     var S = RM.slotsOf(meta);
     var sup = RM.capSupply(state);
-    var sel = meta.capRowTypes === 'all' ? null : meta.capRowTypes;
-    function selected(t) { return sel == null || sel.indexOf(t) !== -1; }
+    var tracked = RM.trackedCapTypes(state);
+    // prototype-free: a capacity type may be named 'constructor'
+    var trackedSet = Object.create(null);
+    tracked.forEach(function (t) { trackedSet[t] = true; });
+    var rows = Object.create(null);
     var weeks = [];
     for (var w = 0; w < meta.numWeeks; w++) {
-      // byType is prototype-free: a type may be named 'constructor'
-      var cell = { demand: 0, supply: 0, over: false, blackout: RM.isBlackoutWeek(meta, w), byType: Object.create(null), items: [] };
-      sup.types.forEach(function (t) {
-        if (!selected(t)) return;
-        cell.byType[t] = { demand: 0, supply: sup.byType[t][w] };
-        cell.supply += sup.byType[t][w];
-      });
-      weeks.push(cell);
+      weeks.push({ demand: 0, supply: 0, over: false, blackout: RM.isBlackoutWeek(meta, w), byType: Object.create(null), items: [] });
     }
+    tracked.forEach(function (t) {
+      var arr = [];
+      for (var w2 = 0; w2 < meta.numWeeks; w2++) {
+        var sv = sup.byType[t] ? sup.byType[t][w2] : 0;
+        arr.push({ demand: 0, supply: sv, over: false, blackout: weeks[w2].blackout, items: [] });
+        weeks[w2].supply += sv;
+        weeks[w2].byType[t] = { demand: 0, supply: sv };
+      }
+      rows[t] = arr;
+    });
     RM.capUnits(state).forEach(function (u) {
       if (u.done || u.milestone || u.startDay == null || u.durDays == null) return;
       var t = u.capType || '';
-      if (t && !selected(t)) return;
-      if (!t && sel != null) return; // untyped work shows under 'all' only
       var d = RM.unitWeekDemand(state, u, u.startDay, u.durDays);
-      // the row's own total covers what it can be judged against: the picked
-      // types, or — under 'all' — the ones the roster actually supplies.
-      // Untyped and unsupplied work still lands in byType, for the tooltip
-      var inRow = sel != null || sup.types.indexOf(t) !== -1;
+      // untyped work, and work of a type this document does not track, has no
+      // row of its own — it still lands in byType, for the older readers
+      var row = t && trackedSet[t] ? rows[t] : null;
       var w0 = Math.floor(u.startDay / S), w1 = Math.floor((u.startDay + Math.max(1, u.durDays) - 1) / S);
       for (var wk = Math.max(0, w0); wk <= Math.min(meta.numWeeks - 1, w1); wk++) {
         var cell = weeks[wk];
         if (cell.blackout) continue;
-        if (inRow) cell.demand += d;
+        if (row) {
+          cell.demand += d;
+          row[wk].demand += d;
+          if (row[wk].items.indexOf(u.itemId) === -1) row[wk].items.push(u.itemId);
+        }
         if (cell.items.indexOf(u.itemId) === -1) cell.items.push(u.itemId);
         if (!cell.byType[t]) cell.byType[t] = { demand: 0, supply: 0 };
         cell.byType[t].demand += d;
       }
     });
-    weeks.forEach(function (cell) {
-      Object.keys(cell.byType).forEach(function (t) {
-        // only a supplied type can be over-asked; untyped and unsupplied work
-        // is dependency-only
-        if (sup.types.indexOf(t) === -1) return;
-        if (cell.byType[t].demand > cell.byType[t].supply + 1e-9) cell.over = true;
+    tracked.forEach(function (t) {
+      // a tracked type nobody supplies can never be done: any ask reads over
+      var supplied = sup.types.indexOf(t) !== -1;
+      rows[t].forEach(function (cell, w3) {
+        cell.over = supplied ? cell.demand > cell.supply + 1e-9 : cell.demand > 1e-9;
+        if (supplied && cell.over) weeks[w3].over = true;
       });
     });
-    return { weeks: weeks, teamTotal: state.team.length, types: sup.types };
+    return { weeks: weeks, rows: rows, types: tracked, supplied: sup.types, teamTotal: state.team.length };
   };
 
   // ------------------------------------------------------------ dependency risk
@@ -2787,24 +2819,26 @@
     function r1(x) { return Math.round(x * 10) / 10; }
     var unitWord = state.meta.capMode === 'points' ? 'points' : 'people';
     if (state.meta.capacityEnabled) {
-      cap.weeks.forEach(function (cell, w) {
-        if (!cell.over) return;
-        var d = RM.weekStartDate(state.meta, w);
-        Object.keys(cell.byType).forEach(function (t) {
-          var bt = cell.byType[t];
-          if (cap.types.indexOf(t) === -1 || bt.demand <= bt.supply + 1e-9) return;
-          global.push({
-            level: 'warn', code: 'OVER_CAP', week: w, capType: t,
-            msg: t + ': ' + r1(bt.demand) + ' ' + unitWord + ' asked, ' + r1(bt.supply) + ' available (week of ' + RM.fmtShort(d) + ')',
-            items: cell.items
+      for (var cw = 0; cw < state.meta.numWeeks; cw++) {
+        (function (w) {
+          var d = RM.weekStartDate(state.meta, w);
+          cap.types.forEach(function (t) {
+            var bt = cap.rows[t][w];
+            // an unsupplied tracked type gets CAP_TYPE_UNSUPPLIED instead
+            if (!bt.over || cap.supplied.indexOf(t) === -1) return;
+            global.push({
+              level: 'warn', code: 'OVER_CAP', week: w, capType: t,
+              msg: t + ': ' + r1(bt.demand) + ' ' + unitWord + ' asked, ' + r1(bt.supply) + ' available (week of ' + RM.fmtShort(d) + ')',
+              items: bt.items
+            });
           });
-        });
-      });
+        })(cw);
+      }
       // a type that scheduled work drains but nobody supplies
       var unsupplied = {};
       RM.capUnits(state).forEach(function (u) {
         if (u.done || u.milestone || u.startDay == null || !u.capType) return;
-        if (cap.types.indexOf(u.capType) === -1) unsupplied[u.capType] = true;
+        if (cap.supplied.indexOf(u.capType) === -1) unsupplied[u.capType] = true;
       });
       Object.keys(unsupplied).forEach(function (t) {
         global.push({ level: 'warn', code: 'CAP_TYPE_UNSUPPLIED', capType: t,
@@ -2894,7 +2928,12 @@
     function weeksOf(startDay, durDays) {
       return [Math.floor(startDay / S), Math.floor((startDay + Math.max(1, durDays) - 1) / S)];
     }
-    function constrained(u) { return !u.milestone && !!u.capType && sup.types.indexOf(u.capType) !== -1; }
+    // only a TRACKED type the roster supplies constrains the plan; other
+    // work is placed by its dependencies alone
+    var tracked = RM.trackedCapTypes(state);
+    function constrained(u) {
+      return !u.milestone && !!u.capType && tracked.indexOf(u.capType) !== -1 && sup.types.indexOf(u.capType) !== -1;
+    }
     // prototype-free: a capacity type may be named 'constructor'
     var peaks = Object.create(null); // the peak never changes: compute each type's once
     return {

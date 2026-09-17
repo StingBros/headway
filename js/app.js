@@ -1585,8 +1585,7 @@
       renderScopeHeader();
       $('#hdrPhases').innerHTML = ''; // line stays visible for the row filter
       $('#bgcols').innerHTML = '';
-      $('#hdrCap').innerHTML = '';
-      $('#capTypeCell').innerHTML = '';
+      $('#hdrCapRows').innerHTML = '';
       $('#arrowPaths').innerHTML = '';
       // the svg keeps its planning-view width attribute otherwise, which
       // stretches the grid past the columns
@@ -3489,7 +3488,7 @@
     var wps = si.wps;
     var sprintW = wps * weekPx;
     var hset = RM.holidayDaySet(meta);
-    var hs = [], hw = [], hc = [];
+    var hs = [], hw = [];
     // sprint boundaries align to the numbering anchor; the first boundary is
     // the one at or before week 0
     var firstB = si.anchorWeek - Math.ceil(si.anchorWeek / wps) * wps;
@@ -3509,38 +3508,44 @@
         '<span class="sp-date">' + dateTxt + '</span>' + numTag + '</div>');
     }
 
-    // capacity row: each week's demand vs supply for the selected capacity
-    // types (Setup → Capacity), in people or points
+    // capacity rows: one per TRACKED capacity type (Setup → Capacity), each
+    // week's demand vs supply for that type, in people or points
     var cap = validation.capacity;
     var unitWord = meta.capMode === 'points' ? 'points' : 'people';
-    var selTypes = meta.capRowTypes === 'all' ? cap.types : meta.capRowTypes;
-    for (var w = 0; w < meta.numWeeks; w++) {
-      var cell = cap.weeks[w];
-      var hn = RM.holidaysInWeek(meta, w, hset);
-      var cls, txt2 = '', title;
-      if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = 'Holiday week'; }
-      else {
-        var ratio = cell.supply > 0 ? cell.demand / cell.supply : (cell.demand > 0 ? Infinity : 0);
-        // work asked of a type nobody supplies can never be done: that reads
-        // over, not ok
-        cls = (cell.over || (cell.supply === 0 && cell.demand > 0))
-          ? 'over' : (cell.demand === 0 ? 'idle' : (ratio > 0.85 ? 'mid' : 'ok'));
-        // demand / supply from the default zoom up; tighter than that, the
-        // ask alone (the tooltip always carries both)
-        txt2 = weekPx >= 28 ? fmtPe(cell.demand) + ' / ' + fmtPe(cell.supply) : (weekPx >= 20 ? fmtPe(cell.demand) : '');
-        title = fmtPe(cell.demand) + ' ' + unitWord + ' asked · ' + fmtPe(cell.supply) + ' available';
-        Object.keys(cell.byType).forEach(function (ct) {
-          var bt = cell.byType[ct];
-          title += ' · ' + (ct || 'untyped') + ' ' + fmtPe(bt.demand) + '/' + fmtPe(bt.supply) +
-            (bt.supply === 0 && bt.demand > 0 ? ' (no supply)' : '');
-        });
-        if (!cap.types.length) title += ' · nobody on the roster supplies a capacity type yet';
+    var capRowsHtml = [];
+    cap.types.forEach(function (ct) {
+      var rowCells = cap.rows[ct];
+      var hcc = [];
+      for (var w = 0; w < meta.numWeeks; w++) {
+        var cell = rowCells[w];
+        var hn = RM.holidaysInWeek(meta, w, hset);
+        var cls, txt2 = '', title;
+        if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = 'Holiday week'; }
+        else {
+          var ratio = cell.supply > 0 ? cell.demand / cell.supply : (cell.demand > 0 ? Infinity : 0);
+          // work asked of a type nobody supplies can never be done: that reads
+          // over, not ok
+          cls = cell.over ? 'over' : (cell.demand === 0 ? 'idle' : (ratio > 0.85 ? 'mid' : 'ok'));
+          // demand / supply while it fits on one line — spaced when the week is
+          // wide, tight around the default zoom, the ask alone below that
+          // (the tooltip always carries both)
+          txt2 = weekPx >= 34 ? fmtPe(cell.demand) + ' / ' + fmtPe(cell.supply)
+            : (weekPx >= 26 ? fmtPe(cell.demand) + '/' + fmtPe(cell.supply)
+              : (weekPx >= 20 ? fmtPe(cell.demand) : ''));
+          title = ct + ': ' + fmtPe(cell.demand) + ' ' + unitWord + ' asked · ' + fmtPe(cell.supply) + ' available' +
+            (cell.supply === 0 ? ' (no supply — nobody on the roster supplies ' + ct + ')' : '');
+        }
+        hcc.push('<div class="cap-cell ' + cls + (hn && !cell.blackout ? ' part' : '') + '" tabindex="0" data-w="' + w +
+          '" style="left:' + (w * weekPx + 1) + 'px;width:' + (weekPx - 2) + 'px" title="' +
+          esc('Week of ' + RM.fmtShort(RM.weekStartDate(meta, w)) + ': ' + title +
+            (hn ? ' · ' + hn + ' holiday day(s)' : '') + ' · click to toggle holiday week') + '">' + txt2 + '</div>');
       }
-      hc.push('<div class="cap-cell ' + cls + (hn && !cell.blackout ? ' part' : '') + '" tabindex="0" data-w="' + w +
-        '" style="left:' + (w * weekPx + 1) + 'px;width:' + (weekPx - 2) + 'px" title="' +
-        esc('Week of ' + RM.fmtShort(RM.weekStartDate(meta, w)) + ': ' + title +
-          (hn ? ' · ' + hn + ' holiday day(s)' : '') + ' · click to toggle holiday week') + '">' + txt2 + '</div>');
-    }
+      capRowsHtml.push('<div class="hdr-line hdr-cap" data-captype="' + esc(ct) + '">' +
+        '<div class="hdr-left"><span class="cap-row-lab" title="' +
+        esc('Each week: ' + unitWord + ' asked / available for ' + ct + ' — Setup → Capacity') + '">' +
+        esc(ct) + ' capacity</span></div>' +
+        '<div class="hdr-lane">' + hcc.join('') + '</div></div>');
+    });
     // phase lane above the dates: user-pinned dates win, otherwise the span
     // auto-derives from the phase's scheduled items; overlapping phases stack
     var PH_H = 20;
@@ -3574,10 +3579,7 @@
 
     $('#hdrSprints').innerHTML = hs.join('');
     $('#hdrSprints').style.width = laneW + 'px';
-    $('#hdrCap').innerHTML = hc.join('');
-    $('#capTypeCell').innerHTML =
-      '<span class="cap-lab" title="' + esc('Each week: ' + unitWord + ' asked / available for ' +
-        (meta.capRowTypes === 'all' ? 'all capacity types' : selTypes.join(', ')) + ' — Setup → Capacity') + '">' + unitWord + '</span>';
+    $('#hdrCapRows').innerHTML = capRowsHtml.join('');
     if (window.lucide) lucide.createIcons();
   }
 
@@ -3667,7 +3669,7 @@
   });
 
   // click a capacity cell to toggle that week as a holiday week
-  $('#hdrCap').addEventListener('click', function (e) {
+  $('#hdrCapRows').addEventListener('click', function (e) {
     if (dragConsumedClick) { dragConsumedClick = false; return; }
     var cell = e.target.closest('[data-w]');
     if (!cell) return;
@@ -8781,10 +8783,10 @@
         saveLocal(); render();
         toast('Critical path highlight ' + (showCrit ? 'on' : 'off'));
       } },
-      state.meta.capacityEnabled ? { icon: 'gauge', label: 'Capacity row', checked: showCap, fn: function () {
+      state.meta.capacityEnabled ? { icon: 'gauge', label: 'Capacity rows', checked: showCap, fn: function () {
         showCap = !showCap;
         saveLocal(); render();
-        toast('Capacity row ' + (showCap ? 'shown' : 'hidden'));
+        toast('Capacity rows ' + (showCap ? 'shown' : 'hidden'));
       } } : null,
       { sep: true },
       state.meta.workstreamsEnabled ? { icon: 'layers', label: 'Group by workstream', checked: groupWs, fn: function () {
@@ -10333,15 +10335,18 @@
         '<div class="p-row" style="margin-top:8px"><input id="suCapTypeAdd" placeholder="New capacity type, e.g. Data"><button id="suCapTypeAddBtn" class="fixed">Add</button></div>' +
         '<div class="m-hint">A ' + esc(lvl('story').toLowerCase()) + '\u2019s capacity type says what it drains and who can take it; a person\u2019s says what they supply. Drag the grips to reorder.</div>' +
         '</section>' +
-        '<section class="su-card"><h2>Capacity row</h2>' +
-        '<label class="p-check"><input type="radio" name="suCapRow" id="suCapRowAll"' + (m.capRowTypes === 'all' ? ' checked' : '') + '> All capacity types</label>' +
-        '<label class="p-check"><input type="radio" name="suCapRow" id="suCapRowSome"' + (m.capRowTypes !== 'all' ? ' checked' : '') + '> Only these:</label>' +
-        '<div style="margin-left:22px">' + RM.capTypesOf(state).map(function (t) {
-          var on = m.capRowTypes !== 'all' && m.capRowTypes.indexOf(t) !== -1;
-          return '<label class="p-check"><input type="checkbox" data-sucaprow="' + esc(t) + '"' + (on ? ' checked' : '') + (m.capRowTypes === 'all' ? ' disabled' : '') + '> ' + esc(t) + '</label>';
-        }).join('') +
-        (m.capRowTypes === 'all' ? '' : '<div class="m-hint">Untick the last type and the row goes back to all types.</div>') + '</div>' +
-        '<div class="m-hint">The row under the header shows each week\u2019s demand against what the roster supplies for these types.</div>' +
+        '<section class="su-card"><h2>Tracked capacity types</h2>' +
+        '<div>' + (function () {
+          var tracked = RM.trackedCapTypes(state);
+          return RM.capTypesOf(state).map(function (t) {
+            var on = tracked.indexOf(t) !== -1;
+            // at least one type is always tracked: the last one cannot come off
+            var last = on && tracked.length === 1;
+            return '<label class="p-check"><input type="checkbox" data-sucaprow="' + esc(t) + '"' +
+              (on ? ' checked' : '') + (last ? ' disabled' : '') + '> ' + esc(t) + '</label>';
+          }).join('');
+        })() + '</div>' +
+        '<div class="m-hint">One header row per tracked type; Auto timeline and Place only constrain these.</div>' +
         '</section>',
       columns: (function () {
         var offNotes = [];
@@ -10576,25 +10581,14 @@
       commit('default points', function (s2) { s2.meta.defaultPoints = dp; });
       return;
     }
-    if (t.id === 'suCapRowAll' || t.id === 'suCapRowSome') {
-      var all = t.id === 'suCapRowAll';
-      commit('capacity row types', function (s2) {
-        if (all) { s2.meta.capRowTypes = 'all'; return; }
-        if (Array.isArray(s2.meta.capRowTypes)) return; // already a list — keep it
-        // coming from "All": start from what the row was already showing (the
-        // supplied types), so the row never drops to a silent 0 / 0
-        var seed = RM.capSupply(s2).types.slice();
-        s2.meta.capRowTypes = seed.length ? seed : RM.capTypesOf(s2).slice();
-      });
-      return;
-    }
     if (t.dataset.sucaprow != null) {
       var rt = t.dataset.sucaprow, rtOn = t.checked;
-      commit('capacity row types', function (s2) {
-        var list = Array.isArray(s2.meta.capRowTypes) ? s2.meta.capRowTypes.slice() : [];
-        list = list.filter(function (x) { return x !== rt; });
+      commit('tracked capacity types', function (s2) {
+        // under 'all' the boxes show what is effectively tracked, so the first
+        // change materialises that list rather than starting from nothing
+        var list = RM.trackedCapTypes(s2).filter(function (x) { return x !== rt; });
         if (rtOn) list.push(rt);
-        // an empty "Only these" would be a silent 0 / 0 row: fall back to All
+        // at least one tracked type: an empty list is the 'all' sentinel again
         s2.meta.capRowTypes = list.length ? list : 'all';
       });
       return;
@@ -11029,7 +11023,7 @@
     resBody.scrollLeft = board.scrollLeft;
   }
 
-  $('#hdrCap').addEventListener('keydown', function (e) {
+  $('#hdrCapRows').addEventListener('keydown', function (e) {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.closest('[data-w]')) {
       e.preventDefault();
       e.target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -11545,7 +11539,7 @@
       '<div class="m-sec"><label>Timeline</label>' +
       chk('deps', 'Dependency arrows', depsMode === 'on') +
       chk('crit', 'Critical path highlight', showCrit) +
-      chk('cap', 'Capacity row', showCap) +
+      chk('cap', 'Capacity rows', showCap) +
       chk('autoOrder', 'Auto-order rows by start', autoOrder) +
       '</div>' +
       '<div class="m-sec"><label>Grouping</label>' +

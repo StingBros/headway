@@ -259,12 +259,17 @@ const visibleSched = state().items.filter(i => i.startDay != null &&
   !state().phases.find(p => p.id === i.phaseId).collapsed).length;
 ok(doc.querySelectorAll('#rows .bar').length === visibleSched,
   'bars rendered for every visible scheduled item (' + doc.querySelectorAll('#rows .bar').length + ')');
-ok(doc.querySelectorAll('#hdrCap .cap-cell').length === 48, 'capacity strip has 48 week cells');
+ok(doc.querySelectorAll('#hdrCapRows .hdr-cap').length >= 1, 'one header capacity row per tracked type');
+ok(doc.querySelectorAll('#hdrCapRows .hdr-cap:first-child .cap-cell').length === 48, 'capacity strip has 48 week cells');
 ok(state() && state().items.length > 100, 'debug state handle live (' + state().items.length + ' items)');
 ok(doc.querySelector('#resPanel') !== null && doc.querySelector('#resGrid') !== null, 'resources panel present');
-ok(doc.querySelector('#capTypeCell .cap-lab') !== null, 'capacity header shows a plain availability label');
-ok(doc.querySelector('#capTypeCell .dd-btn') === null, 'capacity is role-agnostic: no role filter dropdown');
-ok(doc.querySelectorAll('#hdrCap .cap-cell').length === 48, 'capacity row spans all weeks');
+ok(/ capacity$/.test(doc.querySelector('#hdrCapRows .hdr-cap .cap-row-lab').textContent),
+  'each capacity row is labelled with its type');
+ok(doc.querySelector('#hdrCapRows .dd-btn') === null, 'capacity is role-agnostic: no role filter dropdown');
+ok(doc.querySelectorAll('#hdrCapRows .hdr-cap:first-child .cap-cell').length === 48, 'capacity row spans all weeks');
+ok(doc.querySelector('.hdr-legend .hdr-left.corner #hlCols') !== null,
+  'the column legend sits on its own header line below the capacity rows');
+ok(doc.querySelector('.hdr-legend #leftRz') !== null, 'and keeps the left-pane resize handle');
 ok(doc.querySelectorAll('#rows .bar .port').length === visibleSched * 2, 'link ports rendered on bars');
 ok(doc.querySelectorAll('#rows .bar .b-label').length === visibleSched,
   'every bar carries a label (inside or spilled right)');
@@ -486,9 +491,9 @@ ok(Array.isArray(state().meta.holidays) && state().meta.blackoutWeeks === undefi
   'holidays are individual dates (' + state().meta.holidays.length + '); blackoutWeeks migrated away');
 ok(doc.querySelectorAll('#bgcols .bg-blackout').length >= 1, 'holiday segments drawn on the timeline');
 const boBefore = state().meta.holidays.length;
-click(doc.querySelector('#hdrCap [data-w="3"]'));
+click(doc.querySelector('#hdrCapRows [data-w="3"]'));
 ok(state().meta.holidays.length === boBefore + 5, 'clicking a capacity cell adds that week\'s five holiday days');
-click(doc.querySelector('#hdrCap [data-w="3"]'));
+click(doc.querySelector('#hdrCapRows [data-w="3"]'));
 ok(state().meta.holidays.length === boBefore, 'clicking again removes them');
 
 // ---------------------------------------------------------------- context menu
@@ -4096,27 +4101,23 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   ok(state().meta.capMode === 'points' && !!doc.querySelector('#suDefPoints'), 'picking story points switches the demand model and reveals the default points');
   click(doc.querySelector('#setupView [data-sucapmode="person"]'));
   ok(state().meta.capMode === 'person', 'and back to per person');
-  // capacity row types: All → Only these, then tick one type
-  doc.querySelector('#suCapRowSome').checked = true;
-  doc.querySelector('#suCapRowSome').dispatchEvent(new window.Event('change', { bubbles: true }));
-  ok(Array.isArray(state().meta.capRowTypes) && state().meta.capRowTypes.length > 0,
-    'switching from All to “Only these” seeds the list instead of leaving a silent 0 / 0 row');
+  // tracked capacity types: one checkbox each, at least one always tracked
+  ok(doc.querySelector('#suCapRowAll') === null && doc.querySelector('#suCapRowSome') === null,
+    'the All / Only these radios are gone — every type is simply tracked or not');
+  ok(/One header row per tracked type/.test(doc.querySelector('#setupView').textContent),
+    'the Capacity tab says what tracking a type does');
   const rowChk = doc.querySelector('#setupView [data-sucaprow="Design"]');
   rowChk.checked = true;
   rowChk.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(Array.isArray(state().meta.capRowTypes) && state().meta.capRowTypes.indexOf('Design') !== -1,
-    'ticking a capacity type under “Only these” stores it in capRowTypes');
-  ok(/Untick the last type/.test(doc.querySelector('#setupView').textContent),
-    'the Capacity tab says what unticking the last type does');
-  // unticking the LAST ticked type goes back to All rather than a silent empty row
+    'ticking a capacity type materialises the tracked list and stores it in capRowTypes');
+  // the last tracked type can never be unticked
   window.HeadwayApp.ai.commit('one row type', (s) => { s.meta.capRowTypes = ['Design']; });
   const lastChk = doc.querySelector('#setupView [data-sucaprow="Design"]');
-  lastChk.checked = false;
-  lastChk.dispatchEvent(new window.Event('change', { bubbles: true }));
-  ok(state().meta.capRowTypes === 'all', 'unticking the last capacity type reverts the row to all types');
-  ok(doc.querySelector('#suCapRowAll').checked, 'and the All radio reads checked again');
-  ok(!/Untick the last type/.test(doc.querySelector('#setupView').textContent),
-    'and the hint goes away with the selection it explains');
+  ok(lastChk.checked && lastChk.disabled, 'the last tracked type reads checked and cannot be unticked');
+  ok(!doc.querySelector('#setupView [data-sucaprow="Development"]').disabled,
+    'while the untracked ones stay tickable');
+  undo();
   undo(); undo();
   undo(); undo(); undo(); undo();
   // people and stories carry a capacity type; assignability follows it
@@ -4170,18 +4171,21 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     s.items.forEach((i) => { if (!i.milestone) { i.capType = 'Development'; i.capMult = 1; } });
     s.phases.forEach((p) => { p.auto = false; });
   });
-  const cells = [...doc.querySelectorAll('#hdrCap .cap-cell')];
+  const devRow = doc.querySelector('#hdrCapRows .hdr-cap[data-captype="Development"]');
+  ok(!!devRow && devRow.querySelector('.cap-row-lab').textContent === 'Development capacity',
+    'the tracked Development type gets its own labelled header row');
+  const cells = [...devRow.querySelectorAll('.cap-cell')];
   const busy = cells.find((c) => c.classList.contains('over'));
   ok(!!busy && /Development/.test(busy.getAttribute('title')), 'an over-asked week reads over and names the type in its tooltip');
-  ok(/\d+(\.\d)? \/ \d+(\.\d)?/.test(busy.textContent), 'the cell reads demand / supply');
-  ok(/people|points/.test(doc.querySelector('#capTypeCell').textContent), 'the row label says the unit');
+  ok(/\d+(\.\d)? ?\/ ?\d+(\.\d)?/.test(busy.textContent), 'the cell reads demand / supply');
+  ok(/people|points/.test(busy.getAttribute('title')), 'the tooltip says the unit');
   // a picked type nobody supplies can never be done: that reads over, not ok
   window.HeadwayApp.ai.commit('no supply', (s) => {
     s.meta.capRowTypes = ['Design'];
     s.items.forEach((i) => { if (!i.milestone) i.capType = 'Design'; });
   });
-  const dry = [...doc.querySelectorAll('#hdrCap .cap-cell')].find((c) => c.classList.contains('over'));
-  ok(!!dry && / \/ 0/.test(dry.textContent) && /no supply/.test(dry.getAttribute('title')),
+  const dry = [...doc.querySelectorAll('#hdrCapRows .hdr-cap[data-captype="Design"] .cap-cell')].find((c) => c.classList.contains('over'));
+  ok(!!dry && / ?\/ ?0/.test(dry.textContent) && /no supply/.test(dry.getAttribute('title')),
     'a week asking a type nobody supplies reads over and says “no supply”');
   undo();
   undo();
