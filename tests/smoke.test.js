@@ -2960,7 +2960,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(/BAND = 'E3DFD5'/.test(pptxSrc) && !/'F4F6F8'/.test(pptxSrc), 'the PPTX export paints a light phase band');
 
   // the title floor and the hover tints are Planning's, not Scoping's
-  ok(/body\[data-view="planning"\] #rows \.r-main,\s*\n\s*body\[data-view="planning"\] \.hl-title\.pl-title\s*{[^}]*min-width:\s*120px/.test(cssRamp),
+  ok(/body:not\(\[data-view="scoping"\]\) #rows \.r-main,\s*\n\s*body:not\(\[data-view="scoping"\]\) \.hl-title\.pl-title\s*{[^}]*min-width:\s*120px/.test(cssRamp),
     'the title floor is scoped to Planning');
   ok(!/\n\.row\.item:not\(\.selected\)/.test(cssRamp) &&
      /body:not\(\[data-view="scoping"\]\) \.row\.item:not\(\.selected\)/.test(cssRamp) &&
