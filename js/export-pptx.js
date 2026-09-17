@@ -14,7 +14,7 @@
   var PX = {};
 
   var SLIDE_W = 13.33, SLIDE_H = 7.5, MARGIN = 0.4;
-  var INK = '182430', LINE = 'E5E0D5', BAND = '1A1F26';
+  var INK = '182430', LINE = 'E5E0D5', BAND = 'E3DFD5';
   var SUBBAND = 'F2EFE8', HOLIDAY = 'EFECE4', SPRINT = 'E3EDF9';
 
   // approximate text width (px at the 10.5px bar-label font) — decides
@@ -86,7 +86,7 @@
         shapes.push({ type: 'rect', x: X(0), y: Y(r.y), w: lay.width * sx, h: r.h * sy, color: BAND });
         shapes.push({ type: 'text', text: r.name, x: X(8), y: Y(r.y),
           w: lay.width * sx - 16 * sx, h: r.h * sy, size: fs(11), bold: true,
-          color: 'F4F6F8', align: 'left' });
+          color: INK, align: 'left' });
         return;
       }
       if (r.kind === 'wsband' || r.kind === 'eband') {

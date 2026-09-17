@@ -24,6 +24,12 @@
   --lvl-epic: #F3F1EC;
   --lvl-feature: #FAFAF8;
   --lvl-story: #FFFFFF;
+  /* hover sits a clear step BELOW each base, keeping the same order */
+  --lvl-feature-hover: #EFEBE2;
+  --lvl-story-hover: #F4F1EA;
+  /* tooltips stay dark chips in both themes — they read as overlays, not rows */
+  --tip-bg: #1A1F26;
+  --tip-ink: #F4F6F8;
   /* the phase band is the top of that ramp here, so its ink is ordinary ink */
   --band: var(--lvl-phase);
   --band-ink: var(--ink);
@@ -98,6 +104,10 @@ html[data-theme="dark"] {
   --lvl-epic: #1F2630;
   --lvl-feature: #191E24;
   --lvl-story: #14181D;
+  --lvl-feature-hover: #232A33;
+  --lvl-story-hover: #1E242B;
+  --tip-bg: #0E1216;
+  --tip-ink: #E4E9EE;
   --band: var(--lvl-phase);
   --band-ink: #E4E9EE;
   --band-ink-2: #97A2AC;
@@ -649,7 +659,7 @@ body.ro .bar, body.ro .st-bar, body.ro .sp-card, body.ro .spv-row { cursor: defa
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
 .pl-rz {
-  position: absolute; top: -4px; bottom: -4px; right: -3px; width: 7px;
+  position: absolute; top: 0; bottom: 0; right: 0; width: 6px;
   cursor: col-resize; z-index: 3;
 }
 .pl-rz:hover { background: rgba(0, 87, 184, .18); }
@@ -796,6 +806,9 @@ body.cap-off .hc-lab { display: none !important; }
    cards and on sprint rows; hiding both keeps story titles aligned with the
    feature titles (53px pad = grip 18 + chev 20 + dot 15 for both) */
 #rows .row.item .row-left .r-num, #rows .row.story .row-left .r-num { display: none; }
+/* the title never squeezes to nothing, however many chip columns are on —
+   render() widens the pane to match (see plColsWidth) */
+#rows .r-main, .hl-title.pl-title { min-width: 120px; }
 /* story rows drag by their grip (reorder, or move to another feature) */
 .st-grip {
   position: absolute; left: 0; top: 0; bottom: 0; width: 18px;
@@ -821,6 +834,10 @@ body.cap-off .hc-lab { display: none !important; }
 .row.flagged .row-left, .row.story.flagged .row-left { background: var(--flag-soft); }
 .row.flagged:hover .row-left { background: var(--flag-hover); }
 .row.flagged.selected .row-left, .row.story.flagged.selected .row-left { background: var(--flag-sel); box-shadow: inset 3px 0 0 var(--flag); }
+/* hover has to beat the ramp now that both row kinds carry a tint of their
+   own; selected, flagged and link-source rows keep the colour that says so */
+.row.item:not(.selected):not(.flagged):not(.link-source):hover .row-left { background: var(--lvl-feature-hover); }
+.row.story:not(.selected):not(.flagged):hover .row-left { background: var(--lvl-story-hover); }
 /* the + sits LEFT of the text so the input's text starts exactly where
    story titles do (68 + 12 icon + 5 gap = 85) */
 .row.story-add .st-pad { width: 68px; flex: 0 0 68px; }
@@ -888,7 +905,7 @@ body.cap-off .hc-lab { display: none !important; }
 .st-bar.link-target { outline: 2px solid var(--blue); outline-offset: 2px; }
 /* unscheduled story: its name sits where the feature starts — no box */
 .st-ghost {
-  position: absolute; top: 0; bottom: 0; display: flex; align-items: center;
+  position: absolute; top: 0; bottom: 0; z-index: 2; display: flex; align-items: center;
   padding-left: 5px; font-size: 11px; color: var(--ink-2); opacity: .45;
   white-space: nowrap; pointer-events: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis;
 }
@@ -1004,14 +1021,14 @@ body.cap-off .hc-lab { display: none !important; }
 /* drag tooltip */
 #dragTip {
   position: fixed; z-index: 80;
-  background: var(--band); color: #fff;
+  background: var(--band); color: var(--band-ink);
   font-family: var(--mono); font-size: 10.5px;
   padding: 4px 9px; border-radius: 6px;
   pointer-events: none;
   box-shadow: var(--shadow-2);
   white-space: nowrap;
 }
-#dragTip b { color: #9CC4F5; }
+#dragTip b { color: var(--blue); }
 
 .drop-indicator {
   position: absolute; left: 0; width: var(--left-w); height: 0;
@@ -1416,7 +1433,7 @@ table.roster .rm { width: 30px; }
 /* the one tooltip component — fed by [title] lifted to data-tip on hover */
 #uiTip {
   position: fixed; z-index: 130;
-  background: var(--band); color: var(--band-ink);
+  background: var(--tip-bg); color: var(--tip-ink);
   border-radius: 7px; padding: 6px 10px;
   font-size: 11.5px; line-height: 1.5;
   max-width: 340px; white-space: pre-line;
@@ -1671,6 +1688,10 @@ body[data-view="scoping"] .row.item .row-left .r-num { line-height: 26px; }
 /* the 8px dot centers on the same 26px strip: (26 - 8) / 2 */
 body[data-view="scoping"] .row.item .row-left .r-dot, body[data-view="scoping"] .row.story .row-left .r-dot { margin-top: 9px; }
 body[data-view="scoping"] .row.item .row-lane { background: var(--surface); }
+/* Scoping is a grid, not a timeline: its left pane keeps the flat tones it had
+   before the row-depth ramp */
+body[data-view="scoping"] .row.item .row-left { background: var(--surface); }
+body[data-view="scoping"] .row.story .row-left { background: var(--paper-2); }
 .sc-row { display: flex; height: 100%; }
 .sc-cell {
   flex: 0 0 auto;
@@ -1738,7 +1759,7 @@ body[data-view="budget"] #resPanel { display: none; }
 .bu-in:focus { outline: none; border-color: var(--blue); background: var(--surface); }
 body[data-view="budget"] .hl-cols .bu-only { text-align: left; padding-left: 4px; }
 .bu-cell {
-  position: absolute; top: 0; bottom: 0;
+  position: absolute; top: 0; bottom: 0; z-index: 2;
   border-right: 1px solid var(--line);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   font-size: 10px; line-height: 1.1;
@@ -2567,7 +2588,7 @@ body[data-view="planning"] #zoomCtl { bottom: calc(var(--res-total, 0px) + 14px)
 /* the COSTS band lines up with the person names below it */
 .bcosts-band .row-left { padding-left: 24px; }
 .bu-costmark {
-  position: absolute; top: 50%;
+  position: absolute; top: 50%; z-index: 2;
   width: 9px; height: 9px;
   transform: translate(-50%, -50%) rotate(45deg);
   background: var(--warn);

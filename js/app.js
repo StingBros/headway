@@ -1514,9 +1514,12 @@
     document.body.classList.toggle('no-size', !RM.sizingEnabled(state));
     var boardView = view === 'planning' || view === 'scoping' || view === 'budget';
     document.body.classList.toggle('left-collapsed', leftCollapsed && boardView);
+    // Planning's pane grows to fit its columns; the width is derived every
+    // render and never persisted, so the user's own drag stays the floor
+    var planW = Math.max(leftWPlan, Math.min(Math.round(window.innerWidth * 0.7), plColsWidth()));
     document.documentElement.style.setProperty('--left-w',
       (leftCollapsed && boardView ? 0
-        : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan)) + 'px');
+        : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : planW)) + 'px');
     // folded: the pane is gone; only the floating reopen button remains
     var lp = $('#leftPeek');
     if (lp) lp.hidden = !(leftCollapsed && boardView);
@@ -9176,6 +9179,7 @@
       if (k === 'risk') return RM.riskEnabled(state);
       if (k === 'cap') return !!state.meta.capacityEnabled;
       if (k === 'mult') return !!state.meta.capacityEnabled && state.meta.capMode !== 'points';
+      if (k === 'ws') return !!state.meta.workstreamsEnabled;
       return true;
     });
   }
@@ -9194,6 +9198,15 @@
   function applyPlColWidths() {
     var rs = document.documentElement.style;
     PL_KEYS.forEach(function (k) { rs.setProperty('--pl-w-' + k, plW(k) + 'px'); });
+  }
+  // the left pane the visible planning columns actually need: fixed row
+  // chrome (grip + chevron + dot + warning badge) + every chip column + a
+  // floor under the title, so turning columns on never squeezes it away
+  var PL_ROW_CHROME = 100, PL_TITLE_MIN = 120;
+  function plColsWidth() {
+    var sum = 0;
+    plColsVisible().forEach(function (k) { sum += plW(k); });
+    return PL_ROW_CHROME + sum + PL_TITLE_MIN;
   }
   // the column-label strip is rendered per view: labels, tooltips, resize
   // handles (budget), and drag-to-reorder all live here

@@ -2788,6 +2788,19 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 // ------------------------------------- planning columns: labels, resize, add/remove
 {
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const plLeftW = () => parseInt(doc.documentElement.style.getPropertyValue('--left-w'), 10);
+  const plBaseLeftW = plLeftW();
+  const plOrder = () => Array.from(doc.querySelectorAll('#hlCols i[data-plcol]')).map(i => i.dataset.plcol).join(',');
+  const plMenu = (re) => {
+    click(doc.querySelector('#plColsAdd'));
+    click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => re.test(b.textContent.trim())));
+  };
+  const plDrag = (k, from, to) => {
+    doc.querySelector('#hlCols [data-plrz="' + k + '"]').dispatchEvent(
+      new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: from, button: 0 }));
+    window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: to }));
+    window.dispatchEvent(new window.MouseEvent('pointerup', { clientX: to }));
+  };
   // every visible planning column now carries its short label + tooltip
   const plHdrs = Array.from(doc.querySelectorAll('#hlCols i[data-plcol]'));
   ok(plHdrs.length > 0 && plHdrs.every(i => i.textContent.replace(/\s/g, '').length > 0),
@@ -2806,6 +2819,16 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).plColW.size === plAfter,
     'planning column widths persist');
 
+  // the handle resizes and nothing else: a long drag on it must not reorder
+  const plOrderBefore = plOrder();
+  plDrag('pri', 100, 400);
+  ok(plOrder() === plOrderBefore, 'dragging the resize handle never reorders the column');
+  ok(parseInt(doc.documentElement.style.getPropertyValue('--pl-w-pri'), 10) === 240,
+    'column widths clamp at the 240px maximum');
+  plDrag('pri', 400, 0);
+  ok(parseInt(doc.documentElement.style.getPropertyValue('--pl-w-pri'), 10) === 22,
+    'and never shrink past the column minimum');
+
   // the + at the end of the strip opens the same columns menu
   ok(!!doc.querySelector('#plColsAdd'), 'the header strip ends with a + columns button');
   click(doc.querySelector('#plColsAdd'));
@@ -2819,22 +2842,50 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   // the new columns are hidden until asked for, and stories inherit ws/epic
   click(doc.querySelector('#detailBtn'));
   click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story detail
-  click(doc.querySelector('#plColsAdd'));
-  click(Array.from(doc.querySelectorAll('#popover .menu-list button'))
-    .find(b => /^Workstream/.test(b.textContent.trim())));
+  plMenu(/^Workstream/);
   ok(!!doc.querySelector('#rows .row.item .r-ws-col'),
     'turning Workstream on renders a workstream chip on feature rows');
+  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).plColHide.ws === false,
+    'a column switched on is recorded explicitly, so it survives a prefs reload');
   const plStWs = doc.querySelector('#rows .row.story .r-ws-col');
   ok(plStWs && plStWs.classList.contains('roll'),
     'story rows show the feature workstream rolled up, dimmed and non-clickable');
 
+  // the Workstream column follows the project-wide switch, like every other view
+  click(doc.querySelector('#btnSetup'));
+  click(doc.querySelector('#setupView [data-sutab="workstreams"]'));
+  const plWsSw = doc.querySelector('#suWsEnable');
+  plWsSw.checked = false;
+  plWsSw.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  ok(!doc.querySelector('#hlCols i[data-plcol="ws"]') && !doc.querySelector('#rows .row.item .r-ws-col'),
+    'Workstreams off hides the column even though it is switched on');
+  click(doc.querySelector('#btnSetup'));
+  click(doc.querySelector('#setupView [data-sutab="workstreams"]'));
+  const plWsSw2 = doc.querySelector('#suWsEnable');
+  plWsSw2.checked = true;
+  plWsSw2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  ok(!!doc.querySelector('#hlCols i[data-plcol="ws"]'), 'and it returns when workstreams are back on');
+
+  // feature and story date chips are separate fields on separate handlers
+  plMenu(/^Start/);
+  ok(!!doc.querySelector('#rows .row.item .r-date-col[data-act="startd"]') &&
+     !!doc.querySelector('#rows .row.story .r-date-col[data-act="st-startd"]'),
+    'feature and story date chips route to their own handlers');
+
+  // the pane grows so the title keeps its floor when every column is on
+  plMenu(/^Epic/);
+  ok(plLeftW() > plBaseLeftW,
+    'switching every column on widens the pane past the stored width (' + plBaseLeftW + ' → ' + plLeftW() + ')');
+
   // reset puts the defaults (and the default-hidden new columns) back
-  click(doc.querySelector('#plColsAdd'));
-  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Reset columns/.test(b.textContent)));
+  plMenu(/Reset columns/);
   ok(!doc.querySelector('#rows .row.item .r-ws-col') && !doc.querySelector('#rows .row.item .r-date-col'),
     'Workstream, Epic, Start and Deadline are hidden by default');
   ok(!JSON.parse(window.localStorage.getItem('headway-ui-v1')).plColW.size,
     'Reset columns clears the planning widths too');
+  ok(plLeftW() === plBaseLeftW, 'hiding them again restores the stored pane width');
 }
 
 
@@ -2856,6 +2907,34 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     'feature rows paint from --lvl-feature');
   ok(/\.row\.eband\.wsband[^{}]*\{[^}]*var\(--lvl-ws\)/.test(cssRamp),
     'workstream bands paint from --lvl-ws');
+
+  // hover still says "this row" on both row kinds, one clear step off the ramp
+  ['--lvl-feature-hover', '--lvl-story-hover', '--tip-bg', '--tip-ink'].forEach((t) => {
+    ok(lightRoot.indexOf(t + ':') !== -1 && darkRoot.indexOf(t + ':') !== -1, 'both palettes define ' + t);
+  });
+  ok(/\.row\.item:not\(\.selected\)[^{]*:hover \.row-left\s*{[^}]*var\(--lvl-feature-hover\)/.test(cssRamp) &&
+     /\.row\.story:not\(\.selected\)[^{]*:hover \.row-left\s*{[^}]*var\(--lvl-story-hover\)/.test(cssRamp),
+    'feature and story rows both light up on hover');
+  // overlays keep their own colours: a tooltip is a dark chip, the drag tip
+  // takes the band's ink rather than a hard-coded white
+  ok(/#uiTip\s*{[^}]*var\(--tip-bg\)[^}]*var\(--tip-ink\)/.test(cssRamp), 'tooltips stay dark chips');
+  ok(!/#dragTip\s*{[^}]*color:\s*#fff/.test(cssRamp) &&
+     /#dragTip\s*{[^}]*color:\s*var\(--band-ink\)/.test(cssRamp),
+    'the drag tip reads on a light band');
+  // things that now sit under the raised grid need a layer of their own
+  ['.st-ghost', '.bu-cell', '.bu-costmark'].forEach((sel) => {
+    ok(new RegExp(sel.replace('.', '\\.') + '\\s*{[^}]*z-index:\\s*2').test(cssRamp),
+      sel + ' rises above the grid layer');
+  });
+  // Scoping is a grid, not a timeline: its left pane keeps the old tones
+  ok(/body\[data-view="scoping"\] \.row\.item \.row-left\s*{[^}]*var\(--surface\)/.test(cssRamp) &&
+     /body\[data-view="scoping"\] \.row\.story \.row-left\s*{[^}]*var\(--paper-2\)/.test(cssRamp),
+    'Scoping keeps its own left-pane tones');
+  // the exported board follows the light band too
+  const pngSrc = fs.readFileSync(path.join(ROOT, 'js/export-png.js'), 'utf8');
+  const pptxSrc = fs.readFileSync(path.join(ROOT, 'js/export-pptx.js'), 'utf8');
+  ok(/BAND = '#E3DFD5'/.test(pngSrc) && !/#F4F6F8/.test(pngSrc), 'the PNG export paints a light phase band');
+  ok(/BAND = 'E3DFD5'/.test(pptxSrc) && !/'F4F6F8'/.test(pptxSrc), 'the PPTX export paints a light phase band');
 
   // titles show no box until they are being renamed
   ok(!/span\.r-name:hover\s*\{[^}]*border-color/.test(cssRamp),

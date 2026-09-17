@@ -1333,7 +1333,7 @@ section('pptx export');
   });
   var shared = RMPptx.slideScale(slLays);
   function bandH(sl) {
-    return sl.shapes.filter(function (s) { return s.type === 'rect' && s.color === '1A1F26'; })[0].h;
+    return sl.shapes.filter(function (s) { return s.type === 'rect' && s.color === 'E3DFD5'; })[0].h;
   }
   var shA = RMPptx.slideShapes(slLays[0], shared);
   var shB = RMPptx.slideShapes(slLays[1], shared);
