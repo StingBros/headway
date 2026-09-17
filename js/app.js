@@ -3482,6 +3482,17 @@
     if (window.HeadwayJira) HeadwayJira.renderStatus($('#btnJira'), state);
   }
 
+  // the widest capacity-cell form that fits the week column: ~5.5px per
+  // character in the 9px mono those cells use, with 2px of air each side
+  function capCellText(forms) {
+    for (var i = 0; i < forms.length; i++) {
+      // fmtPe hands back a number, so the bare-ask form needs coercing
+      var t = String(forms[i]);
+      if (t.length * 5.5 <= weekPx - 4) return t;
+    }
+    return '';
+  }
+
   function renderHeader(laneW) {
     var meta = state.meta;
     var si = RM.sprintInfo(meta);
@@ -3526,12 +3537,12 @@
           // work asked of a type nobody supplies can never be done: that reads
           // over, not ok
           cls = cell.over ? 'over' : (cell.demand === 0 ? 'idle' : (ratio > 0.85 ? 'mid' : 'ok'));
-          // demand / supply while it fits on one line — spaced when the week is
-          // wide, tight around the default zoom, the ask alone below that
-          // (the tooltip always carries both)
-          txt2 = weekPx >= 34 ? fmtPe(cell.demand) + ' / ' + fmtPe(cell.supply)
-            : (weekPx >= 26 ? fmtPe(cell.demand) + '/' + fmtPe(cell.supply)
-              : (weekPx >= 20 ? fmtPe(cell.demand) : ''));
+          // the widest form that actually fits THIS cell's numbers: spaced
+          // demand / supply, then tight, then the ask alone, then nothing.
+          // Measured off the string, not the zoom — a clipped “4 / 0.” reads
+          // as a different number. The tooltip always carries both.
+          var dTxt = fmtPe(cell.demand), sTxt = fmtPe(cell.supply);
+          txt2 = capCellText([dTxt + ' / ' + sTxt, dTxt + '/' + sTxt, dTxt]);
           title = ct + ': ' + fmtPe(cell.demand) + ' ' + unitWord + ' asked · ' + fmtPe(cell.supply) + ' available' +
             (cell.supply === 0 ? ' (no supply — nobody on the roster supplies ' + ct + ')' : '');
         }

@@ -317,7 +317,9 @@
   // only types Auto timeline / Place at earliest slot constrain. The stored
   // list when there is one ('all' is the sentinel for "whatever the roster
   // supplies"); with nobody supplying anything, every type is tracked.
-  RM.trackedCapTypes = function (state) {
+  // `sup` is an optional prebuilt RM.capSupply(state) — hot callers already
+  // have one and rebuilding it here would walk the roster twice
+  RM.trackedCapTypes = function (state, sup) {
     var all = RM.capTypesOf(state);
     var sel = state.meta && state.meta.capRowTypes;
     var list = null;
@@ -326,8 +328,8 @@
       if (!list.length) list = null;
     }
     if (!list) {
-      var sup = RM.capSupply(state).types;
-      list = sup.length ? sup : all;
+      var supTypes = (sup || RM.capSupply(state)).types;
+      list = supTypes.length ? supTypes : all;
     }
     // one row per type, in capacity-type order (prototype-free: a type may be
     // named 'constructor')
@@ -2520,7 +2522,7 @@
     var meta = state.meta;
     var S = RM.slotsOf(meta);
     var sup = RM.capSupply(state);
-    var tracked = RM.trackedCapTypes(state);
+    var tracked = RM.trackedCapTypes(state, sup);
     // prototype-free: a capacity type may be named 'constructor'
     var trackedSet = Object.create(null);
     tracked.forEach(function (t) { trackedSet[t] = true; });
@@ -2930,7 +2932,7 @@
     }
     // only a TRACKED type the roster supplies constrains the plan; other
     // work is placed by its dependencies alone
-    var tracked = RM.trackedCapTypes(state);
+    var tracked = RM.trackedCapTypes(state, sup);
     function constrained(u) {
       return !u.milestone && !!u.capType && tracked.indexOf(u.capType) !== -1 && sup.types.indexOf(u.capType) !== -1;
     }

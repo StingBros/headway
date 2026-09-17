@@ -409,6 +409,8 @@ ok(doc.querySelector('#panel [data-f=allabove]') === null, '"all items above" ch
     const m = css.match(new RegExp(sel.replace(/[.\\]/g, '\\$&') + '\\s*{([^}]*)}', 'g')) || [];
     return m.join(' ');
   };
+  ok(/body\[data-view="scoping"\] \.hdr-legend,/.test(css),
+    'scoping hides the column-legend line (it draws its own column header)');
   ok(/position:\s*sticky/.test(decl('.row.band')) && /top:\s*var\(--hdr-h\)/.test(decl('.row.band')),
     'phase bands are sticky below the header');
   // second-level group bands pin under the phase band; nested epics one lower
@@ -4179,6 +4181,18 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   ok(!!busy && /Development/.test(busy.getAttribute('title')), 'an over-asked week reads over and names the type in its tooltip');
   ok(/\d+(\.\d)? ?\/ ?\d+(\.\d)?/.test(busy.textContent), 'the cell reads demand / supply');
   ok(/people|points/.test(busy.getAttribute('title')), 'the tooltip says the unit');
+  ok([...doc.querySelectorAll('#hdrCapRows .cap-cell')].every((c) => {
+    const t = c.textContent.trim();
+    return t === '' || t === '\u2715' || /^\d+(\.\d)?( ?\/ ?\d+(\.\d)?)?$/.test(t);
+  }), 'no capacity cell renders a clipped fragment like “4 / 0.”');
+  // a two-digit ask against a fractional supply cannot fit "14 / 0.9" in a
+  // 28px week: the cell drops to the ask alone rather than clipping it
+  window.HeadwayApp.ai.commit('fractional supply', (s) => { s.team[0].capacity = 0.9; });
+  const frac = [...doc.querySelectorAll('#hdrCapRows .hdr-cap[data-captype="Development"] .cap-cell')]
+    .find((c) => /^\d\d/.test(c.textContent.trim()));
+  ok(!!frac && /^\d+$/.test(frac.textContent.trim()) && /0\.9 available/.test(frac.getAttribute('title')),
+    'a two-digit ask against 0.9 available shows the ask alone, with both numbers in the tooltip');
+  undo();
   // a picked type nobody supplies can never be done: that reads over, not ok
   window.HeadwayApp.ai.commit('no supply', (s) => {
     s.meta.capRowTypes = ['Design'];
