@@ -2785,6 +2785,59 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(!!doc.querySelector('#rows .row.item .r-wk'), 'reset brings Duration back');
 }
 
+// ------------------------------------- planning columns: labels, resize, add/remove
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  // every visible planning column now carries its short label + tooltip
+  const plHdrs = Array.from(doc.querySelectorAll('#hlCols i[data-plcol]'));
+  ok(plHdrs.length > 0 && plHdrs.every(i => i.textContent.replace(/\s/g, '').length > 0),
+    'planning headers show a label for every visible column');
+  ok(plHdrs.every(i => !!i.title), 'planning headers carry their tooltips');
+
+  // drag the header edge to resize
+  const plrz = doc.querySelector('#hlCols [data-plrz="size"]');
+  ok(!!plrz, 'planning header columns grow resize handles');
+  const plBefore = parseInt(doc.documentElement.style.getPropertyValue('--pl-w-size'), 10);
+  plrz.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 100, button: 0 }));
+  window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: 140 }));
+  window.dispatchEvent(new window.MouseEvent('pointerup', {}));
+  const plAfter = parseInt(doc.documentElement.style.getPropertyValue('--pl-w-size'), 10);
+  ok(plAfter === plBefore + 40, 'dragging a planning handle widens the column (' + plBefore + ' → ' + plAfter + ')');
+  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).plColW.size === plAfter,
+    'planning column widths persist');
+
+  // the + at the end of the strip opens the same columns menu
+  ok(!!doc.querySelector('#plColsAdd'), 'the header strip ends with a + columns button');
+  click(doc.querySelector('#plColsAdd'));
+  const plDl = Array.from(doc.querySelectorAll('#popover .menu-list button'))
+    .find(b => /^Deadline/.test(b.textContent.trim()));
+  ok(!!plDl, 'the + button opens a columns menu offering Deadline');
+  click(plDl);
+  ok(!!doc.querySelector('#rows .row.item .r-date-col.dl-chip'),
+    'turning Deadline on renders a deadline chip on feature rows');
+
+  // the new columns are hidden until asked for, and stories inherit ws/epic
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story detail
+  click(doc.querySelector('#plColsAdd'));
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button'))
+    .find(b => /^Workstream/.test(b.textContent.trim())));
+  ok(!!doc.querySelector('#rows .row.item .r-ws-col'),
+    'turning Workstream on renders a workstream chip on feature rows');
+  const plStWs = doc.querySelector('#rows .row.story .r-ws-col');
+  ok(plStWs && plStWs.classList.contains('roll'),
+    'story rows show the feature workstream rolled up, dimmed and non-clickable');
+
+  // reset puts the defaults (and the default-hidden new columns) back
+  click(doc.querySelector('#plColsAdd'));
+  click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Reset columns/.test(b.textContent)));
+  ok(!doc.querySelector('#rows .row.item .r-ws-col') && !doc.querySelector('#rows .row.item .r-date-col'),
+    'Workstream, Epic, Start and Deadline are hidden by default');
+  ok(!JSON.parse(window.localStorage.getItem('headway-ui-v1')).plColW.size,
+    'Reset columns clears the planning widths too');
+}
+
+
 // ------------------------------------------------- batch 11: detail modes
 {
   // story detail: everything expanded, add-story everywhere, milestones bare

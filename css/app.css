@@ -599,8 +599,49 @@ body.ro .bar, body.ro .st-bar, body.ro .sp-card, body.ro .spv-row { cursor: defa
   user-select: none;
 }
 .r-ws:hover { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); }
+/* planning chip columns for the fixed fields Scoping also shows */
+.r-ws-col, .r-epic-col, .r-date-col {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10.5px; color: var(--ink-2);
+  border: 1px solid transparent; border-radius: 5px;
+  padding: 1px 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: pointer; user-select: none;
+}
+.r-date-col { justify-content: center; font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.r-ws-col:hover, .r-epic-col:hover, .r-date-col:hover { border-color: var(--line-2); background: var(--surface); }
+.r-ws-col svg, .r-epic-col svg { width: 11px; height: 11px; flex: 0 0 auto; color: var(--ink-3); }
+.r-ws-col .dd-dot { flex: 0 0 auto; }
+.r-ws-col i.dws { color: var(--ink-3); font-style: italic; }
+.r-date-col.dl-chip.late { color: var(--err); }
+/* workstream + epic on a story row roll up from the feature: present, but
+   clearly not the story's own — and never editable there */
+.r-ws-col.roll, .r-epic-col.roll { font-style: italic; opacity: .6; cursor: default; pointer-events: none; }
+.r-ws-col.r-blank, .r-epic-col.r-blank, .r-date-col.r-blank { cursor: default; }
 .r-wk.editable { border-radius: 5px; cursor: text; }
 .r-wk.editable:hover { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); }
+/* planning header labels: the same quiet strip budgeting uses, a touch
+   smaller, each sized by its column's --pl-w-* variable */
+.hl-cols .pl-only {
+  position: relative;
+  display: inline-block;
+  font-size: 10.5px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.pl-rz {
+  position: absolute; top: -4px; bottom: -4px; right: -3px; width: 7px;
+  cursor: col-resize; z-index: 3;
+}
+.pl-rz:hover { background: rgba(0, 87, 184, .18); }
+/* the + at the end of the strip opens the show/hide menu */
+#plColsAdd {
+  border: 0; background: transparent; color: var(--ink-3);
+  padding: 0 3px; margin-left: 2px; line-height: 1; cursor: pointer;
+  align-self: center;
+}
+#plColsAdd:hover { color: var(--blue); background: transparent; box-shadow: none; }
+#plColsAdd svg { width: 12px; height: 12px; }
+body[data-view="scoping"] #plColsAdd, body[data-view="budget"] #plColsAdd { display: none; }
 body[data-view="scoping"] .hl-cols .pl-only { display: none; }
 body[data-view="budget"] .hl-cols .pl-only,
 body[data-view="budget"] .hl-title.pl-title { display: none; }
@@ -3046,6 +3087,21 @@ body[data-view="scoping"] .row.story .sc-edit { height: 50px; min-height: 50px; 
 body[data-view="budget"] #detailBtn, body[data-view="setup"] #detailBtn { display: none; }
 #rowFilter { border-radius: 7px; }
 
+
+/* ------------------------------------------------ planning column widths */
+/* every planning chip (and its blank placeholder) sizes from the column
+   variable the header resize writes; the old fixed px stay as fallbacks */
+body[data-view="planning"] #rows .r-size { width: var(--pl-w-size, 34px); flex: 0 0 var(--pl-w-size, 34px); }
+body[data-view="planning"] #rows .r-risk { width: var(--pl-w-risk, 26px); flex: 0 0 var(--pl-w-risk, 26px); }
+body[data-view="planning"] #rows .r-risk.pri { width: var(--pl-w-pri, 26px); flex: 0 0 var(--pl-w-pri, 26px); }
+body[data-view="planning"] #rows .r-wk { width: var(--pl-w-dur, 34px); flex: 0 0 var(--pl-w-dur, 34px); }
+body[data-view="planning"] #rows .r-asg { width: var(--pl-w-asg, 40px); min-width: 0; flex: 0 0 var(--pl-w-asg, 40px); }
+body[data-view="planning"] #rows .r-cap { width: var(--pl-w-cap, 58px); flex: 0 0 var(--pl-w-cap, 58px); }
+body[data-view="planning"] #rows .r-mult { width: var(--pl-w-mult, 26px); flex: 0 0 var(--pl-w-mult, 26px); }
+body[data-view="planning"] #rows .r-ws-col { width: var(--pl-w-ws, 96px); flex: 0 0 var(--pl-w-ws, 96px); }
+body[data-view="planning"] #rows .r-epic-col { width: var(--pl-w-epic, 96px); flex: 0 0 var(--pl-w-epic, 96px); }
+body[data-view="planning"] #rows .r-date-col { width: var(--pl-w-start, 62px); flex: 0 0 var(--pl-w-start, 62px); }
+body[data-view="planning"] #rows .r-date-col.dl-chip { width: var(--pl-w-deadline, 62px); flex: 0 0 var(--pl-w-deadline, 62px); }
 
 /* ------------------------------------------------------- budget column resize */
 .hl-cols i[data-bucol] { position: relative; }

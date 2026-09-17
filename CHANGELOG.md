@@ -9,6 +9,7 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- **Planning columns**: the left pane's chip columns have headers, resize by dragging the header edge, reorder by dragging the label, and show/hide from the header's right-click menu or the + at its end — now including Workstream, Epic, Start and Deadline.
 - **Setup → Capacity**: capacity planning, the planning level, the demand model, capacity types and the capacity row's types now live on their own Setup tab (Team keeps roles and the work week).
 - **Demand models**: Per person (a unit in flight uses one person of its type × its multiplier) or Story points (points spread over the unit's weeks against each person's points per sprint, default 10).
 - **Capacity row** reads demand / supply per week for the chosen capacity types; the hand-typed weekly limit and the count/points basis are gone — the limit is the roster.

@@ -76,6 +76,7 @@
   var buColW = {};           // budgeting column width overrides (key -> px)
   var buColOrder = null;     // budgeting column order (array of keys; null = default)
   var buColHide = {};        // budgeting columns hidden (key -> true)
+  var plColW = {};           // planning left-pane column width overrides (key -> px)
   var plColOrder = null;     // planning left-pane column order
   var plColHide = {};        // planning left-pane columns hidden
   var autoOrder = true;      // after move/resize, reorder rows by start day (stable)
@@ -122,7 +123,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioHideUnset: prioHideUnset, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioHideUnset: prioHideUnset, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColW: plColW, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy };
   }
   var COLOR_MODES = [['workstream', 'Workstream'], ['epic', 'Epic'], ['assignee', 'Assignee'], ['priority', 'Priority'], ['type', 'Item type']];
   var colorBy = 'workstream'; // what bar colors follow: 'workstream' | 'epic' | 'assignee' | 'priority' | 'type'
@@ -155,6 +156,7 @@
     buColW = ui.buColW && typeof ui.buColW === 'object' ? ui.buColW : {};
     buColOrder = Array.isArray(ui.buColOrder) ? ui.buColOrder : null;
     buColHide = ui.buColHide && typeof ui.buColHide === 'object' ? ui.buColHide : {};
+    plColW = ui.plColW && typeof ui.plColW === 'object' ? ui.plColW : {};
     plColOrder = Array.isArray(ui.plColOrder) ? ui.plColOrder : null;
     plColHide = ui.plColHide && typeof ui.plColHide === 'object' ? ui.plColHide : {};
     depsMode = ui.depsMode === 'none' ? 'none' : 'on';
@@ -1520,6 +1522,7 @@
     if (lp) lp.hidden = !(leftCollapsed && boardView);
     document.documentElement.style.setProperty('--panel-w', panelW + 'px');
     applyBuColWidths();
+    applyPlColWidths();
     renderHlCols();
     syncDetailBtn();
     cmpCache = null; // parked docs may have changed (switch/rename/close)
@@ -4011,7 +4014,7 @@
             : '<span class="r-size r-blank"></span>',
           pri: RM.priorityEnabled(state) && !it.milestone
             ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) + '" tabindex="0" role="button" data-act="priority" title="' + esc(priChipTitle(it)) + '">' + (priChipContent(it) || '·') + '</span>'
-            : '<span class="r-risk r-blank"></span>',
+            : '<span class="r-risk pri r-blank"></span>',
           risk: riskChipHtml(),
           dur: it.milestone
             ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone">◆</span>'
@@ -4025,7 +4028,27 @@
             : '<span class="r-cap r-blank"></span>',
           mult: state.meta.capacityEnabled && RM.planLevel(state) === 'feature' && !it.milestone && state.meta.capMode !== 'points'
             ? '<span class="r-mult editable' + ((it.capMult || 1) === 1 ? ' one' : '') + '" tabindex="0" role="button" data-act="mult" title="Capacity multiplier — people this needs at once">×' + fmtPe(it.capMult || 1) + '</span>'
-            : '<span class="r-mult r-blank"></span>'
+            : '<span class="r-mult r-blank"></span>',
+          // the fixed fields Scoping also shows — same chips, same editors.
+          // milestones carry a start date and nothing else here.
+          ws: it.milestone ? '<span class="r-ws-col r-blank"></span>'
+            : '<span class="r-ws-col" tabindex="0" role="button" data-act="ws" title="Workstream">' +
+              '<span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' +
+              (it.workstream ? esc(shorten(it.workstream, 18))
+                : '<i class="dws">' + esc(shorten(RM.defaultWsName(state), 18)) + '</i>') + '</span>',
+          epic: it.milestone ? '<span class="r-epic-col r-blank"></span>'
+            : '<span class="r-epic-col" tabindex="0" role="button" data-act="epic" title="Epic">' +
+              (RM.iconForEpic(state, it.epic) ? '<i data-lucide="' + RM.iconForEpic(state, it.epic) + '"></i>' : '') +
+              (it.epic ? esc(shorten(it.epic, 18)) : '') + '</span>',
+          start: '<span class="r-date-col" tabindex="0" role="button" data-act="startd" title="Start date">' +
+            (isScheduled(it) ? esc(RM.fmtShort(RM.dayToDate(meta, it.startDay))) : '') + '</span>',
+          deadline: it.milestone ? '<span class="r-date-col dl-chip r-blank"></span>' : (function () {
+            var lateP = RM.pastDeadline(meta, it);
+            return '<span class="r-date-col dl-chip' + (lateP ? ' late' : '') +
+              '" tabindex="0" role="button" data-act="deadline" title="' +
+              esc('Hard deadline' + (lateP ? '\nThe item runs past its deadline' : '')) + '">' +
+              (it.deadline ? esc(RM.fmtShort(RM.parseISO(it.deadline))) : '') + '</span>';
+          })()
         };
         return plColsVisible().map(function (k) { return chips[k]; }).join('');
       })()) +
@@ -4054,9 +4077,34 @@
               return '<span class="r-asg" tabindex="0" role="button" data-act="st-asg" title="Story assignees">' +
                 (avatarStack(st.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>';
             }
+            // workstream and epic belong to the feature: shown rolled up,
+            // dimmed and italic, and never clickable on a story row
+            if (k === 'ws') {
+              return '<span class="r-ws-col roll" title="Rolls up from the feature">' +
+                '<span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' +
+                esc(shorten(it.workstream || RM.defaultWsName(state), 18)) + '</span>';
+            }
+            if (k === 'epic') {
+              return '<span class="r-epic-col roll" title="Rolls up from the feature">' +
+                (RM.iconForEpic(state, it.epic) ? '<i data-lucide="' + RM.iconForEpic(state, it.epic) + '"></i>' : '') +
+                (it.epic ? esc(shorten(it.epic, 18)) : '') + '</span>';
+            }
+            // the story's own dates, on the same calendars Scoping opens
+            if (k === 'start') {
+              return '<span class="r-date-col" tabindex="0" role="button" data-act="st-startd" title="Story start">' +
+                (st.startDay != null ? esc(RM.fmtShort(RM.dayToDate(meta, st.startDay))) : '') + '</span>';
+            }
+            if (k === 'deadline') {
+              var stLateP = RM.pastDeadline(meta, st);
+              return '<span class="r-date-col dl-chip' + (stLateP ? ' late' : '') +
+                '" tabindex="0" role="button" data-act="st-dl" title="' +
+                esc('Story deadline' + (stLateP ? '\nThe story runs past its deadline' : '')) + '">' +
+                (st.deadline ? esc(RM.fmtShort(RM.parseISO(st.deadline))) : '') + '</span>';
+            }
             // keep the column aligned even when the story scale is off
             return storyChipHtml(k, st, 'data-act') ||
-              '<span class="' + (k === 'size' ? 'r-size' : k === 'dur' ? 'r-wk' : k === 'cap' ? 'r-cap' : k === 'mult' ? 'r-mult' : 'r-risk') + ' r-blank"></span>';
+              '<span class="' + (k === 'size' ? 'r-size' : k === 'dur' ? 'r-wk' : k === 'cap' ? 'r-cap'
+                : k === 'mult' ? 'r-mult' : k === 'pri' ? 'r-risk pri' : 'r-risk') + ' r-blank"></span>';
           }).join('') + (st.flag ? flagBadgeHtml(st) : '<span class="r-warn"></span>')) +
           '</div>' +
           (view === 'scoping'
@@ -6188,7 +6236,7 @@
         }
         case 'ws': {
           openDropdown(act, wsMenuItems(itemId, function () {
-            return rowsEl.querySelector('.row[data-id="' + itemId + '"] .r-ws');
+            return rowsEl.querySelector('.row[data-id="' + itemId + '"] .r-ws, .row[data-id="' + itemId + '"] .r-ws-col');
           }));
           return;
         }
@@ -6485,7 +6533,7 @@
         state.meta.workstreamsEnabled
           ? { icon: 'layers', label: 'Set workstream…', fn: function () {
               openContextMenu(cx, cy, wsMenuItems(itemId, function () {
-                return rowsEl.querySelector('.row[data-id="' + itemId + '"] .r-ws');
+                return rowsEl.querySelector('.row[data-id="' + itemId + '"] .r-ws, .row[data-id="' + itemId + '"] .r-ws-col');
               }));
             } }
           : null,
@@ -9090,16 +9138,26 @@
     total: ['Total', 'Total']
   };
   var BU_KEYS = ['role', 'type', 'cap', 'ws', 'cost', 'rate', 'margin', 'total'];
+  // [short header label, tooltip, default width px, minimum width px]
   var PL_COL_DEFS = {
-    size: ['Size', 'Size', 34],
-    pri: ['Pri', 'Priority', 26],
-    risk: ['Risk', 'Risk', 26],
-    dur: ['Wks', 'Duration in weeks', 34],
-    asg: ['Ppl', 'Assignees', 40],
-    cap: ['Cap', 'Capacity type', 58],
-    mult: ['×', 'Capacity multiplier (per-person demand)', 26]
+    size: ['Size', 'Size', 34, 26],
+    pri: ['Pri', 'Priority', 26, 22],
+    risk: ['Risk', 'Risk', 26, 22],
+    dur: ['Wks', 'Duration in weeks', 34, 26],
+    asg: ['Ppl', 'Assignees', 40, 30],
+    cap: ['Cap', 'Capacity type', 58, 34],
+    mult: ['×', 'Capacity multiplier (per-person demand)', 26, 22],
+    ws: ['WS', 'Workstream', 96, 44],
+    epic: ['Epic', 'Epic', 96, 44],
+    start: ['Start', 'Start date', 62, 40],
+    deadline: ['Due', 'Deadline', 62, 40]
   };
-  var PL_KEYS = ['size', 'pri', 'risk', 'dur', 'asg', 'cap', 'mult'];
+  var PL_KEYS = ['size', 'pri', 'risk', 'dur', 'asg', 'cap', 'mult', 'ws', 'epic', 'start', 'deadline'];
+  // the fixed fields added later stay out of the way until asked for
+  var PL_DEFAULT_HIDDEN = ['ws', 'epic', 'start', 'deadline'];
+  function plHidden(k) {
+    return plColHide[k] != null ? !!plColHide[k] : PL_DEFAULT_HIDDEN.indexOf(k) !== -1;
+  }
   function orderedCols(order, allKeys) {
     var out = (order || []).filter(function (k) { return allKeys.indexOf(k) !== -1; });
     allKeys.forEach(function (k) { if (out.indexOf(k) === -1) out.push(k); });
@@ -9112,7 +9170,7 @@
   }
   function plColsVisible() {
     return plColsOrdered().filter(function (k) {
-      if (plColHide[k]) return false;
+      if (plHidden(k)) return false;
       if (k === 'size') return RM.sizingEnabled(state) || RM.sizingEnabled(state, 'story');
       if (k === 'pri') return RM.priorityEnabled(state) || RM.priorityEnabled(state, 'story');
       if (k === 'risk') return RM.riskEnabled(state);
@@ -9127,6 +9185,15 @@
   function applyBuColWidths() {
     var rs = document.documentElement.style;
     Object.keys(BU_COLS).forEach(function (k) { rs.setProperty('--bu-w-' + k, buW(k) + 'px'); });
+  }
+  // the planning chip columns resize the same way, through --pl-w-*
+  function plW(k) {
+    var d = PL_COL_DEFS[k] || [];
+    return Math.max(d[3] || 22, Math.min(240, parseInt(plColW[k], 10) || d[2] || 34));
+  }
+  function applyPlColWidths() {
+    var rs = document.documentElement.style;
+    PL_KEYS.forEach(function (k) { rs.setProperty('--pl-w-' + k, plW(k) + 'px'); });
   }
   // the column-label strip is rendered per view: labels, tooltips, resize
   // handles (budget), and drag-to-reorder all live here
@@ -9144,20 +9211,29 @@
       el.innerHTML = plColsVisible().map(function (k) {
         return '<i class="pl-only' + (k === 'size' ? ' sz-lab' : '') + '" data-plcol="' + k + '" title="' +
           esc(PL_COL_DEFS[k][1]) +
-          '" style="width:' + PL_COL_DEFS[k][2] + 'px"></i>';
-      }).join('');
+          '" style="width:var(--pl-w-' + k + ')">' + esc(PL_COL_DEFS[k][0]) +
+          '<span class="pl-rz" data-plrz="' + k + '"></span></i>';
+      }).join('') +
+        '<button id="plColsAdd" class="pl-add" title="Columns…" aria-label="Columns"><i data-lucide="plus"></i></button>';
     }
   }
   function columnsMenuItems(kind) {
     var keys = kind === 'bu' ? buColsOrdered() : plColsOrdered();
     var defs = kind === 'bu' ? BU_COL_DEFS : PL_COL_DEFS;
     var hide = kind === 'bu' ? buColHide : plColHide;
-    var MENU_LBL = { size: 'Size', dur: 'Duration', asg: 'Assignees' };
+    // the menu spells every column out in full, whatever its cramped header says
+    var PL_MENU_LBL = {
+      size: 'Size', pri: 'Priority', risk: 'Risk', dur: 'Duration', asg: 'Assignees',
+      cap: 'Capacity type', mult: 'Multiplier', ws: 'Workstream', epic: 'Epic',
+      start: 'Start', deadline: 'Deadline'
+    };
+    // hidden-ness is a per-kind question: planning columns have defaults
+    function isHid(k) { return kind === 'bu' ? !!hide[k] : plHidden(k); }
     var items = keys.map(function (k) {
-      var lbl = MENU_LBL[k] || defs[k][0] || k;
-      return { icon: hide[k] ? 'eye-off' : 'eye', label: esc(lbl), checked: !hide[k], fn: function () {
-        hide[k] = !hide[k];
-        if (keys.every(function (x) { return hide[x]; })) hide[k] = false; // keep one column
+      var lbl = kind === 'bu' ? (defs[k][0] || k) : (PL_MENU_LBL[k] || defs[k][0] || k);
+      return { icon: isHid(k) ? 'eye-off' : 'eye', label: esc(lbl), checked: !isHid(k), fn: function () {
+        hide[k] = !isHid(k);
+        if (keys.every(function (x) { return isHid(x); })) hide[k] = false; // keep one column
         saveLocal();
         render();
       } };
@@ -9165,7 +9241,7 @@
     items.push({ sep: true });
     items.push({ icon: 'rotate-ccw', label: 'Reset columns', fn: function () {
       if (kind === 'bu') { buColOrder = null; buColHide = {}; buColW = {}; }
-      else { plColOrder = null; plColHide = {}; }
+      else { plColOrder = null; plColHide = {}; plColW = {}; }
       saveLocal();
       render();
     } });
@@ -9178,6 +9254,22 @@
     function mv(ev) {
       buColW[k] = Math.max(44, Math.min(420, Math.round(w0 + ev.clientX - x0)));
       document.documentElement.style.setProperty('--bu-w-' + k, buW(k) + 'px');
+    }
+    function up() {
+      window.removeEventListener('pointermove', mv);
+      window.removeEventListener('pointerup', up);
+      saveLocal();
+    }
+    window.addEventListener('pointermove', mv);
+    window.addEventListener('pointerup', up);
+  }
+  function startPlColResize(e, k) {
+    e.preventDefault();
+    e.stopPropagation();
+    var w0 = plW(k), x0 = e.clientX;
+    function mv(ev) {
+      plColW[k] = Math.max(PL_COL_DEFS[k][3] || 22, Math.min(240, Math.round(w0 + ev.clientX - x0)));
+      document.documentElement.style.setProperty('--pl-w-' + k, plW(k) + 'px');
     }
     function up() {
       window.removeEventListener('pointermove', mv);
@@ -9248,8 +9340,19 @@
     if (e.button !== 0) return;
     var rz = e.target.closest('.bu-rz');
     if (rz) { startBuColResize(e, rz.dataset.burz); return; }
+    var prz = e.target.closest('.pl-rz');
+    if (prz) { startPlColResize(e, prz.dataset.plrz); return; }
+    if (e.target.closest('#plColsAdd')) return; // the + is a click, not a drag
     var cell = e.target.closest('i[data-bucol],i[data-plcol]');
     if (cell) startHdrColDrag(e, cell);
+  });
+  // the + at the end of the planning strip opens the same show/hide menu
+  $('#hlCols').addEventListener('click', function (e) {
+    var add = e.target.closest('#plColsAdd');
+    if (!add) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openDropdown(add, columnsMenuItems('pl'), { minW: 190 });
   });
   // right-click a column label (or the header corner, below) = columns menu
   $('#hlCols').addEventListener('contextmenu', function (e) {
