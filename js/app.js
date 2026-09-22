@@ -4819,19 +4819,22 @@
       var riskW = (it.riskDays || 0) * dayPx();
       var width = workW + riskW;
       var rsp = RM.rangeEnabled(state) && (it.estLow != null || it.estHigh != null) ? RM.rangeSpans(state, it) : null;
-      var rangeHtml = '';
-      if (rsp && (rsp.highEnd !== it.startDay + it.durDays || rsp.lowEnd !== it.startDay + it.durDays)) {
-        var hiW = Math.max(width, (rsp.highEnd - it.startDay) * dayPx());
-        var loX = Math.max(2, (rsp.lowEnd - it.startDay) * dayPx());
-        rangeHtml = '<div class="bar-range" data-range="' + it.id + '" style="left:' + left + 'px;width:' + hiW + 'px;--bar-c:' + color + '"' +
-          ' title="' + esc('Estimate ' + rsp.low + '–' + rsp.high + ' working days · planned ' + rsp.planned) + '">' +
-          '<span class="br-low" style="left:' + loX + 'px"></span></div>';
+      var rangeHtml = '', rangeTail = 0;
+      if (rsp && rsp.highEnd > rsp.lowEnd) {
+        // the uncertain stretch (low finish -> high finish) rides OVER the bar as
+        // a hatched band; whatever runs past the planned end spills into the row
+        var rX = (rsp.lowEnd - it.startDay) * dayPx();
+        var rW = Math.max(3, (rsp.highEnd - rsp.lowEnd) * dayPx());
+        rangeTail = Math.max(0, rX + rW - width);
+        rangeHtml = '<div class="bar-range" data-range="' + it.id + '" style="left:' + (left + rX) + 'px;width:' + rW + 'px;--bar-c:' + color + '"' +
+          ' title="' + esc('Estimate ' + rsp.low + '–' + rsp.high + ' working days · planned ' + rsp.planned) + '"></div>';
       }
       var hcTag = '';
       // label rides inside the bar when it fits (~6.3px/char at 10.5px bold);
       // otherwise it sits just right of the bar in ink
       var labelW = it.feature.length * 6.3 + 16 + (hcTag ? 30 : 0) + (it.done ? 16 : 0);
-      var label = '<span class="b-label' + (labelW <= width ? '' : ' out') + '">' + doneCk + esc(it.feature) + '</span>';
+      var label = '<span class="b-label' + (labelW <= width ? '' : ' out') + '"' +
+        (labelW > width && rangeTail ? ' style="margin-left:' + rangeTail + 'px"' : '') + '>' + doneCk + esc(it.feature) + '</span>';
       var dates = RM.fmtShort(RM.dayToDate(meta, it.startDay)) + ' → ' +
         RM.fmtShort(RM.spanEndDate(meta, it.startDay, RM.itemSpan(it)));
       var tip = it.feature + '  ·  ' + dates + (it.size ? '  ·  ' + it.size : '') +
@@ -11075,19 +11078,17 @@
               ? '<div class="su-schemes" style="margin-top:8px">' +
                 RM.ESTIMATE_UNIT_ORDER.map(function (k) {
                   var def = RM.ESTIMATE_UNITS[k];
-                  return pick('suestunit', k, unit === k, def.name, k === 'days' ? 'Estimates are working days' : k === 'points' ? 'Converted to working days at the rate below' : 'Converted to working days at the rate below');
+                  return pick('suestunit', k, unit === k, def.name, k === 'days' ? 'Working days — set a rate below if a sheet day is not a full working day (4-day weeks = 1.25)' : 'Converted to working days at the rate below');
                 }).join('') + '</div>' +
-                (unit !== 'days'
-                  ? '<div class="p-row" style="margin-top:8px"><label class="p-lab">Working days per ' + esc(def1(unit)) + '</label>' +
-                    '<input type="number" id="suEstDaysPerUnit" min="0.01" step="0.05" value="' + m.daysPerUnit + '" style="width:90px"></div>'
-                  : '') +
+                '<div class="p-row" style="margin-top:8px"><label class="p-lab">Working days per ' + esc(def1(unit)) + '</label>' +
+                '<input type="number" id="suEstDaysPerUnit" min="0.01" step="0.05" value="' + m.daysPerUnit + '" style="width:90px"></div>' +
                 '<div class="p-row" style="margin-top:8px"><span class="p-lab">Planned bar follows</span>' +
                 '<div class="seg"><button data-suestbasis="high" class="' + (m.estimateBasis !== 'low' ? 'on' : '') + '">High</button>' +
                 '<button data-suestbasis="low" class="' + (m.estimateBasis === 'low' ? 'on' : '') + '">Low</button></div></div>'
               : '') +
-            '<div class="m-hint">Range mode adds Low / High fields to the panel and draws a hatched min/max span behind each bar. The planned duration is what schedules; it follows the basis when a range is entered.</div>' +
+            '<div class="m-hint">Range mode adds Low / High fields to the panel and hatches the low→high stretch of each bar (spilling past the bar when the high end runs longer). The planned duration is what schedules; it follows the basis when a range is entered.</div>' +
             '</section>';
-          function def1(k) { return k === 'points' ? 'point' : 'hour'; }
+          function def1(k) { return k === 'points' ? 'point' : k === 'hours' ? 'hour' : 'day'; }
         })() +
         '<section class="su-card"><h2>' + esc(lvl('story') + ' sizing') + '</h2>' +
         '<div class="su-schemes">' + storySchemeRows + '</div>' +

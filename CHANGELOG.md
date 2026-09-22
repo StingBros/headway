@@ -8,6 +8,7 @@ Format: short sections, bullets, one bold title per notable change —
 `**Feature title**: a short, impactful description and use case.`
 
 ## Unreleased
+- Range estimates: the min/max band now hatches the low→high stretch on top of the bar (it was drawn behind it, so under the default "high" basis it was invisible), and the working-days-per-unit rate is editable for every unit, days included, for sheets that count 4 days to a week.
 
 ### New
 - **Range estimates**: Setup → Sizing → Estimates switches a project from one planned duration to a low / high estimate per feature and story, in working days, story points or hours (with a days-per-unit rate). The Planning bar shows the min/max span as a hatched band behind the planned bar, the panel gains Low / High fields, the planned duration follows a chosen basis (high or low), and the Roadmap sheet carries `Est. low` / `Est. high` columns. Off by default — single-estimate documents look exactly as before.
