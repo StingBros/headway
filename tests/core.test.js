@@ -81,6 +81,16 @@ eq(RM.sizeForDays(s0, 45), 'XL', '45 days ≈ XL');
 // legacy size map migrates to the week scale
 var sLeg = RM.normalizeState({ meta: { sizeDays: { XS: 2, S: 3, M: 5, L: 10, XL: 20 } }, phases: [{ id: 'p' }], items: [] });
 eq(sLeg.meta.sizeDays.L, 20, 'legacy default size map migrated');
+// null/empty day values are healed back to the scheme default; 0 stays valid
+var sSzHeal = RM.normalizeState({
+  meta: { sizeDays: { XS: 2, S: null, M: 0, L: '' } }, phases: [{ id: 'p' }], items: []
+});
+eq(sSzHeal.meta.sizeDays.S, RM.DEFAULT_SIZE_DAYS.S, 'null S repaired to scheme default');
+eq(sSzHeal.meta.sizeDays.M, 0, 'M stays 0');
+eq(sSzHeal.meta.sizeDays.L, RM.DEFAULT_SIZE_DAYS.L, 'empty-string L repaired to scheme default');
+// the sizeOrder fallback filters storyOnly sizes for the feature scale, same as setSizeScheme
+var sSzOrderFib = RM.normalizeState({ meta: { sizeScheme: 'fibonacci' }, phases: [{ id: 'p' }], items: [] });
+eq(sSzOrderFib.meta.sizeOrder.join(','), '0.5,1,2,3,5,8,13', 'feature sizeOrder fallback drops the story-only 0');
 
 // ------------------------------------------------------------- normalize
 section('normalizeState');
@@ -91,6 +101,10 @@ var sN = mkState([
 eq(sN.items[0].headcount, 1, 'default headcount 1');
 ok(sN.items[0].num != null && sN.items[0].num !== 7, 'auto num assigned, no collision');
 eq(sN.items[1].headcount, 1, 'headcount floor 1');
+var sMs = mkState([{ feature: 'M', milestone: true, size: 'L', priority: 'P1', startDay: 0, durDays: 0 }]);
+sMs.meta.priorityScheme = 'levels'; sMs.items[0].priority = 'P1'; sMs = RM.normalizeState(sMs);
+eq(sMs.items[0].size, null, 'milestones carry no size');
+eq(sMs.items[0].priority, null, 'milestones carry no priority');
 eq(sN.items[1].phaseId, 'p1', 'bad phase falls back to first');
 ok(Array.isArray(sN.items[0].stories), 'stories default []');
 
@@ -1230,7 +1244,53 @@ if (!ExcelJS) {
             return RMExcel.readStateJson(buf5);
           }).then(function (json5) {
             ok(json5 === null, 'foreign workbooks read as null (no echo match possible)');
-            finish();
+            // ---- tags round trip, on its own document (the emoji fixture
+            // above is byte-sensitive, so tags get their own workbook)
+            var stT = RM.normalizeState({
+              meta: JSON.parse(JSON.stringify(META)),
+              phases: [{ id: 'p1', name: 'Alpha', bucket: false }],
+              items: [{ id: 'i1', num: 1, phaseId: 'p1', feature: 'Tagged', tags: ['tech debt', 'q3'],
+                stories: [{ id: 's1', title: 'story one', num: 2, tags: ['spike'] }, { id: 's2', title: 'story two', num: 40, deps: [2] }] }],
+              team: []
+            });
+            return RMExcel.exportWorkbook(stT).then(function (bufT) {
+              return RMExcel.importWorkbook(bufT).then(function (rt1) {
+                eq(rt1.state.items[0].tags, ['tech debt', 'q3'], 'feature tags survive the lossless path');
+                eq(rt1.state.items[0].stories[0].tags, ['spike'], 'story tags survive the lossless path');
+                var wbT = new ExcelJS.Workbook();
+                return wbT.xlsx.load(bufT).then(function () {
+                  wbT.removeWorksheet(wbT.getWorksheet('_RoadmapTool').id);
+                  return wbT.xlsx.writeBuffer();
+                }).then(function (bufT2) {
+                  return RMExcel.importWorkbook(bufT2);
+                }).then(function (rt2) {
+                  ok(rt2.source === 'template', 'tags doc without the tool sheet parses as a template');
+                  eq(rt2.state.items[0].tags, ['tech debt', 'q3'], 'template path re-reads the Roadmap Tags column');
+                  eq(rt2.state.items[0].stories[0].tags, ['spike'], 'template path re-reads the Stories Tags column');
+                  eq(rt2.state.items[0].stories.map(function (x) { return x.num; }),
+                    stT.items[0].stories.map(function (x) { return x.num; }), 'template path re-reads the Stories # column');
+                  eq(rt2.state.items[0].stories[1].deps, [stT.items[0].stories[0].num], 'template path re-reads the Stories Depends on column');
+                  // an older workbook has no Tags columns at all
+                  var wbT3 = new ExcelJS.Workbook();
+                  return wbT3.xlsx.load(bufT).then(function () {
+                    wbT3.removeWorksheet(wbT3.getWorksheet('_RoadmapTool').id);
+                    var rws3 = wbT3.getWorksheet('Roadmap');
+                    rws3.spliceColumns(rws3.columnCount, 1);
+                    var sws3 = wbT3.getWorksheet('Stories');
+                    sws3.spliceColumns(7, 3);
+                    return wbT3.xlsx.writeBuffer();
+                  }).then(function (bufT3) {
+                    return RMExcel.importWorkbook(bufT3);
+                  }).then(function (rt3) {
+                    eq(rt3.state.items[0].tags, [], 'a pre-tags workbook still imports, with no tags');
+                    eq(rt3.state.items[0].stories[0].tags, [], 'and its stories carry no tags');
+                    eq(rt3.state.items[0].stories[1].deps, [], 'a workbook without the Depends on column imports with no story deps');
+                    ok(rt3.state.items[0].stories[0].num > 0, 'and normalize assigns fresh story numbers');
+                    finish();
+                  });
+                });
+              });
+            });
           });
         });
       });
@@ -1254,6 +1314,210 @@ section('apps switch');
     'appEnabled: off app, forced Planning, and non-apps always reachable');
 }
 
+section('item types & hierarchy');
+{
+  var sT = mkState([
+    { num: 1, feature: 'A', epic: 'E1', stories: [{ id: 'sa', title: 'x' }, { id: 'sb', title: 'y', type: 'bug' }] },
+    { num: 2, feature: 'B', type: 'bug' },
+    { num: 3, feature: 'C', type: 'nope' }
+  ]);
+  eq(sT.meta.itemTypes.map(function (t) { return t.key; }), ['epic', 'feature', 'bug', 'task', 'story', 'subtask'], 'default types seeded');
+  eq(sT.meta.hierarchy.levels.map(function (l) { return l.key; }), ['epic', 'feature', 'story'], 'three fixed levels');
+  eq(sT.meta.hierarchy.levels[1].types, ['feature', 'bug', 'task'], 'feature level default types');
+  eq(sT.meta.hierarchy.anyTypeAnyLevel, false, 'switch off by default');
+  eq(sT.items[0].type, 'feature', 'missing item type -> level default');
+  eq(sT.items[1].type, 'bug', 'known item type kept');
+  eq(sT.items[2].type, 'feature', 'unknown item type -> level default');
+  eq(sT.items[0].stories[0].type, 'story', 'missing story type -> level default');
+  eq(sT.items[0].stories[1].type, 'bug', 'story type kept');
+  eq(sT.epicTypes, {}, 'epicTypes seeded empty');
+  eq(RM.typeOf(sT, 'E1', 'epic').key, 'epic', 'epic without a stored type resolves to epic');
+  eq(RM.levelLabel(sT, 'feature'), 'Feature', 'level label');
+  eq(RM.levelLabel(sT, 'story', true), 'Stories', 'plural label');
+  eq(RM.typesFor(sT, 'story').map(function (t) { return t.key; }), ['story', 'subtask', 'bug'], 'allowed types at story level');
+  eq(RM.defaultTypeFor(sT, 'epic'), 'epic', 'default type for epic level');
+  eq(RM.jiraTypeName(sT, 'story'), 'Sub-task', 'story type maps to Sub-task by default');
+  eq(RM.typeOf(sT, sT.items[1], 'feature').icon, 'bug', 'typeOf returns the record');
+
+  // a disallowed stored type survives normalize
+  var sT2 = mkState([{ num: 1, feature: 'A', type: 'subtask' }]);
+  eq(sT2.items[0].type, 'subtask', 'disallowed type kept on normalize');
+  // the switch opens every type at every level
+  sT2.meta.hierarchy.anyTypeAnyLevel = true;
+  eq(RM.typesFor(sT2, 'epic').length, 6, 'any type any level lists all types');
+
+  // legacy Jira names migrate into the type records once
+  var sT3 = mkState([{ num: 1, feature: 'A' }], { meta: Object.assign(JSON.parse(JSON.stringify(META)), { jira: { epicType: 'Initiative', featureType: 'Task', storyType: 'Subtask' } }) });
+  eq(RM.jiraTypeName(sT3, 'epic'), 'Initiative', 'legacy epicType migrates');
+  eq(RM.jiraTypeName(sT3, 'feature'), 'Task', 'legacy featureType migrates');
+  eq(RM.jiraTypeName(sT3, 'story'), 'Subtask', 'legacy storyType migrates');
+  sT3.meta.jira.featureType = 'Bug';
+  eq(RM.jiraTypeName(RM.normalizeState(sT3), 'feature'), 'Task', 'legacy names are read only when itemTypes is absent');
+
+  // custom labels and lists round-trip; empty level list falls back
+  var sT4 = mkState([{ num: 1, feature: 'A' }], { meta: Object.assign(JSON.parse(JSON.stringify(META)), {
+    itemTypes: [{ key: 'epic', label: 'Theme', icon: 'layers', jira: 'Epic' }, { key: 'feature', label: 'Feature', icon: 'rows-3', jira: 'Story' }, { key: 'story', label: 'Story', icon: 'list-tree', jira: 'Sub-task' }],
+    hierarchy: { levels: [{ key: 'feature', label: 'Capability', types: ['feature', 'ghost'] }, { key: 'story', label: 'Task', types: [] }], anyTypeAnyLevel: true } }) });
+  eq(sT4.meta.hierarchy.levels.map(function (l) { return l.label; }), ['Epic', 'Capability', 'Task'], 'missing level gets default label, order fixed');
+  eq(sT4.meta.hierarchy.levels[1].types, ['feature'], 'unknown type keys are dropped from a level');
+  eq(sT4.meta.hierarchy.levels[2].types, ['story'], 'empty level list falls back to defaults filtered to existing types');
+  eq(sT4.meta.hierarchy.anyTypeAnyLevel, true, 'switch round-trips');
+  eq(RM.levelLabel(sT4, 'story', true), 'Tasks', 'plural of a custom label');
+}
+{
+  var sC = RM.normalizeState({ meta: { title: 'C', timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
+  var tF = RM.itemType(sC, 'feature'), tS = RM.itemType(sC, 'story');
+  eq(tF.icon, 'square', 'feature default icon is the filled square glyph');
+  eq(tS.icon, 'bookmark', 'story default icon is the bookmark');
+  eq(RM.itemType(sC, 'task').icon, 'check-square', 'task icon unchanged');
+  ok(RM.itemTypes(sC).every(function (t) { return /^[0-9A-F]{6}$/.test(t.color); }), 'every type carries a resolved 6-hex color');
+  eq(RM.itemTypes(sC).map(function (t) { return t.color; }), RM.HASH_PALETTE.slice(0, RM.itemTypes(sC).length), 'default colors follow the hash palette in list order');
+  eq(RM.colorForType(sC, 'bug'), RM.HASH_PALETTE[2], 'colorForType reads the record');
+  eq(RM.colorForType(sC, 'nope'), RM.PALETTE.neutral, 'unknown type is neutral');
+  RM.setItemTypeColor(sC, 'bug', '#ff0000');
+  eq(RM.itemType(sC, 'bug').color, 'FF0000', 'setItemTypeColor stores an upper-case hex without #');
+  RM.setItemTypeColor(sC, 'bug', 'not a color');
+  eq(RM.itemType(sC, 'bug').color, 'FF0000', 'a bad color is ignored');
+  var kNew = RM.addItemType(sC, 'Spike', 'zap', 'Spike');
+  ok(/^[0-9A-F]{6}$/.test(RM.itemType(sC, kNew).color), 'a new type gets a palette color at once');
+  // stored documents on the old default icons migrate; custom icons stay
+  var sM = RM.normalizeState({ meta: { title: 'M', timelineStart: '2026-07-27', numWeeks: 8,
+    itemTypes: [{ key: 'feature', label: 'Feature', icon: 'rows-3', jira: 'Story' }, { key: 'story', label: 'Story', icon: 'list-tree', jira: 'Sub-task' }, { key: 'bug', label: 'Bug', icon: 'flame', jira: 'Bug', color: '123456' }] },
+    phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
+  eq(RM.itemType(sM, 'feature').icon, 'square', 'old feature default icon migrates to square');
+  eq(RM.itemType(sM, 'story').icon, 'bookmark', 'old story default icon migrates to bookmark');
+  eq(RM.itemType(sM, 'bug').icon, 'flame', 'a custom icon survives');
+  eq(RM.itemType(sM, 'bug').color, '123456', 'a stored color survives');
+  // color mode 'type'
+  ok(RM.COLOR_MODES.indexOf('type') !== -1, "'type' is a color mode");
+  var sT3col = RM.normalizeState({ meta: { title: 'T', timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p', name: 'P' }], team: [],
+    items: [{ id: 'x', num: 1, phaseId: 'p', feature: 'X', type: 'bug' }, { id: 'y', num: 2, phaseId: 'p', feature: 'Y' }] });
+  RM.setColorMode('type');
+  eq(RM.colorForItem(sT3col, sT3col.items[0]), RM.colorForType(sT3col, 'bug'), 'type mode colors an item by its type');
+  eq(RM.colorForItem(sT3col, sT3col.items[1]), RM.colorForType(sT3col, 'feature'), 'an item without a type takes the level default type color');
+  eq(RM.colorLegend(sT3col, sT3col.items).map(function (e) { return e.name; }), ['Bug', 'Feature'], 'type legend names the types in first-seen order');
+  RM.setColorMode('workstream');
+}
+
+section('item type mutations & validation');
+{
+  var sM = mkState([
+    { num: 1, feature: 'A', type: 'bug', epic: 'E', stories: [{ id: 's1', title: 'x', type: 'bug' }] }
+  ]);
+  var nk = RM.addItemType(sM, 'Spike', 'zap', 'Spike');
+  eq(nk, 'spike', 'addItemType slugs the label into a key');
+  eq(RM.addItemType(sM, 'Spike', 'zap', 'Spike'), 'spike-2', 'duplicate labels get a suffixed key');
+  ok(RM.setTypeAllowed(sM, 'feature', 'spike', true), 'allow a type at a level');
+  eq(RM.levelOf(sM, 'feature').types.slice(-1)[0], 'spike', 'allowed list grows');
+  ok(!RM.setTypeAllowed(sM, 'epic', 'epic', false), 'cannot remove the last type of a level');
+  ok(RM.setTypeAllowed(sM, 'feature', 'spike', false), 'disallow again');
+  RM.renameItemType(sM, 'spike', 'Research');
+  eq(RM.itemType(sM, 'spike').label, 'Research', 'rename keeps the key');
+  RM.setItemTypeJira(sM, 'spike', 'Research task');
+  eq(RM.jiraTypeName(sM, 'spike'), 'Research task', 'jira name edit');
+  RM.setItemTypeIcon(sM, 'spike', 'flask-conical');
+  eq(RM.itemType(sM, 'spike').icon, 'flask-conical', 'icon edit');
+  RM.setLevelLabel(sM, 'story', 'Task');
+  eq(RM.levelLabel(sM, 'story'), 'Task', 'level label edit');
+  ok(!RM.removeItemType(sM, 'epic'), 'cannot remove the only type of a level');
+  ok(RM.removeItemType(sM, 'bug'), 'remove a type');
+  eq(sM.items[0].type, 'feature', 'items of the removed type fall back to the level default');
+  eq(sM.items[0].stories[0].type, 'story', 'stories too');
+  eq(RM.levelOf(sM, 'story').types, ['story', 'subtask'], 'removed key leaves every level list');
+  ok(!RM.itemType(sM, 'bug'), 'record gone');
+
+  var sV2 = mkState([{ num: 1, feature: 'A', type: 'subtask', epic: 'E', stories: [{ id: 's1', title: 'x', type: 'task' }] }], { epicTypes: { E: 'feature' } });
+  var vv = RM.validate(sV2);
+  ok((vv.byItem[sV2.items[0].id] || []).some(function (f) { return f.code === 'TYPE_LEVEL' && /Subtask/.test(f.msg); }), 'item with a disallowed type warns');
+  ok(vv.global.some(function (f) { return f.code === 'TYPE_LEVEL' && /story/i.test(f.msg) && /Task/.test(f.msg); }), 'story with a disallowed type warns globally');
+  ok(vv.global.some(function (f) { return f.code === 'TYPE_LEVEL' && /Epic/.test(f.msg) && /Feature/.test(f.msg); }), 'epic with a disallowed type warns globally');
+  RM.setAnyTypeAnyLevel(sV2, true);
+  var vv2 = RM.validate(sV2);
+  ok(!(vv2.byItem[sV2.items[0].id] || []).some(function (f) { return f.code === 'TYPE_LEVEL'; }) && !vv2.global.some(function (f) { return f.code === 'TYPE_LEVEL'; }), 'switch on silences TYPE_LEVEL');
+
+  // TYPE_LEVEL must resolve missing/raw type fields (e.g. items pushed without
+  // a `type` after commit(), before the next normalizeState) via RM.typeOf,
+  // not compare the raw field directly.
+  var sV3 = mkState([{ num: 1, feature: 'A', epic: 'E', stories: [{ id: 's1', title: 'x' }] }], { epicTypes: { E: 'epic' } });
+  delete sV3.items[0].type;
+  delete sV3.items[0].stories[0].type;
+  var vv3 = RM.validate(sV3);
+  ok(!(vv3.byItem[sV3.items[0].id] || []).some(function (f) { return f.code === 'TYPE_LEVEL'; }), 'item pushed with no type resolves via RM.typeOf and warns nothing');
+  ok(!vv3.global.some(function (f) { return f.code === 'TYPE_LEVEL'; }), 'story pushed with no type resolves via RM.typeOf and warns nothing');
+}
+
+section('flags');
+{
+  var sF = mkState([{ id: 'f', num: 1, phaseId: 'p1', feature: 'F', flag: 'needs legal review',
+    stories: [{ id: 'a', title: 'A', flag: true }, { id: 'b', title: 'B', flag: { reason: '  late  ' } }, { id: 'c', title: 'C', flag: false }] }]);
+  eq(sF.items[0].flag, { reason: 'needs legal review' }, 'a string flag becomes { reason }');
+  eq(sF.items[0].stories[0].flag, { reason: '' }, 'true flags with an empty reason');
+  eq(sF.items[0].stories[1].flag, { reason: 'late' }, 'an object flag keeps a trimmed reason');
+  eq(sF.items[0].stories[2].flag, null, 'false / missing means not flagged');
+  eq(RM.normalizeFlag(undefined), null, 'normalizeFlag: nothing → null');
+}
+section('story numbers');
+{
+  var sN = mkState([
+    { id: 'f1', num: 1, phaseId: 'p1', feature: 'One', stories: [{ id: 'a', title: 'A' }, { id: 'b', title: 'B', num: 7 }] },
+    { id: 'f2', num: 3, phaseId: 'p1', feature: 'Two', stories: [{ id: 'c', title: 'C', num: 3 }] }
+  ]);
+  eq(sN.items[0].stories.map(function (s) { return s.num; }), [8, 7], 'a numbered story keeps its number; a blank one gets the next past everything in use');
+  eq(sN.items[1].stories[0].num, 9, 'a story number that collides with a feature is reassigned');
+  eq(RM.nextNum(sN), 10, 'nextNum spans features and stories');
+  // a blank story must never take a number another story holds (that would
+  // silently re-point every dep naming it)
+  var sKeep = mkState([{ id: 'f', num: 1, phaseId: 'p1', feature: 'F', stories: [{ id: 'a', title: 'A' }, { id: 'b', title: 'B', num: 2 }, { id: 'c', title: 'C', num: 3, deps: [2] }] }]);
+  eq(sKeep.items[0].stories.map(function (x) { return x.id + ':' + x.num; }), ['a:4', 'b:2', 'c:3'], 'blank story is numbered past the held ones');
+  eq(RM.resolveStoryDeps(sKeep, sKeep.items[0].stories[2]).deps[0].st.id, 'b', 'the dep still points at the story it named');
+  var sDup = RM.normalizeState(mkState([{ id: 'f', num: 1, phaseId: 'p1', feature: 'F', stories: [{ id: 'a', title: 'A', num: 5 }] }, { id: 'g', num: 2, phaseId: 'p1', feature: 'G', stories: [] }]));
+  sDup.items[1].num = 5; // forced collision, as the targeted apply could leave transiently
+  ok(RM.validate(sDup).global.some(function (g) { return g.code === 'DUP_NUM' && g.storyId === 'a'; }) &&
+    (RM.validate(sDup).byItem['g'] || []).some(function (x) { return x.code === 'DUP_NUM'; }), 'DUP_NUM covers a feature/story collision on both sides');
+  eq(RM.storyByNum(sN, 7).st.id, 'b', 'storyByNum finds a story');
+  eq(RM.storyByNum(sN, 1), null, 'a feature number is not a story');
+  eq(RM.byNum(sN, 1).kind, 'feature', 'byNum: feature');
+  eq(RM.byNum(sN, 9).kind + ':' + RM.byNum(sN, 9).st.id, 'story:c', 'byNum: story');
+  eq(RM.byNum(sN, 99), null, 'byNum: nothing');
+  eq(RM.renumberItem(sN, 'f2', 7), 10, 'renumbering a feature onto a story number falls back to the next free one');
+  sN.items[1].stories[0].deps = [7];
+  eq(RM.renumberStory(sN, 'f1', 'b', 20), 20, 'renumberStory takes a free number');
+  eq(sN.items[1].stories[0].deps, [20], 'story deps follow the renumbered story');
+  eq(RM.renumberStory(sN, 'f1', 'a', 20), 21, 'a taken number falls back to nextNum');
+}
+section('story deps');
+{
+  var sSD = mkState([
+    { id: 'f1', num: 1, phaseId: 'p1', feature: 'One', startDay: 0, durDays: 5,
+      stories: [{ id: 'a', title: 'A', num: 10 }, { id: 'b', title: 'B', num: 11, deps: [10, '10', 11, 99, 1] }] },
+    { id: 'f2', num: 2, phaseId: 'p1', feature: 'Two', startDay: 10, durDays: 5,
+      stories: [{ id: 'c', title: 'C', num: 12, deps: [11], startDay: 2, durDays: 3 }] }
+  ]);
+  eq(sSD.items[0].stories[1].deps, [10, 99, 1], 'normalize keeps numeric unique deps, drops self, keeps unknown');
+  var rb = RM.resolveStoryDeps(sSD, sSD.items[0].stories[1]);
+  eq(rb.deps.map(function (r) { return r.st.id; }), ['a'], 'resolveStoryDeps returns refs');
+  eq(rb.unknown, [99, 1], 'unknown numbers — including a feature number — are reported');
+  eq(RM.storyLabel(sSD, RM.storyRef(sSD, 'c')), '#12 · C', 'label is the story number and title');
+  eq(RM.storyWindow(sSD, sSD.items[0], sSD.items[0].stories[0]), { startDay: 0, endDay: 5 }, 'a story without a timeline takes the feature bar');
+  eq(RM.storyWindow(sSD, sSD.items[1], sSD.items[1].stories[0]), { startDay: 2, endDay: 5 }, 'a story with a timeline uses it');
+  eq(RM.storyDepEdges(sSD).map(function (e) { return e[0].st.id + '>' + e[1].st.id; }), ['a>b', 'b>c'], 'every explicit edge, dep first');
+  eq(RM.storyDependents(sSD, sSD.items[0].stories[1]).map(function (r) { return r.st.id; }), ['c'], 'dependents list this story');
+  var vSD = RM.validate(sSD);
+  ok(vSD.global.some(function (g) { return g.code === 'STORY_DEP_ORDER' && g.storyId === 'c' && /#12 "C" starts before #11 "B"/.test(g.msg); }), 'STORY_DEP_ORDER names both ends by number');
+  ok(vSD.global.filter(function (g) { return g.code === 'STORY_UNKNOWN_DEP' && g.storyId === 'b'; }).length === 2, 'each unknown dep warns');
+  ok(vSD.global.some(function (g) { return g.code === 'STORY_UNKNOWN_DEP' && /#1 is a feature/.test(g.msg); }), 'a feature number says so');
+  var sCyc = mkState([{ id: 'f', num: 1, phaseId: 'p1', feature: 'F', stories: [{ id: 'x', title: 'X', num: 2, deps: [3] }, { id: 'y', title: 'Y', num: 3, deps: [2] }, { id: 'z', title: 'Z', num: 4, deps: [2] }] }]);
+  eq(RM.storyCycleMembers(sCyc), { x: true, y: true }, 'cycle members (z hangs off the cycle, not in it)');
+  ok(RM.validate(sCyc).global.filter(function (g) { return g.code === 'STORY_CYCLE'; }).length === 2, 'both cycle members get STORY_CYCLE');
+  var sUn = mkState([{ id: 'f', num: 1, phaseId: 'p1', feature: 'F', stories: [{ id: 'p', title: 'P', num: 5 }] },
+    { id: 'g', num: 2, phaseId: 'p1', feature: 'G', startDay: 0, durDays: 5, stories: [{ id: 'q', title: 'Q', num: 6, deps: [5], startDay: 3, durDays: 2 }] }]);
+  ok(RM.validate(sUn).global.some(function (g) { return g.code === 'STORY_DEP_UNSCHEDULED' && g.storyId === 'q'; }), 'a scheduled story depending on an unscheduled one gets the info');
+  var sDone = mkState([{ id: 'f', num: 1, phaseId: 'p1', feature: 'F', startDay: 0, durDays: 5, stories: [{ id: 'd', title: 'D', num: 2, done: true }, { id: 'e', title: 'E', num: 3, deps: [2], startDay: 1, durDays: 1 }] }]);
+  ok(!RM.validate(sDone).global.some(function (g) { return g.code === 'STORY_DEP_ORDER'; }), 'a done dependency never violates order');
+  var mapped = [{ id: 'n1', title: 'A', num: 30, deps: [21, 5] }, { id: 'n2', title: 'B', num: 31, deps: [] }];
+  RM.remapStoryDeps(mapped, { 20: 30, 21: 31 });
+  eq(mapped[0].deps, [31, 5], 'remapStoryDeps rewrites numbers inside the copy and keeps outside ones');
+}
   console.log('\n' + passed + ' passed, ' + failed + ' failed' + (skipped ? ', ' + skipped + ' skipped' : ''));
   process.exit(failed ? 1 : 0);
 }
@@ -1817,7 +2081,8 @@ eq(planImp.stories.add[0].story.title, 'Story two', '…the new one');
 var addedDelta = planImp.items.add.filter(function (x) { return x.feature === 'Delta feature'; })[0];
 var addedEps = planImp.items.add.filter(function (x) { return x.feature === 'Epsilon feature'; })[0];
 eq(addedDelta.id, 'iD', 'an added feature keeps its id when it is free');
-eq([addedDelta.num, addedEps.num], [4, 5], 'added features take the next nums');
+var nextBase = RM.nextNum(sImpBase); // stories share the number pool, so the next free number counts them too
+eq([addedDelta.num, addedEps.num], [nextBase, nextBase + 1], 'added features take the next nums');
 eq(addedDelta.phaseId, planImp.phases.add[0].id, 'phase mapped to the phase being added');
 eq(planImp.phases.add[0].name, 'Later', '…which is the new phase');
 eq(addedDelta.deps.slice().sort(), ['iB', 'iC'].sort(), 'deps on matched items resolve to the roadmap ids');
@@ -1838,8 +2103,10 @@ eq(RM.itemById(sImpApplied, 'iA').stories.length, 2, 'story added');
 eq(RM.itemById(sImpApplied, 'iA').stories[0].description, '<p>filled body</p>', 'story body filled');
 ok(sImpApplied.items.every(function (x) { return typeof x.order === 'string' && x.order; }), 'added rows carry order keys');
 ok(RM.itemById(sImpApplied, addedDelta.id).order > RM.itemById(sImpApplied, 'iC').order, 'added feature sorts after the existing ones');
-var nums = sImpApplied.items.map(function (x) { return x.num; }).sort();
-eq(nums, [1, 2, 3, 4, 5], 'nums stay unique');
+var nums = [];
+sImpApplied.items.forEach(function (x) { nums.push(x.num); (x.stories || []).forEach(function (st) { nums.push(st.num); }); });
+eq(nums.filter(function (n, i) { return nums.indexOf(n) === i; }).length, nums.length, 'nums stay unique across features and stories');
+eq(sImpApplied.items.map(function (x) { return x.num; }).slice(0, 3), [1, 2, 3], 'existing features keep their numbers');
 ok(RM.normalizeState(sImpApplied).items.length === 5, 'the merged document normalizes cleanly');
 
 // idempotent: the same workbook again has nothing to add or fill
@@ -1894,6 +2161,28 @@ eq(sJk.epicJira, { Login: 'HW-1' }, 'epicJira keeps only non-empty string keys')
 var sJk2 = mkState([{ num: 1, feature: 'a' }]);
 eq(sJk2.items[0].jiraKey, null, 'item jira key defaults to null');
 eq(sJk2.epicJira, {}, 'epicJira defaults to an empty map');
+
+// ------------------------------------------------------------------- tags
+section('tags');
+eq(RM.normalizeTags(' a , b,, A ,c'), ['a', 'b', 'c'], 'a comma string splits, trims, drops empties and dedupes case-insensitively');
+eq(RM.normalizeTags(['x', ' y ', 'X', '']), ['x', 'y'], 'array input normalizes the same way');
+eq(RM.normalizeTags('Alpha, alpha'), ['Alpha'], 'the first spelling wins');
+eq(RM.normalizeTags([new Array(60).join('z')])[0].length, 40, 'each tag caps at 40 chars');
+eq(RM.normalizeTags(null), [], 'nothing in, nothing out');
+eq(RM.normalizeTags(7), [], 'a non-string, non-array value yields no tags');
+{
+  var sTg = mkState([
+    { num: 1, feature: 'a', tags: ['red', 7, null, 'Blue'], stories: [{ title: 's', tags: 'green, red' }] },
+    { num: 2, feature: 'b', tags: 'ZED' }
+  ]);
+  eq(sTg.items[0].tags, ['red', 'Blue'], 'normalizeState keeps item tags and drops non-strings');
+  eq(sTg.items[0].stories[0].tags, ['green', 'red'], 'story tags normalize from a comma string');
+  eq(sTg.items[1].tags, ['ZED'], 'a plain string tag field becomes a one-tag array');
+  eq(mkState([{ num: 1, feature: 'a' }]).items[0].tags, [], 'tags default to an empty array');
+  eq(RM.allTags(sTg), ['Blue', 'green', 'red', 'ZED'], 'allTags unions features and stories, sorted case-insensitively');
+  RM.setTags(sTg, sTg.items[0], ' one , one , two ');
+  eq(sTg.items[0].tags, ['one', 'two'], 'setTags normalizes what it stores');
+}
 
 // ------------------------------------------------------------- jira csv export
 section('jira csv export');
@@ -1955,8 +2244,8 @@ var sJc = mkState([
   { num: 1, feature: 'Login page', epic: 'Login', workstream: 'Product', size: 'M',
     startDay: 0, durDays: 5, deadline: '2026-09-04', jiraKey: 'HW-12',
     description: '<p>Hi <b>there</b></p>', enables: 'Checkout', notes: '',
-    stories: [{ title: 's1', done: true }, { title: 's2', jiraKey: 'HW-13' }] },
-  { num: 2, feature: 'Search, "fast"', deps: [1], phaseId: 'p2' },
+    stories: [{ title: 's1', done: true }, { title: 's2', jiraKey: 'HW-13', type: 'bug' }] },
+  { num: 2, feature: 'Search, "fast"', deps: [1], phaseId: 'p2', type: 'bug' },
   { num: 3, feature: 'Orphan', deps: [2] }
 ], { epicJira: { Login: 'HW-1' } });
 eq(RMJira.fileName(sJc), 'T-jira.csv', 'jira csv filename');
@@ -1964,7 +2253,8 @@ var jr = RMJira.rows(sJc, { features: true, stories: false });
 eq(jr.length, 3, 'features only: one row per feature');
 var r1 = jr[0];
 eq(r1['Summary'], 'Login page', 'summary is the feature name');
-eq(r1['Issue Type'], 'Story', 'feature issue type defaults to Story');
+eq(r1['Issue Type'], 'Story', 'feature type Feature maps to Jira Story');
+eq(jr[1]['Issue Type'], 'Bug', 'a Bug feature maps to Jira Bug');
 eq(r1['Parent'], 'HW-1', 'parent is the epic jira key');
 eq(r1['Labels'], 'ws-product phase-alpha size-m', 'labels are slugged workstream, phase and size');
 eq(r1['Due Date'], '2026-09-04', 'due date is the deadline');
@@ -1983,12 +2273,13 @@ eq(r2['Blocked By'], 'HW-12', 'dependencies with keys list the key');
 eq(r2['Start Date'], '', 'unscheduled: blank dates');
 eq(jr[2]['Blocked By'], '', 'dependencies without keys are left out');
 
-var jrs = RMJira.rows(sJc, { features: true, stories: true, featureType: 'Task', storyType: 'Sub-task' });
+var jrs = RMJira.rows(sJc, { features: true, stories: true });
 eq(jrs.length, 5, 'features and stories: a row per story too');
-eq(jrs[0]['Issue Type'], 'Task', 'custom feature issue type');
+eq(jrs[0]['Issue Type'], 'Story', 'feature row type from the type record');
 ok(jrs[0]['Description'].indexOf('[x]') === -1, 'checklist omitted when stories are rows');
 eq(jrs[1]['Summary'], 's1', 'story row summary');
-eq(jrs[1]['Issue Type'], 'Sub-task', 'story issue type');
+eq(jrs[1]['Issue Type'], 'Sub-task', 'story issue type from the type record');
+eq(jrs[2]['Issue Type'], 'Bug', 'a Bug story maps to Jira Bug');
 eq(jrs[1]['Parent'], 'HW-12', 'story parents to the feature key');
 eq(jrs[1]['Labels'], 'feature-login-page ws-product phase-alpha', 'story labels name the feature');
 eq(jrs[2]['Jira Key'], 'HW-13', 'story jira key');
@@ -2002,3 +2293,76 @@ eq(lines[0], 'Summary,Issue Type,Description,Parent,Labels,Priority,Due Date,Sta
 ok(lines.some(function (l) { return l.indexOf('"Search, ""fast"""') === 0; }), 'commas and quotes are escaped');
 ok(/"Hi there\n/.test(csv), 'newlines stay inside a quoted cell');
 eq(RMJira.csv(mkState([]), { features: true }).slice(1).split('\r\n').length, 2, 'empty doc: header plus trailing newline');
+
+// ------------------------------------------------------------ half points
+section('half points');
+{
+  eq(RM.SIZE_SCHEMES.fibonacci.sizes.indexOf('0.5'), 1, 'story points offer 0.5 right after 0');
+  eq(RM.SIZE_SCHEMES.fibonacci.days['0.5'], 0.5, '0.5 points = half a day');
+  var sH = RM.normalizeState({ meta: { title: 'H', timelineStart: '2026-07-27', numWeeks: 8, storySizeScheme: 'fibonacci', storySizeOrder: ['1', '2', '3', '5', '8', '13'], storySizeDays: { 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 } },
+    phases: [{ id: 'p', name: 'P' }], team: [], items: [{ id: 'x', num: 1, phaseId: 'p', feature: 'X', startDay: 0, durDays: 5, stories: [{ id: 's', title: 'S', size: '0.5' }] }] });
+  eq(RM.sizeOrderOf(sH, 'story').indexOf('0.5'), 1, 'an older Fibonacci document gains the 0.5 option');
+  eq(RM.sizeDays(sH, '0.5', 'story'), 0.5, 'and its day value');
+  eq(RM.storyEffortDays(sH, sH.items[0].stories[0]), 0.5, 'a 0.5-point story is half a day of effort');
+  ok(RM.stretchSpan(sH.meta, 0, 0.5) >= 1, 'a half-day span still occupies one working day on the grid');
+  var sC = RM.normalizeState({ meta: { title: 'C', timelineStart: '2026-07-27', numWeeks: 8, storySizeScheme: 'custom', storySizeOrder: ['1', '2', '3', '5', '8', '13'], storySizeDays: { 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 } }, phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
+  eq(RM.sizeOrderOf(sC, 'story').indexOf('0.5'), -1, 'a custom scale is left alone');
+  RM.addSizeOption(sC, '0.5', 0.5, 'story');
+  eq(RM.sizeDays(sC, '0.5', 'story'), 0.5, 'addSizeOption keeps a fractional day value');
+}
+
+// tags ride along as slugged Jira labels
+{
+  var sTl = mkState([{ num: 1, feature: 'Login page', workstream: 'Product', tags: ['Tech Debt', 'q3'],
+    stories: [{ title: 's1', tags: ['Story Tag'] }] }]);
+  var tr1 = RMJira.rows(sTl, { features: true, stories: true });
+  ok(tr1[0]['Labels'].split(' ').indexOf('tech-debt') !== -1 && tr1[0]['Labels'].split(' ').indexOf('q3') !== -1,
+    'feature labels include the slugged tags');
+  ok(tr1[1]['Labels'].split(' ').indexOf('story-tag') !== -1, 'story labels include the slugged story tags');
+}
+
+// ------------------------------------------------------------ zero points
+section('zero points');
+{
+  eq(RM.SIZE_SCHEMES.fibonacci.sizes[0], '0', 'story points start at 0');
+  eq(RM.SIZE_SCHEMES.fibonacci.days['0'], 0, '0 points = no effort');
+  // features never gain the 0 step: picking Story points for the feature
+  // scale still starts at 0.5
+  var sZF = mkState([]);
+  RM.setSizeScheme(sZF, 'fibonacci', 'feature');
+  eq(RM.sizeOrderOf(sZF).join(','), '0.5,1,2,3,5,8,13', 'the feature Fibonacci scale skips 0');
+  eq(RM.sizeDays(sZF, '0'), null, 'and carries no day value for it');
+  RM.setSizeScheme(sZF, 'fibonacci', 'story');
+  eq(RM.sizeOrderOf(sZF, 'story').join(','), '0,0.5,1,2,3,5,8,13', 'the story Fibonacci scale offers 0');
+
+  // a size option may be worth zero days
+  var sZA = mkState([]);
+  RM.addSizeOption(sZA, '0', 0, 'story');
+  eq(RM.sizeDays(sZA, '0', 'story'), 0, 'addSizeOption stores a zero day value');
+
+  // a 0-point story: no effort, but still a day on the grid once scheduled
+  var sZ = RM.normalizeState({ meta: { title: 'Z', timelineStart: '2026-07-27', numWeeks: 8, storySizeScheme: 'fibonacci' },
+    phases: [{ id: 'p', name: 'P' }], team: [],
+    items: [{ id: 'x', num: 1, phaseId: 'p', feature: 'X', startDay: 0, durDays: 5, stories: [{ id: 's', title: 'S', size: '0' }] }] });
+  eq(RM.storyEffortDays(sZ, sZ.items[0].stories[0]), 0, 'a 0-point story is zero days of effort');
+  ok(RM.moveStoryToSprint(sZ, 'x', 's', 0), 'a 0-point story moves onto a sprint');
+  ok(sZ.items[0].stories[0].durDays >= 1, 'and occupies at least one working day (' + sZ.items[0].stories[0].durDays + ')');
+  var sZ2 = RM.normalizeState(sZ);
+  ok(sZ2.items[0].stories[0].startDay != null && sZ2.items[0].stories[0].durDays >= 1,
+    'the 0-point story survives normalize still scheduled');
+
+  // migration: the Task 15 default gains 0; the pre-0.5 default gains both
+  var sZ15 = RM.normalizeState({ meta: { title: 'Z15', timelineStart: '2026-07-27', numWeeks: 8, storySizeScheme: 'fibonacci', storySizeOrder: ['0.5', '1', '2', '3', '5', '8', '13'], storySizeDays: { '0.5': 0.5, 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 } },
+    phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
+  eq(RM.sizeOrderOf(sZ15, 'story').join(','), '0,0.5,1,2,3,5,8,13', 'a 0.5-era document gains the 0 option');
+  eq(RM.sizeDays(sZ15, '0', 'story'), 0, 'and its zero day value survives normalize');
+  var sZOld = RM.normalizeState({ meta: { title: 'ZO', timelineStart: '2026-07-27', numWeeks: 8, storySizeScheme: 'fibonacci', storySizeOrder: ['1', '2', '3', '5', '8', '13'], storySizeDays: { 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 } },
+    phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
+  eq(RM.sizeOrderOf(sZOld, 'story').join(','), '0,0.5,1,2,3,5,8,13', 'a pre-0.5 document gains both 0 and 0.5');
+  var sZC = RM.normalizeState({ meta: { title: 'ZC', timelineStart: '2026-07-27', numWeeks: 8, storySizeScheme: 'custom', storySizeOrder: ['0.5', '1', '2', '3', '5', '8', '13'], storySizeDays: { '0.5': 0.5, 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 } },
+    phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
+  eq(RM.sizeOrderOf(sZC, 'story').indexOf('0'), -1, 'a custom story scale is left alone');
+  var sZFO = RM.normalizeState({ meta: { title: 'ZF', timelineStart: '2026-07-27', numWeeks: 8, sizeScheme: 'fibonacci', sizeOrder: ['1', '2', '3', '5', '8', '13'], sizeDays: { 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 } },
+    phases: [{ id: 'p', name: 'P' }], team: [], items: [] });
+  eq(RM.sizeOrderOf(sZFO).join(','), '0.5,1,2,3,5,8,13', 'an older feature Fibonacci scale gains 0.5 only');
+}

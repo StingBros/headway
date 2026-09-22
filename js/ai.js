@@ -35,6 +35,10 @@
   // { '<model id>': { reasoning: bool } }; null until fetched
   AI.modelInfo = null;
   AI.modelInfoBase = '';
+  // the gateway's model list, fetched once per gateway URL (drawer open or
+  // Setup → Load); null until fetched
+  AI.modelCache = null;
+  AI.modelCacheBase = '';
   // 'bedrock/global.us.claude-opus-5' -> 'claude-opus-5' for labels only:
   // the last path segment, minus leading provider / region / vendor tokens
   AI.shortModel = function (id) {
@@ -55,6 +59,14 @@
   };
   AI.effortAllowed = function (s) {
     return !!(s && s.effort) && AI.effortsFor(s).some(function (e) { return e[0] === s.effort; });
+  };
+  // the effort to run with after a model change: the current pick when the
+  // model offers it, else Medium, else the first level it does offer; a
+  // model with no effort support keeps the stored value (the selector hides)
+  AI.pickEffort = function (s) {
+    var eff = AI.effortsFor(s);
+    if (!eff.length || eff.some(function (e) { return e[0] === s.effort; })) return s.effort;
+    return eff.some(function (e) { return e[0] === 'medium'; }) ? 'medium' : eff[0][0];
   };
   AI.CLAUDE_MODELS = [['sonnet', 'Sonnet'], ['opus', 'Opus'], ['fable', 'Fable'], ['haiku', 'Haiku']];
   AI.DEFAULTS = {
@@ -247,6 +259,7 @@
     if (it.priority) o.priority = it.priority;
     if (it.risk) o.risk = it.risk;
     if (it.milestone) o.milestone = true;
+    if (it.type && it.type !== RM.defaultTypeFor(state, 'feature')) o.type = it.type;
     if (it.startDay != null && it.durDays != null) {
       o.start = isoOfDay(meta, it.startDay);
       o.end = spanEndIso(meta, it.startDay, it.durDays);
@@ -256,11 +269,15 @@
     if (it.deps && it.deps.length) o.deps = depNums(state, it); // the model speaks feature numbers
     if (it.done) o.done = true;
     if (it.locked) o.locked = true;
+    if (it.flag) o.flag = it.flag.reason || true;
     if (it.jiraKey) o.jiraKey = it.jiraKey;
+    if (it.tags && it.tags.length) o.tags = it.tags.slice();
     if (it.stories && it.stories.length) {
       o.stories = it.stories.length;
       var dn = it.stories.filter(function (s) { return s.done; }).length;
       if (dn) o.storiesDone = dn;
+      var sn = it.stories.map(function (s) { return s.num; }).filter(function (n) { return n != null; });
+      if (sn.length) o.storyNums = sn;
     }
     return o;
   }
@@ -353,7 +370,7 @@
     autoOrder: 'boolean — re-sort rows by start date after moves',
     groupWs: 'boolean — group rows by workstream',
     groupEpic: 'boolean — group rows by epic',
-    colorBy: "'workstream' | 'epic' | 'assignee' | 'priority' — what bar colours follow",
+    colorBy: "'workstream' | 'epic' | 'assignee' | 'priority' | 'type' — what bar colours follow",
     autoSave: 'boolean — desktop: write to the open file automatically',
     detailMode: "'feature' | 'story' — Planning row detail level"
   };
@@ -378,7 +395,7 @@
     },
     {
       name: 'add_items',
-      description: 'Create features in a phase. Each item: feature (title, required), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps (feature numbers), start (ISO date), durDays or end (ISO date), deadline (ISO), milestone (boolean, zero duration), headcount, teamType, stories ([{title, description, ac, size, priority, done}]). Returns the new feature numbers.',
+      description: 'Create features in a phase. Each item: feature (title, required), type (Feature, Bug, Task, … — a type label or key from Setup → Hierarchy), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps (feature numbers), start (ISO date), durDays or end (ISO date), deadline (ISO), milestone (boolean, zero duration; milestones ignore size and priority), headcount, teamType, tags (array of strings), stories ([{title, type, description, ac, size, priority, done, tags, deps}]). Stories get their own number from the same pool as features. Returns the new feature numbers.',
       parameters: {
         type: 'object',
         properties: {
@@ -390,7 +407,7 @@
     },
     {
       name: 'update_items',
-      description: 'Change features or stories. Each update: num (feature number, required), story (story id, to change that story instead), fields (object merged into the target). Feature fields: feature, workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps, start (ISO date or null to unschedule), durDays, end (ISO date), deadline, milestone, headcount, teamType, locked, done, phase (name or id), assignees (team ids), custom ({columnKey: text}), jiraKey, addStories ([{title, description, ac, size, priority}] appends stories). Story fields: title, description, ac, size, priority, risk, done, start, durDays, end, deadline, assignees. Use delete: true to remove the target.',
+      description: 'Change features or stories. Each update: num (a feature number, or a story number to change that story instead — required), story (story id; the older way to reach a story, still accepted), fields (object merged into the target). Feature fields: feature, type (Feature, Bug, Task, … — a type label or key from Setup → Hierarchy), workstream, epic, size, priority, risk, description, enables, outOfScope, notes, extDeps, deps, start (ISO date or null to unschedule), durDays, end (ISO date), deadline, milestone, headcount, teamType, locked, done, phase (name or id), assignees (team ids), tags (array of strings — replaces the list), custom ({columnKey: text}), jiraKey, addStories ([{title, type, description, ac, size, priority}] appends stories). Story fields: title, type, description, ac, size, priority, risk, done, start, durDays, end, deadline, assignees, tags (array of strings), deps (story numbers this story depends on — stories link to stories, never to features). Use delete: true to remove the target.',
       parameters: {
         type: 'object',
         properties: {
@@ -402,7 +419,7 @@
     },
     {
       name: 'update_project',
-      description: 'Edit any other part of the document with path operations, e.g. project settings (meta/title, meta/vision, meta/timelineStart, meta/endDate, meta/weeksPerSprint, meta/sprintAnchor, meta/sprintAnchorNum, meta/workDays, meta/sizeScheme, meta/sizeDays/M, meta/priorityScheme, meta/storyPriorityScheme, meta/riskScheme, meta/capacityEnabled, meta/holidayRanges (push {name,start,end}), meta/scopeCols (push {key:"c<slug>", label}), meta/jira), phases (phases/@id/name, phases/- to append {name, bucket}), team (team/@id/rate, team/- to append {name, role, type, workstreams, capacity, rate, cost}), teamTypes, wsColors/<name>, epicIcons/<name> (lucide icon), epicJira/<name>, wsOrder. Path segments: #num = feature by number, @id = element by id, digits = index, "-" = append. Ops: set (path, value), delete (path), push (path, value). Prefer add_items / update_items for features and stories.',
+      description: 'Edit any other part of the document with path operations, e.g. project settings (meta/title, meta/vision, meta/timelineStart, meta/endDate, meta/weeksPerSprint, meta/sprintAnchor, meta/sprintAnchorNum, meta/workDays, meta/sizeScheme, meta/sizeDays/M, meta/priorityScheme, meta/storyPriorityScheme, meta/riskScheme, meta/capacityEnabled, meta/holidayRanges (push {name,start,end}), meta/scopeCols (push {key:"c<slug>", label}), meta/jira, meta/itemTypes (array of {key,label,icon,jira}), meta/hierarchy/levels/<i>/types, meta/hierarchy/anyTypeAnyLevel, epicTypes/<name>), phases (phases/@id/name, phases/- to append {name, bucket}), team (team/@id/rate, team/- to append {name, role, type, workstreams, capacity, rate, cost}), teamTypes, wsColors/<name>, epicIcons/<name> (lucide icon), epicJira/<name>, wsOrder. Path segments: #num = feature by number, @id = element by id, digits = index, "-" = append. Ops: set (path, value), delete (path), push (path, value). Prefer add_items / update_items for features and stories.',
       parameters: {
         type: 'object',
         properties: {
@@ -419,7 +436,7 @@
     },
     {
       name: 'sync_jira',
-      description: 'Sync the project with Jira Cloud (needs the Jira connection on this machine and a project key in Setup → Jira; get_project summary shows jira.canSync). Creates issues for features (and stories, when that option is on) that have no Jira key, updates linked issues from Headway, adds "blocks" links for dependencies, and reads Done state back from Jira. Call with dryRun: true first to see what would change, and confirm with the user before applying. Adjust the mapping (issue types, epics, stories) through update_project on meta/jira.',
+      description: 'Sync the project with Jira Cloud (needs the Jira connection on this machine and a project key in Setup → Jira; get_project summary shows jira.canSync). Creates issues for features (and stories, when that option is on) that have no Jira key, updates linked issues from Headway, adds "blocks" links for dependencies, and reads Done state back from Jira. Call with dryRun: true first to see what would change, and confirm with the user before applying. Adjust the mapping (epics, stories) through update_project on meta/jira, and issue types through meta/itemTypes.',
       parameters: { type: 'object', properties: { dryRun: { type: 'boolean', description: 'true = preview only' } } }
     },
     {
@@ -469,10 +486,25 @@
       } else if (k === 'phase') {
         target.phaseId = phaseIdOf({ phases: fields.__phases || [] }, v);
         changed.push('phase');
+      } else if (k === 'tags') {
+        target.tags = RM.normalizeTags(v);
+        changed.push('tags');
       } else if (k === 'deps') {
         target.deps = (Array.isArray(v) ? v : [v]).map(Number).filter(function (n) { return !isNaN(n); });
         changed.push('deps');
-      } else if ((k === 'stories' || k === 'addStories') && !isStory) {
+      } else if (k === 'flag') {
+        target.flag = RM.normalizeFlag(v); // true / "reason" / null
+        changed.push('flag');
+      } else if (k === 'num' || k === 'id') {
+        throw new Error(k + ' is assigned by Headway and cannot be set — the user renumbers in the panel');
+      } else if (k === 'type') {
+        var want = String(v).trim().toLowerCase();
+        var hit = RM.itemTypes({ meta: meta }).filter(function (t) { return t.key.toLowerCase() === want || t.label.toLowerCase() === want; })[0];
+        if (!hit) throw new Error('unknown type "' + v + '"');
+        target.type = hit.key;
+        changed.push('type');
+      } else if (k === 'stories' || k === 'addStories') {
+        if (isStory) throw new Error('a story has no stories of its own');
         var made = (Array.isArray(v) ? v : []).map(function (s) {
           var st = { id: RM.uid('s'), title: '', done: false };
           mergeFields(meta, st, isObj(s) ? s : { title: textish(s) }, true);
@@ -492,6 +524,17 @@
     });
     return changed;
   }
+  // Stories the tool just created carry no number yet; normalize would only give
+  // them one on the next load, and the targeted apply below compares base and
+  // next by JSON — so number them here, in the state the tool is about to commit.
+  function numberNewStories(state) {
+    state.items.forEach(function (it) {
+      (it.stories || []).forEach(function (st) {
+        if (st.num == null) st.num = RM.nextNum(state);
+      });
+    });
+  }
+
   // plain text (blank-line paragraphs) -> the sanitized-HTML shape rich fields hold
   function textToHtml(v) {
     var t = textish(v);
@@ -503,11 +546,77 @@
   }
   AI.textToHtml = textToHtml;
 
-  function commitState(A, label, next, extra) {
-    A.ai.commit(label, function (s) {
-      Object.keys(s).forEach(function (k) { if (k !== 'history') delete s[k]; });
-      Object.keys(next).forEach(function (k) { if (k !== 'history') s[k] = next[k]; });
+  // Apply only what the tool changed. The model thinks for seconds between
+  // reading the project (base) and writing (next) while the user keeps
+  // editing the live document; items and sections the tool left alone stay
+  // exactly as the user has them — object identity included — so the screen
+  // updates in place instead of reloading.
+  function sameJson(a, b) { return JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b); }
+  function applyItemChanges(s, baseItems, nextItems) {
+    var live = Array.isArray(s.items) ? s.items : (s.items = []);
+    var baseById = {}, nextById = {}, liveIdx = {}, liveNums = {};
+    baseItems.forEach(function (it) { baseById[it.id] = it; });
+    nextItems.forEach(function (it) { nextById[it.id] = it; });
+    // deleted by the tool
+    for (var i = live.length - 1; i >= 0; i--) if (baseById[live[i].id] && !nextById[live[i].id]) live.splice(i, 1);
+    live.forEach(function (it, idx) { liveIdx[it.id] = idx; liveNums[it.num] = true; });
+    nextItems.forEach(function (it) {
+      var b = baseById[it.id];
+      if (!b) { // added
+        if (liveIdx[it.id] != null) return;
+        if (liveNums[it.num]) it.num = RM.nextNum(s); // the user added a feature meanwhile
+        live.push(it); liveIdx[it.id] = live.length - 1; liveNums[it.num] = true;
+        return;
+      }
+      if (sameJson(b, it)) return; // untouched: the user's copy stays
+      if (liveIdx[it.id] != null) live[liveIdx[it.id]] = it; // (deleted by the user meanwhile: stays deleted)
     });
+    // numbers are one pool across features and stories: a number the tool
+    // handed a new story (or feature) may meanwhile have gone to something
+    // the user added — later occurrences move to the next free number
+    // (existing stories keep theirs: a new feature that collides moves)
+    var storyNums = {}, seenNum = {};
+    live.forEach(function (it) {
+      if (baseById[it.id]) (it.stories || []).forEach(function (st) { if (st.num != null) storyNums[st.num] = true; });
+    });
+    live.forEach(function (it) {
+      if (seenNum[it.num] || (!baseById[it.id] && storyNums[it.num])) it.num = RM.nextNum(s);
+      seenNum[it.num] = true;
+    });
+    live.forEach(function (it) {
+      (it.stories || []).forEach(function (st) {
+        if (st.num == null || seenNum[st.num]) st.num = RM.nextNum(s);
+        seenNum[st.num] = true;
+      });
+    });
+    // order: follow the tool only when it reordered something
+    var baseOrder = baseItems.map(function (it) { return it.id; }).filter(function (id) { return nextById[id]; });
+    var nextOrder = nextItems.map(function (it) { return it.id; }).filter(function (id) { return baseById[id]; });
+    if (baseOrder.join('\n') !== nextOrder.join('\n')) {
+      var rank = {};
+      nextItems.forEach(function (it, i) { rank[it.id] = i; });
+      live.sort(function (a, b) {
+        var ra = rank[a.id], rb = rank[b.id];
+        if (ra == null && rb == null) return 0;
+        if (ra == null) return 1;
+        if (rb == null) return -1;
+        return ra - rb;
+      });
+    }
+  }
+  function applyChanges(s, base, next) {
+    Object.keys(next).forEach(function (k) {
+      if (k === 'history') return;
+      if (k === 'items') { applyItemChanges(s, base.items || [], next.items || []); return; }
+      if (!sameJson(base[k], next[k])) s[k] = next[k];
+    });
+    Object.keys(base).forEach(function (k) {
+      if (k !== 'history' && k !== 'items' && !(k in next)) delete s[k];
+    });
+  }
+  AI.applyChanges = applyChanges;
+  function commitState(A, label, base, next, extra) {
+    A.ai.commit(label, function (s) { applyChanges(s, base, next); });
     var v = A.ai.validation();
     var out = { ok: true, validation: v.counts };
     var errs = [];
@@ -594,8 +703,9 @@
         next.items.push(it);
         made.push({ num: it.num, feature: it.feature });
       });
+      numberNewStories(next);
       var norm = RM.normalizeState(next);
-      return commitState(A, args.label || ('add ' + (made.length === 1 ? '#' + made[0].num + ' ' + made[0].feature : made.length + ' features')), norm, { created: made });
+      return commitState(A, args.label || ('add ' + (made.length === 1 ? '#' + made[0].num + ' ' + made[0].feature : made.length + ' features')), state, norm, { created: made });
     }
     if (name === 'update_items') {
       var ups = Array.isArray(args.updates) ? args.updates : [];
@@ -604,33 +714,39 @@
       var report = [];
       ups.forEach(function (u) {
         if (!isObj(u) || u.num == null) throw new Error('every update needs a num');
-        var it = RM.itemByNum(st2, +u.num);
-        if (!it) throw new Error('no feature #' + u.num);
-        var target = it, label = '#' + it.num;
+        // one number pool: a num is a feature or a story (the story: <id> form still works)
+        var hit = RM.byNum(st2, +u.num);
+        if (!hit) throw new Error('no feature or story #' + u.num);
+        var it = hit.it, isStory = hit.kind === 'story';
+        var target = isStory ? hit.st : it;
+        var label = isStory ? '#' + hit.st.num + ' ' + (hit.st.title || 'story') : '#' + it.num;
         if (u.story) {
+          if (isStory) throw new Error('#' + u.num + ' is already a story; drop the story field');
           target = null;
           it.stories.forEach(function (s) { if (s.id === u.story) target = s; });
           if (!target) throw new Error('feature #' + it.num + ' has no story "' + u.story + '"');
+          isStory = true;
           label += ' story ' + target.title;
         }
         if (u['delete'] === true) {
-          if (u.story) it.stories = it.stories.filter(function (s) { return s !== target; });
+          if (isStory) it.stories = it.stories.filter(function (s) { return s !== target; });
           else st2.items = st2.items.filter(function (x) { return x !== it; });
           report.push({ target: label, deleted: true });
           return;
         }
         var fields = isObj(u.fields) ? clone(u.fields) : {};
         if (fields.phase != null) fields.__phases = st2.phases;
-        var ch = mergeFields(st2.meta, target, fields, !!u.story);
+        var ch = mergeFields(st2.meta, target, fields, isStory);
         report.push({ target: label, changed: ch });
       });
+      numberNewStories(st2);
       var lbl = args.label || (report.length === 1 ? 'edit ' + report[0].target : 'edit ' + report.length + ' items');
-      return commitState(A, lbl, RM.normalizeState(st2), { updated: report });
+      return commitState(A, lbl, state, RM.normalizeState(st2), { updated: report });
     }
     if (name === 'update_project') {
       var res = AI.applyOps(state, args.ops);
       var lbl2 = args.label || (res.changes.length === 1 ? res.changes[0].op + ' ' + res.changes[0].path : res.changes.length + ' changes');
-      return commitState(A, lbl2, res.state, { changes: res.changes.map(function (c) { return c.op + ' ' + c.path; }) });
+      return commitState(A, lbl2, state, res.state, { changes: res.changes.map(function (c) { return c.op + ' ' + c.path; }) });
     }
     if (name === 'sync_jira') return syncJira(A, state, !!args.dryRun);
     throw new Error('tool "' + name + '" is not implemented');
@@ -696,14 +812,15 @@
     '## Model',
     '- Time is counted in working days from meta.timelineStart (weekends and non-work days do not exist in the index). Holidays stretch bars. A sprint = meta.weeksPerSprint weeks; sprint numbers count from meta.sprintAnchor / sprintAnchorNum. Tools accept and report ISO dates; day indexes appear in raw sections.',
     '- Phases hold features (state.phases; each item has phaseId). bucket=true phases are backlog shelves (Next / Future).',
-    '- Features (state.items) have num (the user-facing #id), feature (title), workstream, epic, size, risk, priority, deps (numbers of features that must finish first), startDay/durDays (null = unscheduled), deadline, milestone, locked, done, headcount, teamType, assignees (team ids), rich-text fields (description, enables, outOfScope, notes, extDeps — plain text is fine when writing), custom column values, jiraKey, and stories.',
-    '- Stories belong to a feature: id, title, done, size, priority, risk, description, ac (acceptance criteria — a built-in column shown on stories by default), optional own startDay/durDays, deadline, assignees, jiraKey.',
+    '- Features (state.items) have num (the user-facing #id), feature (title), workstream, epic, size, risk, priority, deps (numbers of features that must finish first), startDay/durDays (null = unscheduled), deadline, milestone, locked, done, headcount, teamType, assignees (team ids), rich-text fields (description, enables, outOfScope, notes, extDeps — plain text is fine when writing), custom column values, jiraKey, tags (free-form labels shared with stories, exported as Jira labels), and stories, type (Feature / Bug / Task …; types and the per-level allowed list live in meta.itemTypes and meta.hierarchy, and each type\'s jira field is the Jira issue type used by sync).',
+    '- Stories belong to a feature: id, num, title, done, size, priority, risk, description, ac (acceptance criteria — a built-in column shown on stories by default), optional own startDay/durDays, deadline, assignees, jiraKey, deps. A story number comes from the same pool as feature numbers, so every # in the document is either a feature or a story; refer to a story by its number (update_items takes it as num). Stories can depend on other stories: story deps hold story numbers, never feature numbers.',
     '- Sizing schemes: feature sizes (t-shirt XS–XL with working days per size in meta.sizeDays, or story points), story sizes, risk (none / L-M-H …), priority (none, MoSCoW M/S/C/W, levels C/H/M/L, RICE). Values are validated against the active scheme; read the summary before setting them.',
     '- Team (state.team): people or seats with role, rate-card type, workstreams, capacity (heads at 40 h; 0.5 = half-time), hourly rate and cost, weekHours overrides. Capacity checks only run when meta.capacityEnabled.',
     '- Workstreams carry colour (wsColors, order in wsOrder); epics carry a lucide icon (epicIcons) and optionally a Jira epic key (epicJira).',
     '',
     '## How to work',
     '- Read before you write: call get_project (summary) first in a conversation, then get_project items for the features you will touch. Never guess numbers, names or scheme values.',
+    '- Edits show up in place in whatever view the user is on; only the items you changed are touched. Do not call navigate after a write unless the user asked to see something — never switch views on your own.',
     '- Make the smallest edit that does the job, in one tool call when possible. Every write is undoable and shows in Version history as "<user> · AI" — mention that briefly after edits.',
     '- Dates are ISO (YYYY-MM-DD) and must fall inside the timeline. Durations are working days. A feature that gets a start but no duration gets 5 days.',
     '- When a request is ambiguous (which phase, which of two similar features), ask instead of picking.',
@@ -738,6 +855,46 @@
       .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
       .replace(/(^|[\s(])#(\d+)\b/g, '$1<a class="ai-ref" data-num="$2" href="#">#$2</a>');
   }
+  // GitHub-style pipe tables: split a row into cells (\| is a literal pipe)
+  function tableCells(line) {
+    var t = line.trim();
+    if (t.charAt(0) === '|') t = t.slice(1);
+    if (t.charAt(t.length - 1) === '|' && t.charAt(t.length - 2) !== '\\') t = t.slice(0, -1);
+    var cells = [], cur = '';
+    for (var i = 0; i < t.length; i++) {
+      var ch = t.charAt(i);
+      if (ch === '\\' && t.charAt(i + 1) === '|') { cur += '|'; i += 1; }
+      else if (ch === '|') { cells.push(cur.trim()); cur = ''; }
+      else cur += ch;
+    }
+    cells.push(cur.trim());
+    return cells;
+  }
+  // the delimiter row under a header: cells like ---, :---, ---:, :---:
+  function tableAligns(line) {
+    if (line.indexOf('-') === -1) return null;
+    var cells = tableCells(line);
+    var aligns = [];
+    for (var i = 0; i < cells.length; i++) {
+      var m = cells[i].match(/^(:?)-+(:?)$/);
+      if (!m) return null;
+      aligns.push(m[1] && m[2] ? 'center' : m[2] ? 'right' : m[1] ? 'left' : '');
+    }
+    return aligns;
+  }
+  function tableHtml(header, aligns, rows) {
+    function cell(tag, txt, i) {
+      var a = aligns[i];
+      return '<' + tag + (a ? ' style="text-align:' + a + '"' : '') + '>' + inline(esc(txt || '')) + '</' + tag + '>';
+    }
+    function row(cells, tag) {
+      var out = [];
+      for (var i = 0; i < header.length; i++) out.push(cell(tag, cells[i], i));
+      return '<tr>' + out.join('') + '</tr>';
+    }
+    return '<div class="ai-tbl"><table><thead>' + row(header, 'th') + '</thead>' +
+      '<tbody>' + rows.map(function (r) { return row(r, 'td'); }).join('') + '</tbody></table></div>';
+  }
   AI.md = function (text) {
     var src = String(text || '').replace(/\r\n?/g, '\n');
     var out = [];
@@ -763,6 +920,19 @@
         if (fence[1] === AI.FENCE) continue; // tool calls render as cards, not code
         out.push('<pre><code>' + esc(code.join('\n')) + '</code></pre>');
         continue;
+      }
+      // a table: a header line with a pipe, a delimiter line, then rows until a blank line
+      if (line.indexOf('|') !== -1 && i + 1 < lines.length) {
+        var aligns = tableAligns(lines[i + 1]);
+        var header = aligns ? tableCells(line) : null;
+        if (header && header.length === aligns.length) {
+          flushPara(); flushList();
+          var rows = [];
+          i += 2;
+          while (i < lines.length && lines[i].trim() && lines[i].indexOf('|') !== -1) { rows.push(tableCells(lines[i])); i += 1; }
+          out.push(tableHtml(header, aligns, rows));
+          continue;
+        }
       }
       var h = line.match(/^\s*(#{1,4})\s+(.*)$/);
       if (h) { flushPara(); flushList(); out.push('<h' + (h[1].length + 2) + '>' + inline(esc(h[2])) + '</h' + (h[1].length + 2) + '>'); i += 1; continue; }
@@ -1036,6 +1206,29 @@
       AI.modelInfo = map;
       if (drawer) rebuildHeader();
     });
+  };
+  // the model list for the drawer's selector: fetched when nothing is cached
+  // for this gateway; resolves to the ids, or null when not applicable or
+  // the gateway failed (a toast says so and the typed model stays)
+  AI.ensureModels = function (s) {
+    if (!s || s.provider !== 'litellm' || !s.baseUrl) return Promise.resolve(null);
+    if (AI.modelCache && AI.modelCacheBase === s.baseUrl) return Promise.resolve(AI.modelCache);
+    return openai.models(s).then(function (ids) {
+      AI.modelCache = ids;
+      AI.modelCacheBase = s.baseUrl;
+      if (drawer) rebuildHeader();
+      return ids;
+    }, function (err) {
+      var a = app();
+      if (a && a.toast) a.toast('Could not list models: ' + err.message, 'err');
+      return null;
+    });
+  };
+  // per-model facts for the effort selector: refetch when the map has not
+  // heard of this model (a model added to the gateway since the last load)
+  AI.ensureModelInfo = function (s) {
+    var force = !!(AI.modelInfo && s.model && !AI.modelInfo[s.model]);
+    return AI.refreshModelInfo(force);
   };
 
   // ------------------------------------------------------------ claude -p
@@ -1416,6 +1609,7 @@
       openai.models(s).then(function (ids) {
         $('#aiModelList').innerHTML = ids.map(function (id) { return '<option value="' + esc(id) + '">'; }).join('');
         AI.modelCache = ids;
+        AI.modelCacheBase = s.baseUrl;
         AI.refreshModelInfo(true);
         btn.disabled = false; btn.textContent = 'Load';
         app().toast(ids.length + ' model' + (ids.length === 1 ? '' : 's') + ' available — pick one in the Model field');
@@ -1505,7 +1699,8 @@
     if (s.provider === 'claude') {
       modelOpts = AI.CLAUDE_MODELS.map(function (m) { return '<option value="' + m[0] + '"' + (s.claudeModel === m[0] ? ' selected' : '') + '>' + m[1] + '</option>'; }).join('');
     } else {
-      var ids = (AI.modelCache || []).slice();
+      // the cache belongs to one base URL: ignore it when the endpoint changed
+      var ids = (AI.modelCache && AI.modelCacheBase === s.baseUrl ? AI.modelCache : []).slice();
       if (s.model && ids.indexOf(s.model) === -1) ids.unshift(s.model);
       modelOpts = ids.length ? ids.map(function (id) { return '<option value="' + esc(id) + '"' + (s.model === id ? ' selected' : '') + '>' + esc(AI.shortModel(id)) + '</option>'; }).join('') : '<option value="">No model</option>';
     }
@@ -1629,10 +1824,16 @@
       var s = AI.loadSettings();
       if (s.provider === 'claude') s.claudeModel = e.target.value; else s.model = e.target.value;
       // the effort list follows the model: keep a still-valid pick, else fall back
-      var eff = AI.effortsFor(s);
-      if (eff.length && !eff.some(function (x) { return x[0] === s.effort; })) s.effort = eff[Math.min(1, eff.length - 1)][0];
+      s.effort = AI.pickEffort(s);
       AI.saveSettings(s);
       rebuildHeader();
+      if (s.provider !== 'litellm') return;
+      AI.ensureModelInfo(s).then(function () {
+        var s2 = AI.loadSettings();
+        var e2 = AI.pickEffort(s2);
+        if (e2 !== s2.effort) { s2.effort = e2; AI.saveSettings(s2); }
+        rebuildHeader();
+      });
     });
     ta.addEventListener('input', function () { autosize(ta); });
     ta.addEventListener('keydown', function (e) {
@@ -1696,6 +1897,7 @@
     root.document.body.classList.add('ai-open');
     renderMessages();
     AI.refreshModelInfo();
+    AI.ensureModels(AI.loadSettings());
     var ta = drawer.querySelector('#aiInput');
     if (ta) ta.focus();
   };

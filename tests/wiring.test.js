@@ -1131,6 +1131,7 @@ async function importFlow() {
   ok(/Imported feature/.test(txt), 'lists the new feature title');
   ok(!/template layout/.test(txt), 'a Headway workbook: no template note');
   eq(b.state().items.length, nItems, 'nothing applied before Import');
+  const expectNum = b.RM.nextNum(b.state()); // the next free number in the shared feature+story pool, before the import lands
   let mark = tauri.log.length;
   b.click(mh().querySelector('[data-m="ok"]'));
   ok(mh().hidden, 'modal closed');
@@ -1139,7 +1140,7 @@ async function importFlow() {
   eq(b.state().items.length, nItems + 1, 'one feature added');
   const added = b.state().items.find((i) => i.feature === 'Imported feature');
   ok(!!added && added.id === 'i-imp-new', 'the new feature keeps its workbook id (free in the roadmap)');
-  eq(added.num, b.RM.nextNum({ items: b.state().items.filter((i) => i.id !== added.id) }), '…and takes the next num');
+  eq(added.num, expectNum, '…and takes the next num');
   eq(S.item(M.id).stories.length, nStories + 1, 'one story added under M');
   eq(S.item(M.id).enables, 'Filled from Excel', 'the empty field is filled');
   eq(S.item(M.id).notes, M.notes, 'the conflicting field is untouched');

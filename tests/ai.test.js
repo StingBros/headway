@@ -126,15 +126,16 @@ console.log('— tools');
     { feature: 'Gamma', workstream: 'Data', size: 'S', start: '2026-08-03', durDays: 10, deps: [1], stories: [{ title: 'S-a' }, 'S-b'], description: 'Line one\n\nLine two' },
     { feature: 'Launch', milestone: true, start: '2026-09-07' }
   ] }, A);
-  eq(added.created.map(function (c) { return c.num; }), [3, 4], 'new features get the next numbers');
-  var g = RM.itemByNum(st, 3);
+  // #3 is taken by the existing story (features and stories share one pool)
+  eq(added.created.map(function (c) { return c.num; }), [4, 5], 'new features get the next numbers');
+  var g = RM.itemByNum(st, 4);
   eq(g.phaseId, 'p2', 'phase resolved by name');
   eq(g.startDay, 5, 'ISO start became a working-day index');
   eq(g.durDays, 10, 'duration kept');
   eq(g.stories.map(function (x) { return x.title; }), ['S-a', 'S-b'], 'stories created from objects and strings');
   ok(g.stories[0].id, 'stories get ids');
   eq(g.description, '<p>Line one</p><p>Line two</p>', 'plain text description became paragraphs');
-  var ms = RM.itemByNum(st, 4);
+  var ms = RM.itemByNum(st, 5);
   ok(ms.milestone && ms.durDays === 0 && ms.startDay === 30, 'milestone: zero duration on its date');
   ok(/add 2 features/.test(A.labels[A.labels.length - 1]), 'history label for the add');
   throws(function () { AI.runTool('add_items', { phase: 'Nope', items: [{ feature: 'x' }] }, A); }, /no phase/, 'unknown phase rejected');
@@ -153,9 +154,24 @@ console.log('— tools');
   ok(a1.stories[0].done && a1.stories[0].startDay === 1 && a1.stories[0].durDays === 2, 'story fields merged');
   eq(A.labels[A.labels.length - 1], 'tweak', 'custom label used');
   throws(function () { AI.runTool('update_items', { updates: [{ num: 2, fields: { start: '2030-01-01' } }] }, A); }, /inside the timeline/, 'dates outside the timeline rejected');
-  throws(function () { AI.runTool('update_items', { updates: [{ num: 77, fields: {} }] }, A); }, /no feature #77/, 'unknown feature rejected');
+  throws(function () { AI.runTool('update_items', { updates: [{ num: 77, fields: {} }] }, A); }, /no feature or story #77/, 'unknown feature rejected');
   AI.runTool('update_items', { updates: [{ num: 4, delete: true }] }, A);
   ok(!RM.itemByNum(st, 4), 'delete removes a feature');
+
+  // tags: normalized on the way in, replaced wholesale on update
+  {
+    AI.runTool('add_items', { items: [{ feature: 'Tagged', tags: ['x', 'x', 'Y'],
+      stories: [{ title: 'st', tags: ' a , a ,b ' }] }] }, A);
+    var tg = st.items[st.items.length - 1];
+    eq(tg.tags, ['x', 'Y'], 'add_items stores de-duplicated tags');
+    eq(tg.stories[0].tags, ['a', 'b'], 'story tags normalize too');
+    AI.runTool('update_items', { updates: [{ num: tg.num, fields: { tags: ['fresh'] } }] }, A);
+    eq(RM.itemByNum(st, tg.num).tags, ['fresh'], 'update_items replaces the tag list');
+    AI.runTool('update_items', { updates: [{ num: tg.num, story: tg.stories[0].id, fields: { tags: [] } }] }, A);
+    eq(RM.itemByNum(st, tg.num).stories[0].tags, [], 'an empty list clears story tags');
+    ok(AI.runTool('get_project', {}, A).items.some(function (x) { return String(x.tags) === 'fresh'; }),
+      'the item summary line carries tags');
+  }
 
   var up = AI.runTool('update_project', { ops: [{ op: 'set', path: 'meta/vision', value: 'Ship it' }, { op: 'push', path: 'meta/holidayRanges', value: { name: 'Offsite', start: '2026-08-20', end: '2026-08-21' } }] }, A);
   eq(up.changes, ['set meta/vision', 'push meta/holidayRanges'], 'update_project reports its changes');
@@ -172,6 +188,127 @@ console.log('— tools');
   var prefs = AI.runTool('get_preferences', {}, A);
   ok(prefs.ui.view === 'scoping' && prefs.preferenceKeys.theme, 'get_preferences returns ui + keys');
   throws(function () { AI.runTool('nope', {}, A); }, /unknown tool/, 'unknown tool rejected');
+}
+
+console.log('— story numbers and deps');
+{
+  // stories carry their own numbers from the shared pool; give the fixture two
+  // well away from the feature numbers so the assertions read clearly
+  var st = freshState();
+  st.items[0].stories[0].num = 10;
+  st.items[1].stories.push({ id: 's2', title: 'Story two', num: 11 });
+  st = RM.normalizeState(st);
+  var A = fakeApp(st);
+  AI.runTool('update_items', { updates: [{ num: 11, fields: { deps: [10, 99] } }] }, A);
+  eq(RM.storyRef(st, 's2').st.deps, [10, 99], 'a story number targets the story; deps are numbers');
+  eq(AI.runTool('get_project', { part: 'items', nums: [2] }, A).items[0].stories[0].deps, [10, 99], 'get_project items reports story deps');
+  ok(AI.summary(st).items.some(function (l) { return l.storyNums && l.storyNums.indexOf(10) !== -1; }), 'the summary lists story numbers');
+  AI.runTool('update_items', { updates: [{ num: 1, fields: { addStories: [{ title: 'New one' }] } }] }, A);
+  ok(RM.itemById(st, 'a').stories.slice(-1)[0].num === RM.nextNum(st) - 1, 'a story added by the AI gets a number at once');
+  AI.runTool('add_items', { items: [{ feature: 'Delta', stories: [{ title: 'D-a' }] }] }, A);
+  var delta = st.items[st.items.length - 1];
+  ok(delta.stories[0].num > 0 && RM.storyByNum(st, delta.stories[0].num).st === delta.stories[0], 'add_items numbers the stories it creates');
+  eq(RM.storyRef(st, 's2').st.num, 11, 'the story number itself is untouched by the edits');
+  ok(/story number/i.test(AI.toolByName('update_items').description), 'the update tool documents story numbers');
+  ok(/story number/i.test(AI.GUIDE), 'the guide documents story numbers');
+  throws(function () { AI.runTool('update_items', { updates: [{ num: 77, fields: {} }] }, A); }, /no feature or story #77/, 'an unknown number names both kinds');
+}
+
+console.log('— item types');
+{
+  var stT = freshState();
+  var AT = fakeApp(stT);
+  AI.runTool('add_items', { items: [{ feature: 'Crash on save', type: 'Bug', stories: [{ title: 'repro', type: 'subtask' }] }] }, AT);
+  var added = stT.items.filter(function (x) { return x.feature === 'Crash on save'; })[0];
+  ok(added && added.type === 'bug', 'add_items accepts a type label');
+  ok(added.stories[0].type === 'subtask', 'story type on add');
+  AI.runTool('update_items', { updates: [{ num: added.num, fields: { type: 'task' } }] }, AT);
+  ok(stT.items.filter(function (x) { return x.num === added.num; })[0].type === 'task', 'update_items sets type by key');
+  var threwType = false;
+  try { AI.runTool('update_items', { updates: [{ num: added.num, fields: { type: 'nope' } }] }, AT); } catch (e) { threwType = /unknown type/.test(e.message); }
+  ok(threwType, 'unknown type is rejected');
+  var line = JSON.stringify(AI.runTool('get_project', {}, AT).items);
+  ok(/"type":"task"/.test(line), 'itemLine reports a non-default type');
+}
+
+console.log('— targeted apply');
+{
+  // The model thinks for seconds between reading the project and writing;
+  // meanwhile the user keeps editing. A write must touch only what the tool
+  // changed and leave every other item exactly as the user left it.
+  var st = freshState();
+  var A = fakeApp(st);
+  var snap = A.ai.state;
+  A.ai.state = function () {
+    var c = snap();
+    // user edits landing after the snapshot was taken
+    st.items[0].feature = 'Alpha (user typed)';
+    st.items[0].stories[0].title = 'Story one (user typed)';
+    st.meta.title = 'Renamed by user';
+    return c;
+  };
+  var alphaObj = st.items[0];
+  AI.runTool('update_items', { updates: [{ num: 2, fields: { feature: 'Beta 2', size: 'S' } }] }, A);
+  eq(st.items[1].feature, 'Beta 2', 'the edited feature is updated');
+  eq(st.items[1].size, 'S', '…with every changed field');
+  eq(st.items[0].feature, 'Alpha (user typed)', 'an untouched feature keeps the user’s concurrent edit');
+  eq(st.items[0].stories[0].title, 'Story one (user typed)', '…and so do its stories');
+  ok(st.items[0] === alphaObj, 'untouched items keep their object identity (no wholesale replace)');
+  eq(st.meta.title, 'Renamed by user', 'untouched meta keeps the user’s concurrent edit');
+
+  var added = AI.runTool('add_items', { phase: 'Scale', items: [{ feature: 'Gamma' }] }, A);
+  eq(st.items.length, 3, 'add_items appends the new feature');
+  eq(st.items[2].feature, 'Gamma', '…at the end');
+  ok(st.items[0] === alphaObj, 'adding does not rewrite existing items');
+
+  AI.runTool('update_items', { updates: [{ num: 2, delete: true }] }, A);
+  // Gamma took #4 — #3 belongs to Alpha's story (shared number pool)
+  eq(st.items.map(function (i) { return i.num; }).join(','), '1,4', 'deleting removes just that feature');
+  ok(st.items[0] === alphaObj, 'deleting does not rewrite the others');
+
+  AI.runTool('update_project', { ops: [{ op: 'set', path: 'meta/vision', value: 'Ship it' }] }, A);
+  eq(st.meta.vision, 'Ship it', 'update_project applies a meta change');
+  ok(st.items[0] === alphaObj, '…without touching items');
+  ok(/navigate/.test(AI.GUIDE) && /in place/.test(AI.GUIDE), 'the guide tells the model edits show in place and not to navigate uninvited');
+
+  // numbers are one pool: a story the tool numbers while the user adds a
+  // feature with that number is moved to the next free number
+  var stN = freshState();
+  var AN = fakeApp(stN);
+  var snapN = AN.ai.state;
+  AN.ai.state = function () {
+    var c = snapN();
+    var taken = RM.nextNum(stN); // what the tool will hand its new story
+    stN.items.push(RM.normalizeState({ meta: stN.meta, phases: stN.phases, items: [{ id: 'user-new', num: taken, phaseId: 'p1', feature: 'User added', stories: [] }] }).items[0]);
+    return c;
+  };
+  AI.runTool('update_items', { updates: [{ num: 1, fields: { addStories: [{ title: 'Tool added' }] } }] }, AN);
+  var allNums = [];
+  stN.items.forEach(function (i) { allNums.push(i.num); (i.stories || []).forEach(function (x) { allNums.push(x.num); }); });
+  ok(allNums.every(function (n, i) { return n != null && allNums.indexOf(n) === i; }), 'no two features/stories share a number after a concurrent add (' + allNums.join(',') + ')');
+  throws(function () { AI.runTool('update_items', { updates: [{ num: 1, fields: { num: 50 } }] }, AN); }, /assigned by Headway/, 'the AI cannot set numbers directly');
+  AI.runTool('update_items', { updates: [{ num: 1, fields: { flag: 'blocked on vendor' } }] }, AN);
+  eq(RM.itemById(stN, 'a').flag, { reason: 'blocked on vendor' }, 'the AI can flag with a reason');
+  eq(AI.runTool('get_project', {}, AN).items.filter(function (l) { return l.num === 1; })[0].flag, 'blocked on vendor', 'the summary shows the flag');
+  AI.runTool('update_items', { updates: [{ num: 1, fields: { flag: null } }] }, AN);
+  eq(RM.itemById(stN, 'a').flag, null, '…and unflag');
+  // the other way round: the user adds a story while the tool adds a feature
+  // with the same number — the existing story keeps it, the new feature moves
+  var stF = freshState();
+  var AF = fakeApp(stF);
+  var snapF = AF.ai.state;
+  AF.ai.state = function () {
+    var c = snapF();
+    var takenF = RM.nextNum(stF);
+    stF.items[1].stories.push({ id: 'user-story', title: 'User story', num: takenF, deps: [] });
+    stF.items[0].stories[0].deps = [takenF];
+    return c;
+  };
+  AI.runTool('add_items', { phase: 'Scale', items: [{ feature: 'Tool feature' }] }, AF);
+  var userSt = RM.storyRef(stF, 'user-story').st;
+  var toolFeat = stF.items.filter(function (i) { return i.feature === 'Tool feature'; })[0];
+  ok(toolFeat && toolFeat.num !== userSt.num, 'the tool feature moved off the user story’s number (' + toolFeat.num + ' vs ' + userSt.num + ')');
+  eq(RM.resolveStoryDeps(stF, stF.items[0].stories[0]).deps[0].st.id, 'user-story', 'the dep that named the story still resolves to it');
 }
 
 console.log('— jira sync tool');
@@ -375,6 +512,17 @@ function done() {
     eq(AI.md('see #12 and #3.'), '<p>see <a class="ai-ref" data-num="12" href="#">#12</a> and <a class="ai-ref" data-num="3" href="#">#3</a>.</p>', 'feature references link');
     eq(AI.md('text\n```headway-tool\n{"name":"x"}\n```\nafter'), '<p>text</p><p>after</p>', 'tool fences never render');
     eq(AI.md('[doc](https://x.y/z) <script>'), '<p><a href="https://x.y/z" target="_blank" rel="noopener">doc</a> &lt;script&gt;</p>', 'links and escaping');
+    // GitHub-style tables: a header row, a delimiter row, body rows
+    eq(AI.md('| # | Feature | Size |\n|---|:--------|-----:|\n| 1 | **Alpha** | M |\n| 2 | a \\| b | <s> |'),
+      '<div class="ai-tbl"><table><thead><tr><th>#</th><th style="text-align:left">Feature</th><th style="text-align:right">Size</th></tr></thead>' +
+      '<tbody><tr><td>1</td><td style="text-align:left"><b>Alpha</b></td><td style="text-align:right">M</td></tr>' +
+      '<tr><td>2</td><td style="text-align:left">a | b</td><td style="text-align:right">&lt;s&gt;</td></tr></tbody></table></div>',
+      'pipe tables render as tables with alignment, inline markup, escaped pipes and escaping');
+    eq(AI.md('Before\n\nA | B\n--|--\n1 | 2\n\nAfter'),
+      '<p>Before</p><div class="ai-tbl"><table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table></div><p>After</p>',
+      'tables without outer pipes work and end at a blank line');
+    eq(AI.md('| a | b |\n| 1 | 2 |'), '<p>| a | b |<br>| 1 | 2 |</p>', 'a pipe line without a delimiter row is plain text');
+    eq(AI.md('| a | b |\n|---|---|\n| only |'), '<div class="ai-tbl"><table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>only</td><td></td></tr></tbody></table></div>', 'short rows pad to the header width');
   }
 
   console.log('— model labels + effort levels');
@@ -396,10 +544,48 @@ function done() {
     eq(AI.effortAllowed({ provider: 'litellm', model: 'plain', effort: 'high' }), false, 'effort is not sent to a model that lacks it');
     eq(AI.effortAllowed({ provider: 'litellm', model: 'bedrock/x', effort: 'max' }), false, 'max is not sent when the gateway only knows low/medium/high');
     eq(AI.effortAllowed({ provider: 'litellm', model: 'bedrock/x', effort: 'high' }), true, 'a listed level is sent');
+    eq(AI.pickEffort({ provider: 'litellm', model: 'bedrock/x', effort: 'high' }), 'high', 'pickEffort keeps a level the model offers');
+    eq(AI.pickEffort({ provider: 'litellm', model: 'bedrock/x', effort: 'max' }), 'medium', 'pickEffort falls back to medium when the pick is not offered');
+    eq(AI.pickEffort({ provider: 'litellm', model: 'plain', effort: 'max' }), 'max', 'a model without effort keeps the stored value (selector hidden)');
+    AI.GATEWAY_EFFORTS_SAVE = AI.GATEWAY_EFFORTS; AI.GATEWAY_EFFORTS = [['low', 'Low']];
+    eq(AI.pickEffort({ provider: 'litellm', model: 'bedrock/x', effort: 'max' }), 'low', 'without medium the first offered level wins');
+    AI.GATEWAY_EFFORTS = AI.GATEWAY_EFFORTS_SAVE; delete AI.GATEWAY_EFFORTS_SAVE;
     AI.modelInfo = null;
     ok(!/aiEffortSeg|>Effort</.test(AI.settingsHtml()), 'the settings page no longer carries an effort control');
   }
 
+  console.log('— model list on open');
+  var calls = [];
+  AI.fetchImpl = function (url) {
+    calls.push(url);
+    if (/\/v1\/models$/.test(url)) return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve({ data: [{ id: 'zeta' }, { id: 'alpha' }] }); } });
+    return Promise.resolve({ ok: false, status: 404, text: function () { return Promise.resolve(''); } });
+  };
+  AI.modelCache = null; AI.modelCacheBase = '';
+  var gw = { provider: 'litellm', baseUrl: 'https://gw.test', apiKey: 'k', model: 'alpha', effort: 'medium' };
+  AI.ensureModels(gw).then(function (ids) {
+    eq(ids, ['alpha', 'zeta'], 'ensureModels fetches and sorts the gateway models');
+    eq([AI.modelCache, AI.modelCacheBase], [['alpha', 'zeta'], 'https://gw.test'], 'the list is cached per gateway');
+    eq(calls.filter(function (u) { return /models$/.test(u); }).length, 1, 'one models request');
+    return AI.ensureModels(gw);
+  }).then(function () {
+    eq(calls.filter(function (u) { return /models$/.test(u); }).length, 1, 'a second open reuses the cache');
+    return AI.ensureModels({ provider: 'litellm', baseUrl: 'https://other.test', apiKey: 'k' });
+  }).then(function () {
+    eq(calls.filter(function (u) { return /models$/.test(u); }).length, 2, 'a different gateway fetches again');
+    return AI.ensureModels({ provider: 'claude' });
+  }).then(function (r) {
+    eq(r, null, 'the Claude provider never lists gateway models');
+    AI.fetchImpl = function () { return Promise.resolve({ ok: false, status: 500, text: function () { return Promise.resolve('boom'); } }); };
+    return AI.ensureModels({ provider: 'litellm', baseUrl: 'https://down.test', apiKey: 'k' });
+  }).then(function (r) {
+    eq(r, null, 'a failing gateway resolves null instead of throwing');
+    AI.fetchImpl = null; AI.modelCache = null; AI.modelCacheBase = '';
+    finish();
+  }, function (err) { failed++; console.error('  ✗ ensureModels threw: ' + err.message); AI.fetchImpl = null; finish(); });
+}
+
+function finish() {
   console.log('— desktop transport');
   {
     // The Tauri http plugin's reqwest trusts only bundled Mozilla roots unless

@@ -94,9 +94,12 @@
       teamType: futureCol + 2,
       start: futureCol + 3,
       end: futureCol + 4,
-      status: futureCol + 5
+      status: futureCol + 5,
+      // free-form tags: a trailing visible column (the sprint grid owns the
+      // columns right after 'Dependency Risk/Size', so it appends here)
+      tags: futureCol + 6
     };
-    var lastCol = extraCols.status;
+    var lastCol = extraCols.tags;
 
     var ws = wb.addWorksheet('Roadmap', {
       views: [{ state: 'frozen', xSplit: 4, ySplit: 3 }]
@@ -183,6 +186,7 @@
     r3.getCell(extraCols.start).value = 'Start';
     r3.getCell(extraCols.end).value = 'End';
     r3.getCell(extraCols.status).value = 'Status';
+    r3.getCell(extraCols.tags).value = 'Tags';
     Object.keys(extraCols).forEach(function (k) {
       r3.getCell(extraCols[k]).font = { bold: true, italic: true };
     });
@@ -203,6 +207,7 @@
     ws.getColumn(nextCol).width = 6;
     ws.getColumn(futureCol).width = 7;
     Object.keys(extraCols).forEach(function (k) { ws.getColumn(extraCols[k]).width = 10; });
+    ws.getColumn(extraCols.tags).width = 22;
 
     // ---- body
     var rowIdx = 4;
@@ -279,13 +284,16 @@
         r.getCell(extraCols.headcount).value = it.headcount;
         r.getCell(extraCols.teamType).value = it.teamType || null;
         r.getCell(extraCols.status).value = it.done ? 'Done' : (it.locked ? 'Locked' : null);
+        r.getCell(extraCols.tags).value = (it.tags || []).length ? it.tags.join(', ') : null;
         rowIdx += 1;
       });
     });
 
     // ---- Stories sheet
     var sws = wb.addWorksheet('Stories');
-    sws.getRow(1).values = ['Item #', 'Feature', 'Story', 'Done', 'Description', 'Acceptance Criteria'];
+    // '#' and 'Depends on' are trailing columns added later: older importers
+    // stop at Tags, and this importer reads them only when the header says so
+    sws.getRow(1).values = ['Item #', 'Feature', 'Story', 'Done', 'Description', 'Acceptance Criteria', 'Tags', '#', 'Depends on'];
     sws.getRow(1).font = { bold: true };
     sws.getColumn(1).width = 8;
     sws.getColumn(2).width = 44;
@@ -293,13 +301,19 @@
     sws.getColumn(4).width = 7;
     sws.getColumn(5).width = 50;
     sws.getColumn(6).width = 50;
+    sws.getColumn(7).width = 22;
+    sws.getColumn(8).width = 8;
+    sws.getColumn(9).width = 16;
     var srow = 2;
     state.items.forEach(function (it) {
       it.stories.forEach(function (st) {
         // rich text flattens to plain text in the sheet; the hidden tool
         // sheet keeps the formatted version losslessly
         sws.getRow(srow).values = [it.num, it.feature, st.title, st.done ? 'Yes' : 'No',
-          RM.htmlToText(st.description || ''), RM.htmlToText(st.ac || '')];
+          RM.htmlToText(st.description || ''), RM.htmlToText(st.ac || ''),
+          (st.tags || []).length ? st.tags.join(', ') : null,
+          st.num != null ? st.num : null,
+          (st.deps || []).length ? st.deps.join(', ') : null];
         srow += 1;
       });
     });
@@ -566,6 +580,7 @@
       else if (t === 'headcount') extraMap.headcount = colNumber;
       else if (t === 'team type') extraMap.teamType = colNumber;
       else if (t === 'status') extraMap.status = colNumber;
+      else if (t === 'tags') extraMap.tags = colNumber;
     });
     if (!sprintCols.length) throw new Error('No sprint date columns found in the header row');
     sprintCols.sort(function (a, b) { return a.col - b.col; });
@@ -692,6 +707,7 @@
         startDay: startDay,
         durDays: durDays,
         riskDays: riskDays,
+        tags: extraMap.tags ? cellText(row.getCell(extraMap.tags)) : '',
         locked: statusText === 'locked',
         done: statusText === 'done',
         stories: []
@@ -703,6 +719,12 @@
     if (sws) {
       var byNum = {};
       items.forEach(function (it) { if (it.num != null) byNum[it.num] = it; });
+      // Tags is a trailing column added later — read it only when the header
+      // says so, so older workbooks without it still import
+      var storyTagCol = /^tags$/i.test(cellText(sws.getCell(1, 7))) ? 7 : 0;
+      // story number + story-to-story dependencies, same header guard
+      var storyNumCol = /^#$/.test(cellText(sws.getCell(1, 8))) ? 8 : 0;
+      var storyDepCol = /^depends on$/i.test(cellText(sws.getCell(1, 9))) ? 9 : 0;
       for (var sr = 2; sr <= sws.rowCount; sr++) {
         var numTxt = cellText(sws.getCell(sr, 1));
         var title = cellText(sws.getCell(sr, 3));
@@ -711,7 +733,12 @@
         if (target) {
           target.stories.push({
             title: title, done: /^y(es)?$/i.test(cellText(sws.getCell(sr, 4))),
-            description: cellText(sws.getCell(sr, 5)), ac: cellText(sws.getCell(sr, 6))
+            description: cellText(sws.getCell(sr, 5)), ac: cellText(sws.getCell(sr, 6)),
+            tags: storyTagCol ? cellText(sws.getCell(sr, storyTagCol)) : '',
+            num: storyNumCol ? (parseInt(cellText(sws.getCell(sr, storyNumCol)), 10) || null) : null,
+            // hand-typed values may carry '#' and any of , ; whitespace;
+            // normalize drops whatever is not a positive integer
+            deps: storyDepCol ? cellText(sws.getCell(sr, storyDepCol)).replace(/#/g, '').split(/[,;\s]+/).filter(Boolean) : []
           });
         }
       }

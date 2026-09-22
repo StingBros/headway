@@ -7,6 +7,59 @@ both come from the matching section here. Newest first.
 Format: short sections, bullets, one bold title per notable change —
 `**Feature title**: a short, impactful description and use case.`
 
+## 1.0.13 — 2026-09-09
+
+### New
+
+- **Story numbers**: every story has a # from the same pool as features; it shows on every row and card and edits in the story panel.
+- **Story dependencies**: a story can depend on any other story. Add one in the story panel's Dependencies section (by # or name) or drag a story bar's edge circle onto another story; arrows and order warnings work like features; links push to Jira and the Stories sheet carries them.
+- **Flags**: right-click any feature or story → **Flag…** (optional reason) to mark it for attention; an orange flag takes the alert slot on the row (hover for the reason) and shows on Prioritizing cards, Sprinting rows and the panel header. **Edit flag…** / **Unflag** from the same menu. The AI assistant can set `flag` too.
+- **Titles rename on double-click**: on Planning and Prioritizing the feature and story titles are text, like Sprinting. Double-click one, or pick **Rename…** from its context menu, to edit; a single click just selects, and dragging from the title moves the row. Scoping keeps its spreadsheet cells.
+
+### Improved
+
+- AI assistant: Markdown tables in replies render as tables.
+- ⌘B / ⌘I (Ctrl+B / Ctrl+I) bold and italicise inside every rich text field.
+- Prioritizing: the board is full width; **Columns → Unset column** hides or shows the catch-all column; clicking a card opens the detail panel on it and clicking the same card again puts the panel away; an empty column or swimlane cell says "No items"; the catch-all swimlanes (the default workstream, "No epic") sit last.
+- Sprinting: the main content area is capped at a readable width.
+- Right-clicking the app background no longer opens the theme menu (the theme lives in Settings and the app menu).
+
+## 1.0.12 — 2026-09-09
+
+### New
+
+- **Item types and hierarchy**: every epic, feature and story carries a type (Feature, Bug, Task, Story, Subtask, Epic by default). Add your own types and colors in Setup → Hierarchy, rename the three levels, choose which types each level accepts, or allow any type anywhere. Pick a type from the panel, the context menu or Edit epic; rows show an icon for non-default types.
+- **Type glyphs and color by type**: the colored square left of every title is now the item's type icon (Feature keeps the filled square, Story is a bookmark) in the active color. **View → Color by item type** colors bars by type.
+- **Tags**: features and stories carry free-form labels, edited in the panel's Tags section (Enter or a comma adds one; the box suggests tags already in the document). Filter by tag with `#tag`. Tags survive the Excel round trip, push to Jira as labels, and the AI assistant can read and set them.
+- **Links in rich text**: any URL typed into a description or scope field renders as a link; ⌘-click (Ctrl-click on Windows/Linux) opens it in the browser. The stored text stays plain.
+- **Insert story above / below**: right-click a story on the row, the card, the sprint row or the panel to insert a blank story next to it, ready to edit. Features had this already.
+- **Duplicate story**: every story context menu can copy a story in place.
+- **Zero and half-point stories**: the story Fibonacci scale starts at 0 and 0.5. A 0-point story is real work with no effort (a placeholder, a spike already done, tracking-only) — it counts 0 toward sprint totals but still takes a day on the timeline.
+- **Jira issue types per Headway type**: sync and CSV export use each type's Jira issue type. The three fixed type fields in Setup → Jira become a per-type table; existing documents keep their previous names.
+
+### Improved
+
+- **Sprinting rows belong to one sprint**: a row sits only in the sprint it starts in, with an ⓘ glyph saying how many sprints it carries over. Rows wear sprint number, epic, workstream and assignee chips and drop the duration, date-range and phase columns; empty sprints at either end are hidden.
+- **Sprinting context menu**: right-click a feature or story for **Move to sprint…** and **Assign…**. Titles are plain text; double-click or Rename to edit.
+- **Add only where empty**: the Add feature / Add story buttons and rows show only in an empty phase, sprint section, Prioritizing column or story list. Everywhere else, right-click and use Insert above/below, so full lists stay compact.
+- **Prioritizing board**: the Fields menu can hide any card chip (Size, Priority, Risk, Duration, Epic, Workstream) and always offers Priority and Risk even when the columns are by that field; the toolbar filters by phase like Sprinting; milestones no longer appear on the board.
+- **AI assistant edits only what changed**: a write applies just the items the assistant added, edited, deleted or reordered, so the screen no longer flashes a reload and edits you are making are never overwritten. The assistant can also read and set item types.
+- **AI model picker**: the drawer loads the gateway's models when opened and the effort levels a model supports when you pick one, switching to Medium when the current level is not offered.
+- **Right panel order**: Estimate, then People, then Tags.
+- **Milestones carry no size or priority**: converting an item to a milestone clears both, and the panel, timeline and Scoping table show no size or priority controls on milestone rows.
+- **Desktop reload only with Auto save on**: the open file reloads after external changes only while Auto save is on, so unsaved edits are never replaced.
+- Settings → Jira: issue-type icons match the rest of the UI.
+
+### Fixed
+
+- The story panel's Size, Priority and Risk buttons did nothing.
+- Sprint totals show story counts until a story is sized, instead of a misleading 0.
+- Reporting's Delivery-by-sprint counts a feature in every sprint it spans.
+- Focusing and leaving a rich-text field that contains a URL no longer records a spurious edit.
+- Story-view sprints whose features have no visible stories no longer render empty.
+- Size day repair handles null values; story-only sizes fall back correctly in the size order.
+- Excel export: the band fill no longer covers the Tags column.
+
 ## 1.0.11 — 2026-09-08
 
 ### New

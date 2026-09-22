@@ -333,11 +333,27 @@ click(firstItem.querySelector('.r-num'));
 ok(!doc.querySelector('#panel').hidden, 'clicking a row opens the detail panel');
 ok(doc.querySelector('#panel .p-name').value.length > 0, 'panel shows the feature name');
 {
-  const nameInp = doc.querySelector('#rows .row.item[data-id="' + itId + '"] input.r-name');
-  ok(!!nameInp, 'row title is an editable input');
+  const rowOf = () => doc.querySelector('#rows .row.item[data-id="' + itId + '"]');
+  const nameEl = rowOf().querySelector('.r-name');
+  ok(nameEl && nameEl.tagName !== 'INPUT' && nameEl.textContent.length > 0, 'row title is text, not an input');
+  click(nameEl);
+  ok(!rowOf().querySelector('input'), 'a single click on the title does not start an edit');
+  rowOf().querySelector('.r-name').dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
+  const nameInp = rowOf().querySelector('input.r-name');
+  ok(!!nameInp, 'double-click turns the row title into an input');
   nameInp.value = 'Renamed inline';
-  nameInp.dispatchEvent(new window.Event('change', { bubbles: true }));
-  ok(state().items.find(i => i.id === itId).feature === 'Renamed inline', 'row title rename commits');
+  nameInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  ok(state().items.find(i => i.id === itId).feature === 'Renamed inline', 'Enter commits the row title rename');
+  // the row menu starts the same edit
+  rowOf().dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 120 }));
+  const rnBtn = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Rename/.test(b.textContent));
+  ok(!!rnBtn, 'the row context menu offers Rename…');
+  click(rnBtn);
+  const ed2 = rowOf().querySelector('input.r-name');
+  ok(!!ed2, 'Rename… starts the same inline edit');
+  ed2.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  ok(state().items.find(i => i.id === itId).feature === 'Renamed inline', 'Escape leaves the title alone');
+  click(rowOf().querySelector('.r-num')); // Escape cleared the selection — put it back
 }
 ok(doc.querySelector('#panel .wz-ed[data-f="col:description"]') !== null, 'panel has a description field');
 {
@@ -969,9 +985,14 @@ ok(doc.body.dataset.view === 'planning', 'view switches back to planning');
 
 // ---------------------------------------------------------------- blank add rows
 {
+  // only a phase with no features shows the add row (filled phases add via
+  // Insert above/below): give the document one
+  window.HeadwayApp.ai.commit('blank phase', (s) => {
+    s.phases.push({ id: 'ph_blank_probe', name: 'Blank probe', description: '', bucket: false, collapsed: false });
+  });
   const before = state().items.length;
   const addRow = doc.querySelector('#rows .row.addrow');
-  ok(!!addRow, 'phases end with a blank add row');
+  ok(!!addRow && addRow.dataset.phase === 'ph_blank_probe', 'an empty phase ends with a blank add row');
   click(addRow.querySelector('.row-lane'));
   ok(state().items.length === before, 'the add row\'s timeline lane is inert');
   click(addRow.querySelector('.row-left'));
@@ -988,6 +1009,11 @@ ok(doc.body.dataset.view === 'planning', 'view switches back to planning');
   click(doc.querySelector('#panel [data-sectoggle="stories"]'));
   ok(!doc.querySelector('#panel .p-sec[data-sec="stories"]').classList.contains('open'), 'and toggles closed again');
   ok(!doc.querySelector('#panel input[data-f="headcount"]'), 'headcount input is gone from the panel');
+  // fold the probe phase away: its new feature moves to the first phase
+  window.HeadwayApp.ai.commit('blank phase cleanup', (s) => {
+    s.items.forEach((i) => { if (i.phaseId === 'ph_blank_probe') i.phaseId = s.phases[0].id; });
+    s.phases = s.phases.filter(p => p.id !== 'ph_blank_probe');
+  });
 }
 {
   ok(!/No people yet/.test(doc.querySelector('#resGrid').textContent), 'no "No people yet" message');
@@ -1008,25 +1034,12 @@ const groupBtn = Array.from(doc.querySelectorAll('#popover .menu-list button')).
 click(groupBtn);
 ok(doc.querySelectorAll('#rows .row.eband').length > 3, 'epic group bands rendered (' + doc.querySelectorAll('#rows .row.eband').length + ')');
 {
-  // every epic group ends with its own "Add feature" row that files the new
-  // feature into that epic, right after the group's last row
-  const subAdds = doc.querySelectorAll('#rows .row.addrow.sub[data-epic]');
-  ok(subAdds.length === doc.querySelectorAll('#rows .row.eband').length, 'every epic group ends with an Add feature row');
-  ok([...doc.querySelectorAll('#rows .addrow-lab')].every(l => /Add feature/.test(l.textContent)), 'add rows say "Add feature"');
-  const gAdd = [...subAdds].find(r => r.dataset.epic);
-  const gEpic = gAdd.dataset.epic, gPhase = gAdd.dataset.phase;
-  const nBefore = state().items.length;
-  click(gAdd.querySelector('.row-left'));
-  const s2 = state();
-  const added = s2.items.filter(i => i.feature === '' && i.epic === gEpic).pop();
-  ok(s2.items.length === nBefore + 1 && added && added.phaseId === gPhase, 'clicking a group add row adds a feature to that epic');
-  const lastOfGroup = s2.items.map((i, idx) => ({ i, idx })).filter(x => x.i.phaseId === gPhase && x.i.epic === gEpic).pop();
-  ok(lastOfGroup.i.id === added.id, 'the new feature lands at the end of its epic group');
-  if (doc.activeElement && doc.activeElement.blur) doc.activeElement.blur();
-  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
-  ok(state().items.length === nBefore, 'undo removes the added feature');
+  // groups always hold at least one feature, so no group carries an
+  // "Add feature" row: the context menu (Insert above/below) adds features
+  ok(doc.querySelectorAll('#rows .row.addrow.sub').length === 0, 'non-empty epic groups have no Add feature row');
+  ok([...doc.querySelectorAll('#rows .addrow-lab')].every(l => /Add Feature/.test(l.textContent)), 'add rows say "Add Feature"');
   // Insert feature above inherits the anchor's epic while grouped
+  const nBefore = state().items.length;
   const anchorRow = [...doc.querySelectorAll('#rows .row.item')].find(r => (state().items.find(i => i.id === r.dataset.id) || {}).epic);
   const anchorIt = state().items.find(i => i.id === anchorRow.dataset.id);
   anchorRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 220, clientY: 220 }));
@@ -1064,8 +1077,8 @@ window.eval("document.querySelector('[data-menu=\"view\"]').click()");
 click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Group by workstream/.test(b.textContent)));
 ok(doc.querySelectorAll('#rows .row.eband[data-ws]').length > 1,
   'workstream group bands rendered (' + doc.querySelectorAll('#rows .row.eband[data-ws]').length + ')');
-ok(doc.querySelectorAll('#rows .row.addrow.sub[data-ws]').length === doc.querySelectorAll('#rows .row.eband[data-ws]').length,
-  'every workstream group ends with an Add feature row');
+ok(doc.querySelectorAll('#rows .row.addrow.sub[data-ws]').length === 0,
+  'non-empty workstream groups have no Add feature row');
 window.eval("document.querySelector('[data-menu=\"view\"]').click()");
 click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Group by workstream/.test(b.textContent)));
 ok(doc.querySelectorAll('#rows .row.eband').length === 0, 'workstream grouping toggles back off');
@@ -1278,6 +1291,70 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
+// ---------------------------------------------------------------- hierarchy card in Setup
+{
+  click(doc.querySelector('#btnSetup'));
+  suTab('workstreams');
+  const card = [...doc.querySelectorAll('#setupView .su-card h2')].find(h => h.textContent === 'Hierarchy');
+  ok(!!card, 'Hierarchy card renders in the Workstreams tab');
+  const bugChip = doc.querySelector('button[data-suhtype="feature:bug"]');
+  ok(bugChip && bugChip.classList.contains('on'), 'Bug is allowed at the Feature level by default');
+  click(bugChip);
+  ok(state().meta.hierarchy.levels[1].types.indexOf('bug') === -1, 'clicking a chip disallows the type');
+  click(doc.querySelector('button[data-suhtype="feature:bug"]'));
+  ok(state().meta.hierarchy.levels[1].types.indexOf('bug') !== -1, 'clicking again re-allows it');
+  const lbl = doc.querySelector('input[data-suhlabel="story"]');
+  lbl.value = 'Task'; lbl.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.hierarchy.levels[2].label === 'Task', 'level label edit commits');
+  // the focus-the-new-row call lands inside a requestAnimationFrame; run it
+  // synchronously here so the assertion below doesn't need to wait a real frame
+  {
+    const realRaf = window.requestAnimationFrame;
+    window.requestAnimationFrame = (cb) => cb();
+    click(doc.querySelector('#suHierAdd'));
+    window.requestAnimationFrame = realRaf;
+  }
+  ok(state().meta.itemTypes.some(t => t.label === 'New type'), 'Add type appends a record');
+  const hierAddLabels = [...doc.querySelectorAll('#setupView input[data-suhtlabel]')];
+  const lastHierAddLabel = hierAddLabels[hierAddLabels.length - 1];
+  ok(doc.activeElement === lastHierAddLabel,
+    'Add type focuses the newly added type\'s label input, not the first (Epic) one');
+  const any = doc.querySelector('#suHierAny');
+  any.checked = true; any.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.hierarchy.anyTypeAnyLevel === true && !doc.querySelector('button[data-suhtype]'), 'the switch hides the chips');
+  any.checked = false; any.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- level labels drive prominent UI strings
+{
+  click(doc.querySelector('#btnSetup'));
+  suTab('workstreams');
+  const sl = doc.querySelector('input[data-suhlabel="story"]');
+  sl.value = 'Task'; sl.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const fl = doc.querySelector('input[data-suhlabel="feature"]');
+  fl.value = 'Capability'; fl.dispatchEvent(new window.Event('change', { bubbles: true }));
+  window.HeadwayApp.ai.commit('empty phase probe', (s) => {
+    s.phases.push({ id: 'ph_empty_probe', name: 'Empty probe', description: '', bucket: false, collapsed: false });
+  });
+  click(doc.querySelector('.tab[data-view="planning"]') || doc.querySelector('[data-view="planning"]'));
+  ok([...doc.querySelectorAll('.addrow-lab')].some(el => /Add Capability/.test(el.textContent)), 'Add-row wording follows the level label');
+  window.HeadwayApp.ai.commit('empty phase probe cleanup', (s) => {
+    s.phases = s.phases.filter(p => p.id !== 'ph_empty_probe');
+  });
+  // reset the labels back to their defaults through Setup, since the inputs
+  // do not survive the view switch
+  click(doc.querySelector('#btnSetup'));
+  suTab('workstreams');
+  const fl2 = doc.querySelector('input[data-suhlabel="feature"]');
+  fl2.value = 'Feature'; fl2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const sl2 = doc.querySelector('input[data-suhlabel="story"]');
+  sl2.value = 'Story'; sl2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.hierarchy.levels[1].label === 'Feature' && state().meta.hierarchy.levels[2].label === 'Story',
+    'level labels reset back to their defaults');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
 // ---------------------------------------------------------------- reports tab
 {
   ok(!doc.querySelector('#repPanel'), 'the old reports drawer is gone');
@@ -1406,7 +1483,8 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
     ok(st.startDay != null && st.durDays >= 5, 'double-clicking the story lane gives it a timeline');
     const stBar = doc.querySelector('#rows .st-bar[data-stbar="' + stId + '"]');
     ok(!!stBar, 'story timeline renders as a mini bar');
-    ok(!stBar.querySelector('[data-port]'), 'story bars have no dependency ports');
+    ok(!!stBar.querySelector('.port[data-port="in"]') && !!stBar.querySelector('.port[data-port="out"]'),
+      'story bars carry the same in/out dependency ports as feature bars');
     ok(!!stBar.querySelector('.stb-label'), 'story bar carries its title as a quiet label');
     // context menu offers Remove timeline; removing clears it
     doc.querySelector('#rows .row.story[data-story="' + stId + '"]')
@@ -1793,9 +1871,9 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   ok(doc.querySelectorAll('#setupView .su-scheme').length >= 4, 'Sizing offers approach presets');
   click(doc.querySelector('#setupView [data-suscheme="fibonacci"]'));
   ok(state().meta.sizeScheme === 'fibonacci' &&
-    state().meta.sizeOrder.join(',') === '1,2,3,5,8,13',
+    state().meta.sizeOrder.join(',') === '0.5,1,2,3,5,8,13',
     'Story points preset applies its scale');
-  ok(doc.querySelectorAll('#setupView [data-susz]:not([data-kind])').length === 6, 'option table lists the six point values');
+  ok(doc.querySelectorAll('#setupView [data-susz]:not([data-kind])').length === 7, 'option table lists the seven point values');
   // rename an option — items follow, scheme flips to custom
   const lblInp = doc.querySelector('#setupView [data-suszlabel="13"]');
   lblInp.value = '21';
@@ -2080,6 +2158,30 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#prFieldsBtn'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Description/.test(b.textContent)));
   ok(!doc.querySelector('#prioView .pr-rich'), 'unchecking returns cards to compact');
+  // the same menu hides the card chips (duration, epic, workstream, ...)
+  ok(!!doc.querySelector('#prioView .pr-card [data-pract="dur"]') && !!doc.querySelector('#prioView .pr-card [data-pract="epic"]'),
+    'cards show the duration and epic chips by default');
+  click(doc.querySelector('#prFieldsBtn'));
+  {
+    const labels = [...doc.querySelectorAll('#popover .menu-list button')].map(b => b.textContent.trim());
+    ok(['Duration', 'Epic', 'Workstream'].every(l => labels.includes(l)) && !!doc.querySelector('#popover .menu-sep'),
+      'Fields menu lists Duration, Epic and Workstream after a separator');
+    const durOpt = [...doc.querySelectorAll('#popover .menu-list button')].find(b => b.textContent.trim() === 'Duration');
+    ok(durOpt.classList.contains('on'), 'chip entries start checked');
+    click(durOpt);
+  }
+  ok(!doc.querySelector('#prioView .pr-card [data-pract="dur"]') && !!doc.querySelector('#prioView .pr-card [data-pract="epic"]') &&
+    JSON.parse(window.localStorage.getItem('headway-ui-v1')).prioChipHide.includes('dur'),
+    'unchecking Duration drops that chip from every card and persists');
+  click(doc.querySelector('#prFieldsBtn'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => b.textContent.trim() === 'Epic'));
+  ok(!doc.querySelector('#prioView .pr-card [data-pract="epic"]'), 'unchecking Epic hides the epic chip too');
+  click(doc.querySelector('#prFieldsBtn'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => b.textContent.trim() === 'Epic'));
+  click(doc.querySelector('#prFieldsBtn'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => b.textContent.trim() === 'Duration'));
+  ok(!!doc.querySelector('#prioView .pr-card [data-pract="dur"]') && !!doc.querySelector('#prioView .pr-card [data-pract="epic"]'),
+    'rechecking restores both chips');
   // feature level: the Columns dropdown swaps phases for a feature field's ladder
   {
     const heads = () => [...doc.querySelectorAll('#prioView .pr-phhd')].map(h => h.firstChild.textContent.trim());
@@ -2109,7 +2211,9 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     ok(sizeOf() === was, 'undo restores the size');
     click(colsBtn());
     click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Phase/.test(b.textContent)));
-    ok(heads().length === state().phases.length && !!doc.querySelector('#prioView .pr-add'), 'Columns → Phase brings the phase board and Add back');
+    ok(heads().length === state().phases.length, 'Columns → Phase brings the phase board back');
+    ok([...doc.querySelectorAll('#prioView .sp-col')].every(c => !!c.querySelector('.pr-add') === !c.querySelector('.pr-card')),
+      'the Add button sits only under empty phase columns');
   }
   // the Feature / Story dropdown leads the toolbar, like every other view
   {
@@ -2137,15 +2241,29 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     const feat0 = state().items.find(i => i.id === fid);
     ok(!!card0.querySelector('.pr-stfeat') && card0.querySelector('.pr-stfeat').textContent.indexOf(feat0.feature) !== -1,
       'each story card names its feature');
-    ok(!card0.querySelector('[data-prstact="st-pri"]') && !!card0.querySelector('[data-prstact="st-size"]'),
-      'the column field\'s own chip is dropped from the card');
+    ok(!!card0.querySelector('[data-prstact="st-pri"]') && !!card0.querySelector('[data-prstact="st-size"]'),
+      'Priority and Risk chips stay on the card even when the columns are that field');
     ok(!doc.querySelector('#prFieldsBtn') && !doc.querySelector('#prioView .pr-add') && !doc.querySelector('#prioView [data-prstadd]'),
       'Fields, Add and Add story leave in story mode');
-    const stIn = card0.querySelector('input[data-prstf="title"]');
+    const stCardOf = () => doc.querySelector('#prioView .pr-stcard[data-prst="' + sid + '"]');
+    ok(stCardOf().querySelector('.pr-title').tagName !== 'INPUT', 'a story card title is text, not an input');
+    click(stCardOf().querySelector('.pr-title'));
+    ok(!stCardOf().querySelector('input'), 'a single click on a story card title does not start an edit');
+    stCardOf().querySelector('.pr-title').dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
+    const stIn = stCardOf().querySelector('input[data-prstf="title"]');
+    ok(!!stIn, 'double-click makes the story card title editable');
     stIn.value = 'Renamed on the board';
-    stIn.dispatchEvent(new window.Event('change', { bubbles: true }));
+    stIn.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     ok(state().items.find(i => i.id === fid).stories.find(x => x.id === sid).title === 'Renamed on the board',
       'a story title edits inline on the card');
+    // the card menu starts the same edit
+    stCardOf().dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 90, clientY: 90 }));
+    const stRn = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Rename/.test(b.textContent));
+    ok(!!stRn, 'a story card context menu offers Rename…');
+    click(stRn);
+    ok(!!stCardOf().querySelector('input[data-prstf="title"]'), 'Rename… opens the story card editor');
+    stCardOf().querySelector('input[data-prstf="title"]')
+      .dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
     // drag a story card into the High column: its priority follows
     const storyOf = () => state().items.find(i => i.id === fid).stories.find(x => x.id === sid);
@@ -2189,7 +2307,8 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   // sort control: Title ordering applies inside a column
   click(doc.querySelector('#prioView [data-prdd="sort"]'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Title/.test(b.textContent)));
-  const colTitles = [...doc.querySelector('#prioView .sp-col').querySelectorAll('.pr-title')].map(i => i.value);
+  const colTitles = [...doc.querySelector('#prioView .sp-col').querySelectorAll('.pr-title')]
+    .map(i => i.classList.contains('pr-ph') ? '' : i.textContent); // an untitled card shows its placeholder
   ok(colTitles.length < 2 || colTitles.every((t, i) => i === 0 || colTitles[i - 1].localeCompare(t) <= 0),
     'Sort → Title orders a column alphabetically');
   click(doc.querySelector('#prioView [data-prdd="sort"]'));
@@ -2268,8 +2387,12 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     const fphBtn = doc.querySelector('#sprintView [data-spdd="fphase"]');
     ok(fphBtn.classList.contains('pr-on') && fphBtn.textContent.indexOf(ph.name) !== -1,
       'an active phase filter lights up and names the phase');
-    ok(Number(doc.querySelector('#sprintView .spv-sbtn[data-spside="u"] .pr-lanect').textContent) ===
-      doc.querySelectorAll('#sprintView .spv-sec[data-spsec="u"] .spv-row').length,
+    // the sidebar mirrors the section header (a plain row count, or a story-point total)
+    const uCt = doc.querySelector('#sprintView .spv-sbtn[data-spside="u"] .pr-lanect').textContent.trim();
+    const uHd = doc.querySelector('#sprintView .spv-sec[data-spsec="u"] .spv-sechd .pr-lanect').textContent.trim();
+    ok(uCt === uHd && (/^\d+$/.test(uCt)
+      ? Number(uCt) === doc.querySelectorAll('#sprintView .spv-sec[data-spsec="u"] .spv-row').length
+      : / pt$/.test(uCt)),
       'sidebar counts follow the filtered rows');
     click(fphBtn); pick(/All phases/);
     ok(rowsOf().length === before && !doc.querySelector('#sprintView [data-spdd="fphase"]').classList.contains('pr-on'),
@@ -2295,8 +2418,10 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const schedRow = doc.querySelector('#sprintView .spv-row[data-spid="' + sched.id + '"]');
   ok(!!schedRow && schedRow.dataset.spsec !== 'u', 'scheduled items list under a sprint');
   ok(!!schedRow.querySelector('[data-spact="epic"]') && !!schedRow.querySelector('[data-spact="size"]') &&
-    !!schedRow.querySelector('input[data-spf="feature"]'), 'rows carry an inline title, epic and size chips');
-  ok(doc.querySelectorAll('#sprintView .spv-add').length === secs.length, 'every section ends with an Add feature button');
+    !!schedRow.querySelector('[data-spf="feature"]'), 'rows carry an inline title, epic and size chips');
+  ok([...doc.querySelectorAll('#sprintView .spv-sec')].every(sec =>
+    !!sec.querySelector('.spv-add') === !sec.querySelector('.spv-rows .spv-row')),
+    'only an empty section ends with an Add feature button');
   // drag an unscheduled row onto a sprint in the sidebar: it gets that
   // sprint's start day and a span, and lists under that sprint
   const uRow = doc.querySelector('#sprintView .spv-sec[data-spsec="u"] .spv-row');
@@ -2726,11 +2851,14 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 // ---------------------------------------------------------------- version history diffs
 {
   window.localStorage.setItem('headway-user-v1', 'Test User');
-  const inp = doc.querySelector('#rows .row.item input[data-rowname]');
-  const it = window.RM.itemById(state(), inp.closest('.row').dataset.id);
+  const nameSpan = doc.querySelector('#rows .row.item [data-rowname]');
+  const rowId = nameSpan.closest('.row').dataset.id;
+  const it = window.RM.itemById(state(), rowId);
   const oldTitle = it.feature;
+  nameSpan.dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
+  const inp = doc.querySelector('#rows .row.item[data-id="' + rowId + '"] input[data-rowname]');
   inp.value = 'Diffed Feature Title';
-  inp.dispatchEvent(new window.Event('change', { bubbles: true }));
+  inp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   const en = state().history[state().history.length - 1];
   ok(Array.isArray(en.d) && en.d.some(op => op[0] === 'scope' && /Title/.test(op[1]) &&
     op[2] === oldTitle && op[3] === 'Diffed Feature Title'),
@@ -2866,9 +2994,10 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     const it = state().items.find(i => i.id === r.dataset.id);
     return it && !it.milestone;
   });
-  ok(doc.querySelectorAll('#rows .row.story-add').length === visNonMs.length,
-    'story detail gives EVERY non-milestone feature an add-story row (' +
-    doc.querySelectorAll('#rows .row.story-add').length + '/' + visNonMs.length + ')');
+  const visNoStories = visNonMs.filter(r => !(state().items.find(i => i.id === r.dataset.id).stories || []).length);
+  ok(doc.querySelectorAll('#rows .row.story-add').length === visNoStories.length,
+    'story detail gives every story-less non-milestone feature an add-story row (' +
+    doc.querySelectorAll('#rows .row.story-add').length + '/' + visNoStories.length + ')');
   ok(!doc.querySelector('#rows .row.item .r-chev[data-act="stories"]'),
     'story detail disables the per-row expand toggles');
   ok(![...doc.querySelectorAll('#rows .row.item .r-chev svg')].length,
@@ -3191,6 +3320,429 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(bu.defaultPrevented, 'beforeunload is blocked while work is unsaved');
 }
 
+// ---------------------------------------------------------------- story dependency arrows and ports
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  // arrows are drawn inside a requestAnimationFrame; jsdom's rAF is a timer,
+  // so run callbacks inline for the length of this block (same trick the
+  // focus-restore tests use)
+  const realRaf = window.requestAnimationFrame;
+  window.requestAnimationFrame = (cb) => cb();
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story detail
+  // a filter from an earlier block may hide some features: host the fixture on
+  // a scheduled feature whose row is actually on screen
+  const host = Array.from(doc.querySelectorAll('#rows .row.item[data-id]'))
+    .map(r => state().items.find(i => i.id === r.dataset.id))
+    .find(i => i && !i.milestone && i.startDay != null);
+  window.HeadwayApp.ai.commit('story arrow fixture', (s) => {
+    const f = window.RM.itemById(s, host.id);
+    const n = window.RM.nextNum(s);
+    f.stories = f.stories || [];
+    f.stories.push({ id: 'ar_1', title: 'arrow one', done: false, num: n, startDay: f.startDay, durDays: 2 },
+      { id: 'ar_2', title: 'arrow two', done: false, num: n + 1, startDay: f.startDay, durDays: 2, deps: [n] });
+  });
+  ok(!!doc.querySelector('#rows .st-bar[data-stbar="ar_1"] .port[data-port="out"]') && !!doc.querySelector('#rows .st-bar[data-stbar="ar_2"] .port[data-port="in"]'), 'story bars carry in/out ports');
+  const edge = doc.querySelector('#arrowPaths g.edge[data-sfrom="ar_1"][data-sto="ar_2"]');
+  ok(!!edge, 'a story dependency draws an arrow between the two story bars');
+  ok(edge && edge.classList.contains('viol'), 'starting on the same day as the dependency marks the arrow as a violation');
+  click(edge.querySelector('path.hit'));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+  ok(window.RM.storyRef(state(), 'ar_2').st.deps.length === 0, 'selecting the arrow and pressing Delete removes the story dependency');
+  window.HeadwayApp.ai.commit('story arrow cleanup', (s) => { const f = window.RM.itemById(s, host.id); f.stories = f.stories.filter(x => x.id !== 'ar_1' && x.id !== 'ar_2'); });
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
+  window.requestAnimationFrame = realRaf;
+}
+
+// ---------------------------------------------------------------- Add buttons only where nothing exists yet
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const withSt = state().items.find(i => i.stories && i.stories.length && !i.milestone);
+  const noSt = state().items.find(i => (!i.stories || !i.stories.length) && !i.milestone);
+  window.HeadwayApp.ai.commit('add-row probe', (s) => {
+    s.phases.push({ id: 'ph_add_probe', name: 'Add probe', description: '', bucket: false, collapsed: false });
+  });
+  const addRows = [...doc.querySelectorAll('#rows .row.addrow')];
+  ok(addRows.length === 1 && addRows[0].dataset.phase === 'ph_add_probe', 'only the empty phase shows an Add feature row');
+  window.HeadwayApp.ai.commit('add-row probe cleanup', (s) => { s.phases = s.phases.filter(p => p.id !== 'ph_add_probe'); });
+  // story add rows: only under a feature without stories
+  window.__headway.selectItem(withSt.id);
+  ok(!doc.querySelector('#panel [data-f="storyadd"]'), 'the panel of a feature with stories has no add-story box');
+  if (noSt) {
+    window.__headway.selectItem(noSt.id);
+    ok(!!doc.querySelector('#panel [data-f="storyadd"]'), 'the panel of a feature without stories offers the add-story box');
+  }
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  const stAddRows = [...doc.querySelectorAll('#rows .row.story-add')];
+  ok(stAddRows.every(r => !(state().items.find(i => i.id === r.dataset.id).stories || []).length),
+    'story add rows appear only under features without stories');
+  // Prioritizing: Add story button only on cards without stories
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  ok([...doc.querySelectorAll('#prioView [data-prstadd]')].every(b => {
+    const card = b.closest('[data-prcard]');
+    return !(state().items.find(i => i.id === card.dataset.prcard).stories || []).length;
+  }), 'Prioritizing cards with stories have no Add story button');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- story context menu: insert above / below
+{
+  const host = state().items.find(i => i.stories && i.stories.length >= 1 && !i.milestone);
+  window.__headway.selectItem(host.id);
+  const first = host.stories[0];
+  click(doc.querySelector('#panel [data-pst-edit="' + first.id + '"]'));
+  doc.querySelector('#panel').dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 300, clientY: 300 }));
+  const below = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Insert story below/.test(b.textContent));
+  const above = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Insert story above/.test(b.textContent));
+  ok(!!below && !!above, 'the story context menu offers Insert story above and below');
+  const nBefore = host.stories.length;
+  click(below);
+  let stories = window.RM.itemById(state(), host.id).stories;
+  ok(stories.length === nBefore + 1 && stories[1].title === '' && stories[0].id === first.id, 'Insert below adds a blank story right after the anchor');
+  const inserted = stories[1];
+  ok(!!doc.querySelector('#panel textarea[data-stf="title"]') && doc.querySelector('#panel .p-crumb'), 'the new story opens in the panel');
+  ok(doc.activeElement === doc.querySelector('#panel textarea[data-stf="title"]'), 'its title is focused for typing');
+  doc.querySelector('#panel').dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 300, clientY: 300 }));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Insert story above/.test(b.textContent)));
+  stories = window.RM.itemById(state(), host.id).stories;
+  ok(stories.length === nBefore + 2 && stories[1].title === '' && stories[2].id === inserted.id, 'Insert above adds a blank story right before the anchor');
+  // the Planning story row menu offers the same entries
+  const row = doc.querySelector('#rows .row.story[data-story="' + first.id + '"]');
+  if (row) {
+    row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+    ok(!![...doc.querySelectorAll('#popover .menu-list button')].find(b => /Insert story below/.test(b.textContent)), 'the story row menu offers Insert story below');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  }
+  window.HeadwayApp.ai.commit('insert probe cleanup', (s) => {
+    const f = window.RM.itemById(s, host.id);
+    f.stories = f.stories.filter(x => x.title !== '' || x.id === first.id);
+  });
+}
+
+// ---------------------------------------------------------------- story numbers everywhere
+// Every list that shows a story shows its #number, and the story panel edits
+// it exactly like the feature number (shared pool, so a feature's number is
+// refused and falls back to the next free one).
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const host = state().items.find(i => !i.milestone && (i.stories || []).length);
+  const st0 = host.stories[0];
+  ok(typeof st0.num === 'number' && !state().items.some(i => i.num === st0.num), 'stories carry a number that no feature uses');
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story detail
+  const rowNum = doc.querySelector('#rows .row.story[data-story="' + st0.id + '"] .r-num');
+  ok(!!rowNum && rowNum.textContent.trim() === '#' + st0.num, 'Planning story rows show the story number');
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
+  window.__headway.selectItem(host.id);
+  const listNum = doc.querySelector('#panel .p-story[data-pst="' + st0.id + '"] .r-num');
+  ok(!!listNum && listNum.textContent.trim() === '#' + st0.num, 'the feature panel story list shows numbers');
+  click(doc.querySelector('#panel [data-pst-edit="' + st0.id + '"]'));
+  const numIn = doc.querySelector('#panel input.p-num-edit[data-stf="num"]');
+  ok(!!numIn && numIn.value === String(st0.num), 'the story panel header shows the editable number');
+  const free = window.RM.nextNum(state()) + 5;
+  numIn.value = String(free); numIn.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(window.RM.storyRef(state(), st0.id).st.num === free, 'changing the number renumbers the story');
+  const feat = state().items.find(i => i.id !== host.id && !i.milestone);
+  const numIn2 = doc.querySelector('#panel input.p-num-edit[data-stf="num"]');
+  numIn2.value = String(feat.num); numIn2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(window.RM.storyRef(state(), st0.id).st.num !== feat.num, 'a feature number is refused (falls back to a free one)');
+  // Sprinting and Prioritizing: switch to the story level through the real
+  // Feature / Story dropdown each view puts first in its toolbar
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Story/.test(b.textContent)));
+  ok([...doc.querySelectorAll('#sprintView .spv-row.spv-st .r-num')].length > 0, 'Sprinting story rows show numbers');
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  click(doc.querySelector('#prioView [data-prdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Story/.test(b.textContent)));
+  const prNums = [...doc.querySelectorAll('#prioView .pr-stcard .pr-head .r-num, #prioView .pr-story .r-num')];
+  ok(prNums.length > 0 && prNums.every(n => /^#\d+$/.test(n.textContent.trim())), 'Prioritizing story rows/cards show numbers');
+  click(doc.querySelector('#prioView [data-prdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+{
+  // duplicating a feature gives the copied stories fresh numbers and remaps deps among them
+  // pick a feature the Planning grid is actually showing (earlier blocks may
+  // leave a filter on)
+  const rowEl = [...doc.querySelectorAll('#rows .row.item[data-id]')]
+    .find(r => { const it = state().items.find(i => i.id === r.dataset.id); return it && !it.milestone; });
+  const host = state().items.find(i => i.id === rowEl.dataset.id);
+  window.HeadwayApp.ai.commit('dup num fixture', (s) => {
+    const f = window.RM.itemById(s, host.id);
+    const n1 = window.RM.nextNum(s);
+    f.stories.push({ id: 'dn_1', title: 'first', done: false, num: n1 }, { id: 'dn_2', title: 'second', done: false, num: n1 + 1, deps: [n1] });
+  });
+  const nBefore = state().items.length;
+  const row = doc.querySelector('#rows .row.item[data-id="' + host.id + '"]');
+  row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /^Duplicate$/.test(b.textContent.trim())));
+  const copy = state().items[state().items.findIndex(i => i.id === host.id) + 1];
+  ok(state().items.length === nBefore + 1 && copy && copy.id !== host.id, 'the feature is duplicated');
+  const c1 = copy.stories.find(s => s.title === 'first'), c2 = copy.stories.find(s => s.title === 'second');
+  const orig1 = window.RM.storyRef(state(), 'dn_1').st;
+  ok(c1 && c2 && c1.num !== orig1.num && String(c2.deps) === String(c1.num), 'the copied story depends on the copied story’s new number');
+  window.HeadwayApp.ai.commit('dup num cleanup', (s) => {
+    s.items = s.items.filter(i => i.id !== copy.id);
+    const f = window.RM.itemById(s, host.id); f.stories = f.stories.filter(x => x.id !== 'dn_1' && x.id !== 'dn_2');
+  });
+}
+
+// ---------------------------------------------------------------- story dependencies in the panel
+{
+  const hosts = state().items.filter(i => !i.milestone).slice(0, 2);
+  window.HeadwayApp.ai.commit('story dep fixture', (s) => {
+    const f0 = window.RM.itemById(s, hosts[0].id), f1 = window.RM.itemById(s, hosts[1].id);
+    f0.stories.push({ id: 'sd_a', title: 'Dep story alpha', done: false, num: window.RM.nextNum(s) });
+    f1.stories.push({ id: 'sd_b', title: 'Dep story beta', done: false, num: window.RM.nextNum(s) + 1 });
+  });
+  const numA = window.RM.storyRef(state(), 'sd_a').st.num;
+  window.__headway.selectItem(hosts[1].id);
+  click(doc.querySelector('#panel [data-pst-edit="sd_b"]'));
+  const sec = doc.querySelector('#panel .p-sec[data-sec="st-deps"]');
+  ok(!!sec, 'the story panel has a Dependencies section');
+  const secs = [...doc.querySelectorAll('#panel .p-sec')].map(e => e.dataset.sec);
+  ok(secs.indexOf('st-deps') > secs.indexOf('st-schedule') && secs.indexOf('st-deps') < secs.indexOf('st-integrations'), 'it sits between Timeline and Integrations');
+  const search = doc.querySelector('#panel input[data-stf="stdepsearch"]');
+  ok(!!search, 'the section offers a search box');
+  search.value = '#' + numA; search.dispatchEvent(new window.Event('input', { bubbles: true }));
+  ok(!!doc.querySelector('#panel .dep-sug button[data-addstdep="' + numA + '"]'), 'typing #number suggests that story');
+  search.value = 'alpha'; search.dispatchEvent(new window.Event('input', { bubbles: true }));
+  const hit = doc.querySelector('#panel .dep-sug button[data-addstdep="' + numA + '"]');
+  ok(!!hit && hit.textContent.indexOf('#' + numA) !== -1, 'typing a title suggests it with its number');
+  click(hit);
+  const depsOf = (id) => window.RM.storyRef(state(), id).st.deps;
+  ok(String(depsOf('sd_b')) === String(numA), 'picking the suggestion adds the dependency');
+  ok(!!doc.querySelector('#panel .dep-chip[data-stdepgo="sd_a"]'), 'the dependency shows as a chip');
+  click(doc.querySelector('#panel .dep-chip[data-stdepgo="sd_a"]'));
+  ok(!!doc.querySelector('#panel .p-crumb') && /alpha/.test(doc.querySelector('#panel textarea[data-stf="title"]').value), 'clicking the chip opens that story');
+  ok(!!doc.querySelector('#panel .dep-chip button[data-strdep="sd_b"]'), 'the other side lists the dependent');
+  click(doc.querySelector('#panel .dep-chip button[data-strdep="sd_b"]'));
+  ok(depsOf('sd_b').length === 0, 'removing from the dependent side clears the link');
+  // version history records story numbers and dependency changes
+  const enDep = state().history[state().history.length - 1];
+  ok(Array.isArray(enDep.d) && enDep.d.some(op => /Depends on/.test(op[1]) && /#/.test(op[2]) && op[3] === ''),
+    'removing a story dependency records a Depends on diff row (' + JSON.stringify(enDep.d && enDep.d[0]) + ')');
+  ok(enDep.d.some(op => /› #\d+ /.test(op[1])), 'story diff rows carry the story number');
+  window.HeadwayApp.ai.commit('story dep fixture cleanup', (s) => {
+    [hosts[0].id, hosts[1].id].forEach((id) => { const f = window.RM.itemById(s, id); f.stories = f.stories.filter(x => x.id !== 'sd_a' && x.id !== 'sd_b'); });
+  });
+}
+
+// ---------------------------------------------------------------- Prioritizing: Unset column toggle, widths, card click → panel
+{
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  const heads = () => [...doc.querySelectorAll('#prioView .pr-phhd')].map(h => h.childNodes[0].textContent.trim());
+  const pick = (re) => click([...doc.querySelectorAll('#popover .menu-list button')].find(b => re.test(b.textContent)));
+  // feature level, Columns → Size: the ladder plus Unset
+  click(doc.querySelector('#prioView [data-prdd="level"]')); pick(/Feature/);
+  click(doc.querySelector('#prioView [data-prdd="cols"]')); pick(/Size/);
+  ok(heads()[heads().length - 1] === 'Unset', 'Size columns end with Unset by default');
+  click(doc.querySelector('#prioView [data-prdd="cols"]'));
+  const unsetItem = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Unset column/.test(b.textContent));
+  ok(!!unsetItem, 'the Columns menu offers the Unset column toggle');
+  click(unsetItem);
+  ok(heads().indexOf('Unset') === -1, 'hiding the Unset column removes it from the board');
+  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1') || '{}').prioHideUnset === true, 'the choice persists in the browser prefs');
+  click(doc.querySelector('#prioView [data-prdd="cols"]')); pick(/Unset column/);
+  ok(heads()[heads().length - 1] === 'Unset', 'showing it again brings the column back');
+  click(doc.querySelector('#prioView [data-prdd="cols"]')); pick(/Phase/);
+  click(doc.querySelector('#prioView [data-prdd="cols"]'));
+  ok(![...doc.querySelectorAll('#popover .menu-list button')].some(b => /Unset column/.test(b.textContent)), 'phase columns have no Unset, so no toggle');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  // widths
+  const cssW = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  ok(!/\.sp-page\s*\{[^}]*max-width/.test(cssW), 'the Prioritizing page is full width (no max-width on .sp-page)');
+  ok(/\.spv-main\s*\{[^}]*max-width:\s*\d+px/.test(cssW), 'the Sprinting main content area has a max-width');
+  // clicking a card shows the panel for that item; clicking it again hides the panel
+  window.__headway.selectItem(null); // start with nothing selected (an earlier test may have left a selection)
+  const card = doc.querySelector('#prioView .pr-card[data-prcard]:not([data-prst])');
+  const cid = card.dataset.prcard;
+  click(card.querySelector('.pr-head') || card);
+  ok(!doc.querySelector('#panel').hidden && !!doc.querySelector('#panel input.p-num-edit[data-f="num"]') &&
+    doc.querySelector('#panel input.p-num-edit[data-f="num"]').value === String(state().items.find(i => i.id === cid).num),
+    'clicking a card opens the panel on that feature');
+  ok(doc.querySelector('#prioView .pr-card[data-prcard="' + cid + '"]').classList.contains('selected'), 'the selected card is marked');
+  click(doc.querySelector('#prioView .pr-card[data-prcard="' + cid + '"] .pr-head'));
+  ok(doc.querySelector('#panel').hidden, 'clicking the selected card again hides the panel');
+  // story level: a story card opens the story panel
+  click(doc.querySelector('#prioView [data-prdd="level"]')); pick(/Stor/);
+  const sc = doc.querySelector('#prioView .pr-stcard[data-prst]');
+  if (sc) {
+    click(sc.querySelector('.pr-head'));
+    ok(!doc.querySelector('#panel').hidden && !!doc.querySelector('#panel .p-crumb') &&
+      doc.querySelector('#panel input.p-num-edit[data-stf="num"]').value === String(window.RM.storyRef(state(), sc.dataset.prst).st.num),
+      'clicking a story card opens the story panel');
+    click(doc.querySelector('#prioView .pr-stcard[data-prst="' + sc.dataset.prst + '"] .pr-head'));
+    ok(doc.querySelector('#panel').hidden, 'clicking it again hides the panel');
+  }
+  click(doc.querySelector('#prioView [data-prdd="level"]')); pick(/Feature/);
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- Prioritizing swimlanes: the catch-all lane sits last
+{
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  const pick = (re) => click([...doc.querySelectorAll('#popover .menu-list button')].find(b => re.test(b.textContent)));
+  const lanes = () => [...doc.querySelectorAll('#prioView .pr-lanename')].map(e => e.textContent.trim());
+  click(doc.querySelector('#prioView [data-prdd="group"]')); pick(/Epics/);
+  ok(lanes().length > 1 && lanes()[lanes().length - 1] === 'No epic' && lanes()[0] !== 'No epic', 'grouped by epic, "No epic" is the last lane (' + lanes().join(' | ') + ')');
+  if (state().meta.workstreamsEnabled) {
+    click(doc.querySelector('#prioView [data-prdd="group"]')); pick(/Workstreams/);
+    const dflt = window.RM.defaultWsName(state());
+    ok(lanes().length > 1 && lanes()[lanes().length - 1] === dflt && lanes()[0] !== dflt, 'grouped by workstream, the default workstream is the last lane (' + lanes().join(' | ') + ')');
+  }
+  click(doc.querySelector('#prioView [data-prdd="level"]')); pick(/Stor/);
+  click(doc.querySelector('#prioView [data-prdd="group"]')); pick(/Epics/);
+  ok(lanes().length < 2 || lanes()[lanes().length - 1] === 'No epic', 'story level: "No epic" is last too');
+  click(doc.querySelector('#prioView [data-prdd="level"]')); pick(/Feature/);
+  click(doc.querySelector('#prioView [data-prdd="group"]')); pick(/None/);
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- background right-click: no theme menu; empty Prioritizing cells say so
+{
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  const ev = new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 30 });
+  doc.querySelector('#prioView .sp-page').dispatchEvent(ev);
+  ok(ev.defaultPrevented && doc.querySelector('#popover').hidden, 'right-clicking the app background opens nothing (and not the browser menu either)');
+  const pick = (re) => click([...doc.querySelectorAll('#popover .menu-list button')].find(b => re.test(b.textContent)));
+  click(doc.querySelector('#prioView [data-prdd="level"]')); pick(/Feature/);
+  window.HeadwayApp.ai.commit('empty phase probe', (s) => { s.phases.push({ id: 'ph_pr_empty', name: 'Nobody here', description: '', bucket: false, collapsed: false }); });
+  const emptyCol = doc.querySelector('#prioView .sp-col[data-prcol="ph_pr_empty"]');
+  ok(!!emptyCol && emptyCol.querySelector('.sp-colbody .pr-empty') && /No items/.test(emptyCol.textContent), 'an empty column shows a "No items" placeholder');
+  ok([...doc.querySelectorAll('#prioView .sp-col')].every(c => !!c.querySelector('.pr-card') !== !!c.querySelector('.pr-empty')), 'the placeholder appears exactly where there are no cards');
+  window.HeadwayApp.ai.commit('empty phase probe cleanup', (s) => { s.phases = s.phases.filter(p => p.id !== 'ph_pr_empty'); });
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- flags: context menu → dialog → orange flag in the alert slot
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const ctxOn = (el) => el.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+  const menuBtn = (re) => [...doc.querySelectorAll('#popover .menu-list button')].find(b => re.test(b.textContent));
+  const host = [...doc.querySelectorAll('#rows .row.item')].map(r => state().items.find(i => i.id === r.dataset.id)).find(i => i && !i.milestone && !i.flag);
+  const row = () => doc.querySelector('#rows .row.item[data-id="' + host.id + '"]');
+  ctxOn(row());
+  ok(!!menuBtn(/^Flag…$/) && !menuBtn(/Unflag/), 'an unflagged row offers Flag…');
+  click(menuBtn(/^Flag…$/));
+  const ta = doc.querySelector('#modalHost textarea#flagReason');
+  ok(!doc.querySelector('#modalHost').hidden && !!ta, 'Flag… opens a dialog with a reason box');
+  ta.value = 'Waiting on security sign-off';
+  click([...doc.querySelectorAll('#modalHost button')].find(b => /^Flag$/.test(b.textContent.trim())));
+  const flagged = state().items.find(i => i.id === host.id);
+  ok(flagged.flag && flagged.flag.reason === 'Waiting on security sign-off', 'confirming stores the flag and its reason');
+  const badge = row().querySelector('.r-warn.flag');
+  ok(!!badge && /Waiting on security/.test(badge.title) && !!badge.querySelector('[data-lucide="flag"]'), 'the row shows an orange flag in the alert slot with the reason as its tooltip');
+  ctxOn(row());
+  ok(!!menuBtn(/Edit flag/) && !!menuBtn(/Unflag/), 'a flagged row offers Edit flag… and Unflag');
+  click(menuBtn(/Unflag/));
+  ok(!state().items.find(i => i.id === host.id).flag && !row().querySelector('.r-warn.flag'), 'Unflag clears it');
+  // a story, from its row menu; an empty reason is fine
+  window.HeadwayApp.ai.commit('flag probe story', (s) => { const f = window.RM.itemById(s, host.id); f.stories.push({ id: 'fl_st', title: 'flag me', done: false, num: window.RM.nextNum(s) }); });
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]'));
+  const stRow = () => doc.querySelector('#rows .row.story[data-story="fl_st"]');
+  ctxOn(stRow());
+  click(menuBtn(/^Flag…$/));
+  click([...doc.querySelectorAll('#modalHost button')].find(b => /^Flag$/.test(b.textContent.trim())));
+  ok(window.RM.storyRef(state(), 'fl_st').st.flag && window.RM.storyRef(state(), 'fl_st').st.flag.reason === '', 'a story flags with an empty reason');
+  ok(!!stRow().querySelector('.r-warn.flag') && stRow().querySelector('.r-warn.flag').title === 'Flagged', 'the story row shows the flag');
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]'));
+  // Prioritizing card and Sprinting row carry the flag too
+  window.HeadwayApp.ai.commit('flag probe feature', (s) => { window.RM.itemById(s, host.id).flag = { reason: 'card flag' }; });
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  ok(!!doc.querySelector('#prioView .pr-card[data-prcard="' + host.id + '"] .pr-flag'), 'the Prioritizing card shows the flag');
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  ok(!!doc.querySelector('#sprintView .spv-row[data-spid="' + host.id + '"] .spv-flag') || !window.RM.itemById(state(), host.id).startDay, 'the Sprinting row shows the flag');
+  window.__headway.selectItem(host.id);
+  ok(!!doc.querySelector('#panel .p-flag') && /card flag/.test(doc.querySelector('#panel .p-flag').textContent), 'the panel header shows the flag and its reason');
+  window.HeadwayApp.ai.commit('flag probe cleanup', (s) => { const f = window.RM.itemById(s, host.id); f.flag = null; f.stories = f.stories.filter(x => x.id !== 'fl_st'); });
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- title double-click counted by hand; titles never select text
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  window.__headway.selectItem(null);
+  const hostRow = [...doc.querySelectorAll('#rows .row.item')].find(r => r.querySelector('.r-name-txt'));
+  const hid = hostRow.dataset.id;
+  const titleOf = () => doc.querySelector('#rows .row.item[data-id="' + hid + '"] .r-name-txt');
+  click(titleOf()); // selects (re-renders the row)
+  ok(!doc.querySelector('#rows .row.item[data-id="' + hid + '"] input.r-name'), 'a single click on a title does not open the editor');
+  click(titleOf()); // second click within the double-click window, on the re-rendered node
+  const inp = doc.querySelector('#rows .row.item[data-id="' + hid + '"] input.r-name');
+  ok(!!inp, 'two quick clicks on a title open the rename editor even though the row re-rendered in between');
+  inp.value = 'Renamed by two clicks';
+  inp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  ok(state().items.find(i => i.id === hid).feature === 'Renamed by two clicks', 'Enter commits the rename');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  const cssT = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  ok(/\.r-name-txt,\s*\.st-title-txt\s*\{[^}]*user-select:\s*none/.test(cssT), 'title spans never select text (a selected word would hijack the row drag)');
+}
+
+// ---------------------------------------------------------------- ⌘B / ⌘I in rich editors
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const hostK = [...doc.querySelectorAll('#rows .row.item')].map(r => state().items.find(i => i.id === r.dataset.id)).find(i => i && !i.milestone);
+  window.__headway.selectItem(hostK.id);
+  const ed = doc.querySelector('#panel .wz-ed[data-f="col:description"]');
+  const calls = [];
+  const orig = doc.execCommand;
+  doc.execCommand = (c) => { calls.push(c); return true; };
+  const key = (el, k, mods) => { const ev = new window.KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true, cancelable: true }, mods)); el.dispatchEvent(ev); return ev; };
+  ed.focus();
+  let ev = key(ed, 'b', { metaKey: true });
+  ok(ev.defaultPrevented && calls[calls.length - 1] === 'bold', '⌘B in a rich editor bolds');
+  ev = key(ed, 'i', { ctrlKey: true });
+  ok(ev.defaultPrevented && calls[calls.length - 1] === 'italic', 'Ctrl+I in a rich editor italicises');
+  const n = calls.length;
+  ev = key(ed, 'b', {});
+  ok(!ev.defaultPrevented && calls.length === n, 'a plain b just types');
+  const plain = doc.querySelector('#rows .sc-name') || doc.createElement('div');
+  ev = key(plain, 'b', { metaKey: true });
+  ok(calls.length === n, '⌘B outside a rich editor does nothing');
+  doc.execCommand = orig;
+}
+
+// ---------------------------------------------------------------- story panel estimate buttons
+// Size / Priority / Risk in the story panel are buttons with data-stf AND
+// data-v; the generic data-stf handler must not swallow them.
+{
+  const hostIt = state().items.find(i => !i.milestone);
+  window.HeadwayApp.ai.commit('estimate probe story', (s) => {
+    const f = window.RM.itemById(s, hostIt.id);
+    f.stories = f.stories || [];
+    f.stories.push({ id: 'st_est_probe', title: 'estimate probe', done: false });
+  });
+  window.__headway.selectItem(hostIt.id);
+  click(doc.querySelector('#panel [data-pst-edit="st_est_probe"]'));
+  const stOf = () => window.RM.itemById(state(), hostIt.id).stories.find(x => x.id === 'st_est_probe');
+  const sizeBtn = Array.from(doc.querySelectorAll('#panel button[data-stf="size"][data-v]')).find(b => b.dataset.v);
+  ok(!!sizeBtn, 'story panel offers size buttons');
+  if (sizeBtn) {
+    click(sizeBtn);
+    ok(stOf().size === sizeBtn.dataset.v, 'clicking a story size button sets the story size (' + sizeBtn.dataset.v + ')');
+  }
+  const riskBtn = Array.from(doc.querySelectorAll('#panel button[data-stf="risk"][data-v]')).find(b => b.dataset.v);
+  ok(!!riskBtn, 'story panel offers risk buttons');
+  if (riskBtn) {
+    click(riskBtn);
+    ok(stOf().risk === riskBtn.dataset.v, 'clicking a story risk button sets the story risk (' + riskBtn.dataset.v + ')');
+  }
+  click(doc.querySelector('#panel button[data-stf="size"][data-v=""]'));
+  ok(!stOf().size, 'the — button clears the story size');
+  window.HeadwayApp.ai.commit('estimate probe cleanup', (s) => {
+    const f = window.RM.itemById(s, hostIt.id);
+    f.stories = f.stories.filter(x => x.id !== 'st_est_probe');
+  });
+}
+
 // ---------------------------------------------------------------- jira csv in the export dialog
 {
   window.eval("document.querySelector('#btnExport').click()");
@@ -3206,12 +3758,9 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     'choosing Jira CSV swaps the timeline options for the Jira options');
   ok(!!doc.querySelector('#modalHost #jxFeatures') && !!doc.querySelector('#modalHost #jxStories'),
     'dialog offers feature and story rows');
-  ok(!!doc.querySelector('#modalHost #jxFeatureType') && !!doc.querySelector('#modalHost #jxStoryType'),
-    'dialog offers issue type names');
   ok(/yyyy-MM-dd/.test(doc.querySelector('#modalHost #exJira').textContent), 'dialog names the wizard date format');
   ok(typeof window.RM_JIRA === 'object' && typeof window.RM_JIRA.csv === 'function', 'Jira export module is loaded');
   doc.querySelector('#modalHost #jxStories').checked = true;
-  doc.querySelector('#modalHost #jxFeatureType').value = 'Task';
   let exported = null;
   window.__headway.setExportSink((r) => { exported = r; });
   click(doc.querySelector('#modalHost #exGo'));
@@ -3219,11 +3768,11 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(exported && /-jira\.csv$/.test(exported.name) && exported.blob && exported.blob.size > 100,
     'Export hands a CSV blob to the save path');
   const ui = JSON.parse(window.localStorage.getItem('headway-ui-v1'));
-  ok(ui.exportPrefs.fmt === 'jira' && ui.jiraPrefs && ui.jiraPrefs.stories === true && ui.jiraPrefs.featureType === 'Task',
+  ok(ui.exportPrefs.fmt === 'jira' && ui.jiraPrefs && ui.jiraPrefs.stories === true,
     'jira export settings persist in the ui snapshot');
   window.eval("document.querySelector('#btnExport').click()");
   ok(doc.querySelector('#modalHost #exFmtJira').checked && !doc.querySelector('#modalHost #exJira').hidden &&
-    doc.querySelector('#modalHost #jxStories').checked && doc.querySelector('#modalHost #jxFeatureType').value === 'Task',
+    doc.querySelector('#modalHost #jxStories').checked,
     'reopening restores the Jira format and its settings');
   window.eval("document.querySelector('#modalHost [data-m=x]').click()");
   window.__headway.setExportSink(null);
@@ -3303,7 +3852,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
 // ---------------------------------------------------------------- Enter commits + blurs; format bar hides until focus
 {
   const enter = (el) => el.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
-  const row0 = Array.from(doc.querySelectorAll('#rows .row.item')).find(r => r.querySelector('input.r-name'));
+  const row0 = Array.from(doc.querySelectorAll('#rows .row.item')).find(r => r.querySelector('.r-name-txt'));
   const it0 = state().items.find(i => i.id === row0.dataset.id);
   click(row0.querySelector('.r-num'));
   const pn = doc.querySelector('#panel .p-name');
@@ -3319,12 +3868,15 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   enter(jk2);
   ok(doc.activeElement !== jk2, 'Enter on a panel input leaves the field');
   ok(state().items.find(i => i.id === it0.id).jiraKey === 'HW-77', 'Enter on a panel input saves it');
+  doc.querySelector('#rows .row.item[data-id="' + it0.id + '"] .r-name-txt')
+    .dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
   const rn = doc.querySelector('#rows .row.item[data-id="' + it0.id + '"] input.r-name');
   rn.focus();
   rn.value = 'Enter row';
   enter(rn);
-  ok(doc.activeElement !== rn, 'Enter on a left-pane name input leaves the field');
   ok(state().items.find(i => i.id === it0.id).feature === 'Enter row', 'Enter on a left-pane name input saves it');
+  ok(!doc.querySelector('#rows .row.item[data-id="' + it0.id + '"] input.r-name'),
+    'and the input gives way to the text title again');
   const css = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
   ok(/\.wz-bar\s*\{[^}]*display:\s*none/.test(css) && /\.wz:focus-within\s*(>\s*)?\.wz-bar\s*\{[^}]*display:\s*flex/.test(css),
     'panel format bar stays hidden until its editor has focus');
@@ -3336,9 +3888,13 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   click(doc.querySelector('#detailBtn'));
   click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story detail: every feature open
   const seedRow = doc.querySelector('#rows .row.story[data-story]');
-  const addInp = doc.querySelector('#rows .row.story-add[data-id="' + seedRow.dataset.id + '"] .st-add-input');
-  addInp.value = 'Second story';
-  addInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  // a feature that already has a story adds the next one from the story's context menu
+  seedRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Insert story below/.test(b.textContent)));
+  window.HeadwayApp.ai.commit('name story', (s) => {
+    const f = window.RM.itemById(s, seedRow.dataset.id);
+    f.stories.forEach((st) => { if (st.title === '') st.title = 'Second story'; });
+  });
   const host = state().items.find(i => i.id === seedRow.dataset.id);
   ok(host.stories.length >= 2, 'feature now has two stories for the drag');
   const stRows = doc.querySelectorAll('#rows .row.story[data-story][data-id="' + host.id + '"]');
@@ -3357,9 +3913,72 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     'dragging a story row in Planning moves it to the drop row\'s feature (' + (dest && dest.id) + ')');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   ok(state().items.find(i => i.id === host.id).stories[0].id === firstId, 'undo restores the story order');
-  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true })); // drop the added story
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true })); // drop the story's name
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true })); // and the inserted story
+  ok(state().items.find(i => i.id === host.id).stories.length === host.stories.length - 1, 'undo drops the inserted story');
+  const upBtn = doc.querySelector('#panel [data-stf="up"]');
+  if (upBtn) click(upBtn); // the insert opened the story in the panel; back to the feature
   click(doc.querySelector('#detailBtn'));
   click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
+}
+
+// ---------------------------------------------------------------- titles rename on double-click only
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story detail: every feature open
+  const stRow0 = doc.querySelector('#rows .row.story[data-story]');
+  const sFid = stRow0.dataset.id, sSid = stRow0.dataset.story;
+  const rowOf = () => doc.querySelector('#rows .row.story[data-story="' + sSid + '"]');
+  const storyOf = () => state().items.find(i => i.id === sFid).stories.find(s2 => s2.id === sSid);
+  const wasTitle = storyOf().title;
+  const title0 = rowOf().querySelector('.st-title');
+  ok(title0 && title0.tagName !== 'INPUT', 'a planning story title is text');
+  click(title0);
+  ok(!rowOf().querySelector('input'), 'a single click on a story title opens it, it does not edit it');
+  rowOf().querySelector('.st-title').dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
+  const sEd = rowOf().querySelector('input.st-add-input');
+  ok(!!sEd, 'double-click makes a planning story title editable');
+  sEd.value = 'Renamed story row';
+  sEd.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  ok(storyOf().title === 'Renamed story row', 'Enter commits the story rename');
+  rowOf().dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+  const sRn = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Rename/.test(b.textContent));
+  ok(!!sRn, 'the story row context menu offers Rename…');
+  click(sRn);
+  const sEd2 = rowOf().querySelector('input.st-add-input');
+  ok(!!sEd2, 'Rename… starts the same inline edit on a story row');
+  sEd2.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(storyOf().title === wasTitle, 'undo puts the old story title back');
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
+  // the same on a Prioritizing feature card
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  const cid = doc.querySelector('#prioView .pr-card:not(.pr-stcard)').dataset.prcard;
+  const cardOf = () => doc.querySelector('#prioView .pr-card[data-prcard="' + cid + '"]:not(.pr-stcard)');
+  const featOf = () => state().items.find(i => i.id === cid);
+  const wasFeat = featOf().feature;
+  const ct = cardOf().querySelector('.pr-head .pr-title');
+  ok(ct && ct.tagName !== 'INPUT' && ct.dataset.prf === 'feature', 'a prioritizing card title is text, not an input');
+  click(ct);
+  ok(!cardOf().querySelector('.pr-head input'), 'a single click on a card title does not start an edit');
+  cardOf().querySelector('.pr-head .pr-title').dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
+  const cEd = cardOf().querySelector('.pr-head input[data-prf="feature"]');
+  ok(!!cEd, 'double-click makes the card title editable');
+  cEd.value = 'Renamed on a card';
+  cEd.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  ok(featOf().feature === 'Renamed on a card', 'Enter commits the card rename');
+  cardOf().dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 90, clientY: 90 }));
+  const cRn = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Rename/.test(b.textContent));
+  ok(!!cRn, 'a prioritizing card context menu offers Rename…');
+  click(cRn);
+  ok(!!cardOf().querySelector('.pr-head input[data-prf="feature"]'), 'Rename… opens the card editor');
+  cardOf().querySelector('.pr-head input[data-prf="feature"]')
+    .dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  ok(featOf().feature === wasFeat, 'undo puts the old card title back');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
 // ---------------------------------------------------------------- story assignees in the story panel
@@ -3442,6 +4061,8 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   const msIt = state().items.find(i => i.id === schedRow.dataset.id);
   const msRow = doc.querySelector('#rows .row.item[data-id="' + msIt.id + '"]');
   ok(!!msRow && msIt.milestone && msIt.startDay != null, 'a scheduled milestone row is visible');
+  ok(msIt.size == null && msIt.priority == null, 'converting to a milestone clears size and priority');
+  ok(!msRow.querySelector('[data-act="size"]') && !msRow.querySelector('[data-act="priority"]'), 'milestone rows have no size or priority chips');
   ok(!!doc.querySelector('#rows .bar.ms.ms-diamond[data-bar="' + msIt.id + '"]'), 'milestones default to the diamond');
   ok(!!doc.querySelector('#rows .row.item.ms[data-id="' + msIt.id + '"] .r-name'), 'a milestone row carries the ms class (bold title)');
   msRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, clientX: 240, clientY: 240 }));
@@ -3454,6 +4075,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   click(msRow.querySelector('.r-num'));
   const chip = doc.querySelector('#panel .p-mschip');
   ok(!!chip && /Star/.test(chip.textContent), 'panel milestone chip names the style');
+  ok(!doc.querySelector('#panel [data-f="priSet"]') && !doc.querySelector('#panel [data-f="size"]'), 'milestone panel shows neither size nor priority');
   click(chip);
   const circBtn = Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Circle/.test(b.textContent));
   ok(!!circBtn, 'chip opens the style picker');
@@ -3475,7 +4097,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   // stories estimate on their own scale: story points + severity ladder by default
   ok(state().meta.storySizeScheme === 'fibonacci' && state().meta.storyPriorityScheme === 'levels',
     'stories default to story points and the severity ladder');
-  ok(window.RM.sizeOrderOf(state(), 'story').join(',') === '1,2,3,5,8,13' &&
+  ok(window.RM.sizeOrderOf(state(), 'story').join(',') === '0,0.5,1,2,3,5,8,13' &&
     window.RM.sizeOrderOf(state()).join(',') !== window.RM.sizeOrderOf(state(), 'story').join(','),
     'the story scale is separate from the feature scale');
   click(doc.querySelector('#btnSetup'));
@@ -3525,8 +4147,8 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   click(doc.querySelector('#detailBtn'));
   click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
   click(doc.querySelector('#viewTabs [data-view="sprints"]'));
-  ok(!!doc.querySelector('#sprintsView .spv-row [data-spact="dur"]') || !!doc.querySelector('.spv-row [data-spact="dur"]'),
-    'sprinting rows carry a duration chip');
+  ok(!!doc.querySelector('#sprintsView .spv-row [data-spact="asg"]') || !!doc.querySelector('.spv-row [data-spact="asg"]'),
+    'sprinting rows carry an assignee chip');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 
   // one Add feature row per group when grouped
@@ -3593,11 +4215,681 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   }
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
+
+  // type pickers, row icons, epic type
+  {
+    // pick a currently-rendered row's item — not state().items[0], which
+    // may sit in a phase collapsed by default in the fixture
+    const firstRow = doc.querySelector('#rows .row.item[data-id]');
+    const first = state().items.find(i => i.id === firstRow.dataset.id);
+    window.__headway.selectItem ? window.__headway.selectItem(first.id) : click(firstRow);
+    const chip = doc.querySelector('#panel [data-act="itype"]');
+    ok(chip && /Feature/.test(chip.textContent), 'panel shows the type chip');
+    click(chip);
+    const bug = [...doc.querySelectorAll('.menu-list [data-mi]')].find(el => /^Bug$/.test(el.textContent.trim()));
+    ok(!!bug, 'type dropdown lists Bug');
+    click(bug);
+    ok(state().items.find(i => i.id === first.id).type === 'bug', 'picking Bug sets the item type');
+    ok(!!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-type'), 'a non-default type shows its icon on the row');
+    ok(!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-dot'), 'the type icon replaces the colored square');
+    window.__headway.setItemType(first.id, 'feature');
+    ok(!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-type') &&
+      !!doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-dot'), 'the default Feature type draws the filled square');
+
+    // a type label containing markup renders as text, not HTML, in the
+    // panel dropdown (typeMenuItems must esc() the label)
+    window.HeadwayApp.ai.commit('rename type', (s) => {
+      const bugType = s.meta.itemTypes.find(t => t.key === 'bug');
+      bugType.label = '<b>Bug</b>';
+    });
+    const chip2 = doc.querySelector('#panel [data-act="itype"]');
+    click(chip2);
+    const bugAfterRename = [...doc.querySelectorAll('.menu-list [data-mi]')].find(el => el.textContent.trim().indexOf('<b>Bug</b>') !== -1);
+    ok(!!bugAfterRename && bugAfterRename.innerHTML.indexOf('&lt;b&gt;') !== -1,
+      'a type label with markup renders as escaped text in the dropdown');
+    window.HeadwayApp.ai.commit('rename type', (s) => {
+      const bugType = s.meta.itemTypes.find(t => t.key === 'bug');
+      bugType.label = 'Bug';
+    });
+
+    // a type icon containing attribute-breaking markup renders as a single
+    // escaped data-lucide attribute, not injected markup (menu renderers
+    // must esc() m.icon)
+    window.HeadwayApp.ai.commit('rename type icon', (s) => {
+      const bugType = s.meta.itemTypes.find(t => t.key === 'bug');
+      bugType.icon = 'tag" data-x="y';
+    });
+    const chip3 = doc.querySelector('#panel [data-act="itype"]');
+    click(chip3);
+    const bugIconRow = [...doc.querySelectorAll('.menu-list [data-mi]')].find(el => /^Bug$/.test(el.textContent.trim()));
+    ok(!!bugIconRow, 'type dropdown still lists Bug after icon change');
+    const bugIcon = bugIconRow.querySelector('i');
+    ok(!!bugIcon && bugIcon.getAttribute('data-lucide') === 'tag" data-x="y',
+      'the icon renders with the full unbroken-out string as data-lucide');
+    ok(!bugIcon.hasAttribute('data-x'), 'no stray data-x attribute was injected from the icon value');
+    window.HeadwayApp.ai.commit('rename type icon', (s) => {
+      const bugType = s.meta.itemTypes.find(t => t.key === 'bug');
+      bugType.icon = 'bug';
+    });
+  }
+
+  // type glyphs everywhere + color by item type
+  {
+    const firstRow = doc.querySelector('#rows .row.item[data-id]');
+    const first = state().items.find(i => i.id === firstRow.dataset.id);
+    window.__headway.setItemType(first.id, 'bug');
+    const glyph = doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-type');
+    ok(glyph && glyph.querySelector('[data-lucide="bug"]') && /color:\s*#/.test(glyph.getAttribute('style') || ''),
+      'a Bug row draws the bug icon in a color');
+    ok(/#/.test(glyph.getAttribute('style')) && glyph.getAttribute('style').toUpperCase().indexOf(window.RM.colorForItem(state(), first).toUpperCase()) !== -1,
+      'the glyph wears the item color of the active color mode');
+    // a story row draws the bookmark, filled
+    window.HeadwayApp.ai.commit('story', (s) => { const it = window.RM.itemById(s, first.id); it.stories = it.stories || []; it.stories.unshift({ id: 'glyph-st', title: 'Glyph story' }); });
+    window.HeadwayApp.ai.setView('planning');
+    click(doc.querySelector('#rows .row.item[data-id="' + first.id + '"] [data-act="stories"]'));
+    const stGlyph = doc.querySelector('#rows .row.story[data-story="glyph-st"] .r-type');
+    ok(stGlyph && stGlyph.classList.contains('fill') && stGlyph.querySelector('[data-lucide="bookmark"]'), 'a story row draws the filled bookmark glyph');
+    // prioritizing cards carry the glyph in a head row beside the title
+    click(doc.querySelector('#viewTabs [data-view="prio"]'));
+    const card = doc.querySelector('#prioView .pr-card[data-prcard="' + first.id + '"]');
+    ok(card && card.querySelector('.pr-head .r-type [data-lucide="bug"]') && card.querySelector('.pr-head .pr-title'),
+      'a prioritizing card shows the type glyph beside its title');
+    // sprinting rows and story-view headings
+    click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+    ok(!!doc.querySelector('#sprintView .spv-row[data-spid="' + first.id + '"] .r-type [data-lucide="bug"]'), 'a sprinting row shows the type glyph');
+    ok(!doc.querySelector('#sprintView .spv-row .r-dot:not(.msdot) + .r-type'), 'sprinting rows no longer stack a square before the glyph');
+    window.__headway.setItemType(first.id, 'feature');
+    ok(!!doc.querySelector('#sprintView .spv-row[data-spid="' + first.id + '"] .r-dot'), 'a Feature sprinting row draws the square');
+    // View menu offers Color by item type; picking it recolors the glyph by type
+    click(doc.querySelector('#viewTabs [data-view="planning"]'));
+    click(doc.querySelector('.menu-btn[data-menu="view"]'));
+    const cbt = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Color by item type/.test(b.textContent));
+    ok(!!cbt, 'View menu offers Color by item type');
+    click(cbt);
+    ok(window.RM.colorMode() === 'type', 'picking it switches the color mode');
+    const sq = doc.querySelector('#rows .row.item[data-id="' + first.id + '"] .r-dot');
+    ok(sq && sq.getAttribute('style').toUpperCase().indexOf(window.RM.colorForType(state(), 'feature')) !== -1, 'the square takes the Feature type color');
+    // prefs segment carries the mode too
+    click(doc.querySelector('#btnSetup'));
+    click(doc.querySelector('#setupView [data-sutab="prefs"]'));
+    ok(!!doc.querySelector('#setupView [data-pref-color="type"]'), 'Settings offers Color bars by item type');
+    click(doc.querySelector('#setupView [data-pref-color="workstream"]'));
+    ok(window.RM.colorMode() === 'workstream', 'the prefs segment switches back');
+    // Hierarchy card: a color input per type commits the type color
+    click(doc.querySelector('#btnSetup'));
+    click(doc.querySelector('#setupView [data-sutab="workstreams"]'));
+    const cin = doc.querySelector('#setupView input[type="color"][data-suhtcolor="bug"]');
+    ok(!!cin, 'Hierarchy types table has a color input per type');
+    cin.value = '#112233';
+    cin.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(state().meta.itemTypes.find(t => t.key === 'bug').color === '112233', 'changing the color input sets the type color');
+    window.HeadwayApp.ai.setView('planning');
+  }
+
+  // milestones stay off the prioritizing board; Jira issue-type icons are 14px
+  {
+    const feat = state().items.find(i => !i.milestone && i.stories && i.stories.length === 0) || state().items.find(i => !i.milestone);
+    window.HeadwayApp.ai.commit('milestone', (s) => { const it = window.RM.itemById(s, feat.id); it.milestone = true; it.durDays = it.startDay == null ? null : 1; });
+    click(doc.querySelector('#viewTabs [data-view="prio"]'));
+    ok(!doc.querySelector('#prioView [data-prcard="' + feat.id + '"]'), 'a milestone has no card on the prioritizing board');
+    window.HeadwayApp.ai.commit('milestone', (s) => { window.RM.itemById(s, feat.id).milestone = false; });
+    ok(!!doc.querySelector('#prioView [data-prcard="' + feat.id + '"]'), 'clearing the flag brings the card back');
+    const css = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+    ok(/\.jr-types td svg\.lucide\s*\{[^}]*width:\s*14px[^}]*height:\s*14px/.test(css), 'Jira issue-type table icons are sized like every other icon');
+  }
+
+  // sprinting: one sprint per row, carry-over glyph, sprint-number tag, trimmed ends
+  {
+    click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+    const meta = state().meta;
+    const nums = [...doc.querySelectorAll('#sprintView .spv-sec')].map(s => s.dataset.spsec).filter(k => k !== 'u').map(Number);
+    const startNum = nums[0];
+    const it = state().items.find(i => !i.milestone);
+    const perSprint = window.RM.sprintDays(meta);
+    window.HeadwayApp.ai.commit('span', (s) => {
+      const t = window.RM.itemById(s, it.id);
+      t.startDay = window.RM.sprintStartDay(s.meta, startNum); t.durDays = perSprint * 3; t.riskDays = 0; t.locked = false;
+    });
+    const rows = doc.querySelectorAll('#sprintView .spv-row[data-spid="' + it.id + '"]');
+    ok(rows.length === 1 && rows[0].dataset.spsec === String(startNum), 'a three-sprint item lists once, under the sprint it starts in');
+    const info = rows[0].querySelector('.spv-info');
+    ok(info && info.getAttribute('title') === 'Expecting to carryover for 2 sprints (through sprint ' + (startNum + 2) + ')',
+      'the carry-over glyph says how many sprints it runs on and the last one');
+    ok(!rows[0].querySelector('.spv-tag:not(.spv-snum)') && rows[0].querySelector('.spv-snum').textContent === 'S' + startNum,
+      'the from/to tags are gone; the slot shows the sprint number');
+    ok(!rows[0].querySelector('.spv-dates') && !rows[0].querySelector('.spv-phase'), 'rows carry no date range or phase column');
+    window.HeadwayApp.ai.commit('span', (s) => { const t = window.RM.itemById(s, it.id); t.durDays = perSprint; });
+    ok(!doc.querySelector('#sprintView .spv-row[data-spid="' + it.id + '"] .spv-info'), 'an item inside one sprint has no carry-over glyph');
+    // empty sprints at either end are hidden (the current sprint always stays)
+    const secs = [...doc.querySelectorAll('#sprintView .spv-sec')].filter(s => s.dataset.spsec !== 'u');
+    const sideKeys = [...doc.querySelectorAll('#sprintView .spv-sbtn')].map(b => b.dataset.spside);
+    const nonEmpty = s => s.querySelectorAll('.spv-row').length > 0 || doc.querySelector('.spv-sbtn.today[data-spside="' + s.dataset.spsec + '"]');
+    ok(nonEmpty(secs[0]) && nonEmpty(secs[secs.length - 1]), 'the first and last sprint sections shown have rows (or are today)');
+    ok(sideKeys.length === secs.length + 1 && sideKeys[sideKeys.length - 1] === 'u', 'the sidebar mirrors the trimmed sections plus Unscheduled');
+    // push one item far out: the tail extends only to that sprint
+    const lastShown = Number(secs[secs.length - 1].dataset.spsec);
+    const allNums = [];
+    for (let w = 0; w < meta.numWeeks; w++) { const n = window.RM.sprintNumForWeek(meta, w); if (allNums.indexOf(n) === -1) allNums.push(n); }
+    const far = allNums[allNums.length - 1];
+    if (far > lastShown) {
+      window.HeadwayApp.ai.commit('span', (s) => { const t = window.RM.itemById(s, it.id); t.startDay = window.RM.sprintStartDay(s.meta, far); t.durDays = perSprint; });
+      const secs2 = [...doc.querySelectorAll('#sprintView .spv-sec')].filter(s => s.dataset.spsec !== 'u');
+      ok(secs2[secs2.length - 1].dataset.spsec === String(far), 'scheduling into the last sprint reveals it');
+      window.HeadwayApp.ai.commit('span', (s) => { const t = window.RM.itemById(s, it.id); t.startDay = window.RM.sprintStartDay(s.meta, startNum); });
+    } else ok(true, 'timeline already ends at the last shown sprint');
+  }
+
+  // sprinting chips: assignees replace duration, workstream chip, heading chips
+  {
+    click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+    const row = doc.querySelector('#sprintView .spv-sec:not([data-spsec="u"]) .spv-row');
+    const id = row.dataset.spid;
+    ok(!!row.querySelector('[data-spact="asg"]') && !row.querySelector('[data-spact="dur"]'), 'feature rows show an assignee chip instead of duration');
+    ok(!!row.querySelector('[data-spact="ws"]'), 'feature rows carry a workstream chip');
+    click(row.querySelector('[data-spact="asg"]'));
+    const member = state().team[0];
+    const mBtn = [...doc.querySelectorAll('#popover .menu-list button')].find(b => b.textContent.indexOf(window.RM.memberLabel(member)) !== -1);
+    ok(!!mBtn, 'the assignee chip opens the roster');
+    click(mBtn);
+    ok((state().items.find(i => i.id === id).assignees || []).indexOf(member.id) !== -1, 'picking a person assigns them');
+    ok(!!doc.querySelector('#sprintView .spv-row[data-spid="' + id + '"] [data-spact="asg"] .avatar'), 'the chip shows their avatar');
+    const wsChip = doc.querySelector('#sprintView .spv-row[data-spid="' + id + '"] [data-spact="ws"]');
+    click(wsChip);
+    const wsBtn = [...doc.querySelectorAll('#popover .menu-list button')].filter(b => !/default|Other/.test(b.textContent))[0];
+    const wsName = wsBtn.textContent.trim();
+    click(wsBtn);
+    ok(state().items.find(i => i.id === id).workstream === wsName, 'the workstream chip sets the workstream');
+    // story level: heading chips and story assignee chip
+    // (priority is 'none' at this point in the suite from an earlier undo — turn
+    // it on so the heading's priority chip has something to render)
+    const prevPriScheme = state().meta.priorityScheme;
+    window.HeadwayApp.ai.commit('priority scheme', (s) => { s.meta.priorityScheme = 'moscow'; });
+    click(doc.querySelector('#sprintView [data-spdd="level"]'));
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Story/.test(b.textContent)));
+    const head = doc.querySelector('#sprintView .spv-feat');
+    ok(head && head.querySelector('.spv-est [data-spact="priority"]') && head.querySelector('.spv-est [data-spact="size"]') && head.querySelector('.spv-est [data-spact="dur"]'),
+      'story-view feature headings show priority, size and duration chips');
+    ok(!head.querySelector('.spv-phase'), 'headings drop the phase column');
+    window.HeadwayApp.ai.commit('priority scheme', (s) => { s.meta.priorityScheme = prevPriScheme; });
+    const stRow = doc.querySelector('#sprintView .spv-row.spv-st');
+    ok(stRow && stRow.querySelector('[data-spact="st-asg"]') && !stRow.querySelector('[data-spact="st-wk"]'), 'story rows show a story assignee chip instead of duration');
+    click(stRow.querySelector('[data-spact="st-asg"]'));
+    const mBtn2 = [...doc.querySelectorAll('#popover .menu-list button')].find(b => b.textContent.indexOf(window.RM.memberLabel(member)) !== -1);
+    click(mBtn2);
+    const stIt = state().items.find(i => i.id === stRow.dataset.spid);
+    ok((stIt.stories.find(s => s.id === stRow.dataset.spst).assignees || []).indexOf(member.id) !== -1, 'picking a person assigns them to the story');
+    click(doc.querySelector('#sprintView [data-spdd="level"]'));
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
+  }
+
+  // sprinting context menu: Move to sprint for features and stories, Assign
+  {
+    click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+    const menu = () => [...doc.querySelectorAll('#popover .menu-list button')];
+    const row = doc.querySelector('#sprintView .spv-sec:not([data-spsec="u"]) .spv-row');
+    const id = row.dataset.spid;
+    const secNums = [...doc.querySelectorAll('#sprintView .spv-sec')].map(s => s.dataset.spsec).filter(k => k !== 'u').map(Number);
+    row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 120 }));
+    const mv = menu().find(b => /Move to sprint/.test(b.textContent));
+    ok(!!mv && menu().some(b => /Assign/.test(b.textContent)), 'the row menu offers Move to sprint and Assign');
+    click(mv);
+    const target = secNums.find(n => n !== Number(row.dataset.spsec)) || secNums[0] + 1;
+    const tBtn = menu().find(b => new RegExp('^Sprint ' + target + '\\b').test(b.textContent.trim()));
+    ok(!!tBtn && menu().some(b => /Unscheduled/.test(b.textContent)), 'the submenu lists the sprints and Unscheduled');
+    click(tBtn);
+    const moved = state().items.find(i => i.id === id);
+    ok(moved.startDay === window.RM.sprintStartDay(state().meta, target), 'picking a sprint moves the item there');
+    ok(doc.querySelector('#sprintView .spv-row[data-spid="' + id + '"]').dataset.spsec === String(target), 'and it lists under that sprint');
+    // story rows: Move to sprint gives the story its own timeline
+    click(doc.querySelector('#sprintView [data-spdd="level"]'));
+    click(menu().find(b => /Story/.test(b.textContent)));
+    const stRow = doc.querySelector('#sprintView .spv-row.spv-st');
+    stRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 160 }));
+    const mv2 = menu().find(b => /Move to sprint/.test(b.textContent));
+    ok(!!mv2, 'story rows have a context menu with Move to sprint');
+    click(mv2);
+    const t2 = secNums[0];
+    click(menu().find(b => new RegExp('^Sprint ' + t2 + '\\b').test(b.textContent.trim())));
+    const st = state().items.find(i => i.id === stRow.dataset.spid).stories.find(s => s.id === stRow.dataset.spst);
+    ok(st.startDay === window.RM.sprintStartDay(state().meta, t2) && st.durDays != null, 'the story gets its own timeline in that sprint');
+    const stRow2 = doc.querySelector('#sprintView .spv-row[data-spst="' + st.id + '"]');
+    stRow2.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 160 }));
+    click(menu().find(b => /With feature/.test(b.textContent)));
+    const st2 = state().items.find(i => i.id === stRow.dataset.spid).stories.find(s => s.id === st.id);
+    ok(st2.startDay == null, 'With feature drops the story timeline again');
+    click(doc.querySelector('#sprintView [data-spdd="level"]'));
+    click(menu().find(b => /Feature/.test(b.textContent)));
+  }
+}
+
+
+// stories: Duplicate story in every story context menu
+{
+  const menu = () => [...doc.querySelectorAll('#popover .menu-list button')];
+  const ctx = (el) => el.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 150, clientY: 150 }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const it = state().items.find(i => !i.milestone && i.stories && i.stories.length);
+  window.__headway.selectItem(it.id);
+  const chev = doc.querySelector('#rows .row.item[data-id="' + it.id + '"] [data-act="stories"]');
+  if (chev && !chev.classList.contains('open')) click(chev);
+  const st = it.stories[0];
+  const stRow = doc.querySelector('#rows .row.story[data-story="' + st.id + '"]');
+  ok(!!stRow, 'the feature shows its story row');
+  ctx(stRow);
+  const dup = menu().find(b => /Duplicate story/.test(b.textContent));
+  ok(!!dup, 'planning story rows offer Duplicate story');
+  const nBefore = it.stories.length;
+  click(dup);
+  const after = state().items.find(i => i.id === it.id);
+  const idx = after.stories.findIndex(s => s.id === st.id);
+  const copy = after.stories[idx + 1];
+  ok(after.stories.length === nBefore + 1 && copy && copy.id !== st.id && copy.title === st.title + ' (copy)', 'the copy sits right after the original with a fresh id and "(copy)" title');
+  ok(copy.size === st.size && copy.priority === st.priority && JSON.stringify(copy.assignees || []) === JSON.stringify(st.assignees || []), 'fields carry over');
+  ok(!copy.jiraKey, 'the copy does not point at the original Jira issue');
+  ok(new Set(after.stories.map(s => s.id)).size === after.stories.length, 'story ids stay unique');
+  // the other three menus offer it too
+  ctx(doc.querySelector('#panel'));
+  ok(menu().some(b => /Duplicate story/.test(b.textContent)), 'the panel story menu offers Duplicate story');
+  // separator placement matches the other story menus: Duplicate sits directly above Delete
+  {
+    const kids = [...doc.querySelectorAll('#popover .menu-list > *')];
+    const di = kids.findIndex(n => /Duplicate story/.test(n.textContent));
+    ok(di !== -1 && kids[di + 1] && kids[di + 1].tagName === 'BUTTON' && /Delete story/.test(kids[di + 1].textContent),
+      'the panel story menu puts Delete story directly under Duplicate story, with no separator between');
+  }
+  click(doc.querySelector('#viewTabs [data-view="prio"]'));
+  click(doc.querySelector('#prioView [data-prdd="level"]'));
+  click(menu().find(b => /Story/.test(b.textContent)));
+  const prCard = doc.querySelector('#prioView .pr-card[data-prst]');
+  if (prCard) { ctx(prCard); ok(menu().some(b => /Duplicate story/.test(b.textContent)), 'prioritizing story cards offer Duplicate story'); }
+  else ok(true, 'no story cards on the board in this fixture state');
+  click(doc.querySelector('#prioView [data-prdd="level"]'));
+  click(menu().find(b => /Feature/.test(b.textContent)));
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click(menu().find(b => /Story/.test(b.textContent)));
+  const spRow = doc.querySelector('#sprintView .spv-row.spv-st');
+  ctx(spRow);
+  ok(menu().some(b => /Duplicate story/.test(b.textContent)), 'sprinting story rows offer Duplicate story');
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click(menu().find(b => /Feature/.test(b.textContent)));
+  // restore
+  window.HeadwayApp.ai.commit('undo dup', (s) => { const t = window.RM.itemById(s, it.id); t.stories = t.stories.filter(x => x.id !== copy.id); });
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+// sprinting: titles are text until double-click / Rename; right panel like Scoping
+{
+  const menu = () => [...doc.querySelectorAll('#popover .menu-list button')];
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  const row = doc.querySelector('#sprintView .spv-sec:not([data-spsec="u"]) .spv-row');
+  const id = row.dataset.spid;
+  const it = state().items.find(i => i.id === id);
+  const title = row.querySelector('[data-spf="feature"]');
+  ok(title && title.tagName !== 'INPUT' && title.textContent === it.feature, 'the row title is text, not an input');
+  ok(!!row.querySelector('.spv-fill'), 'a filler pushes the chips right of the narrow title');
+  // click selects and opens the panel
+  click(title);
+  const pName = doc.querySelector('#panel textarea[data-f="feature"]');
+  ok(!doc.querySelector('#panel').hidden && pName && pName.value === it.feature,
+    'clicking a row shows the item in the right panel');
+  // double-click edits; Enter commits (re-query: selecting re-rendered the row)
+  const rowSel = () => doc.querySelector('#sprintView .spv-row[data-spid="' + id + '"]');
+  rowSel().querySelector('[data-spf="feature"]').dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }));
+  const ed = rowSel().querySelector('input.st-add-input, [data-spf="feature"]');
+  ok(ed && (ed.tagName === 'INPUT' || ed.isContentEditable), 'double-click makes the title editable');
+  ok(ed.dataset.spf === 'feature', 'the editor keeps the field name');
+  ed.value = 'Renamed via sprint';
+  ed.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  ed.dispatchEvent(new window.FocusEvent('blur', { bubbles: true }));
+  ok(state().items.find(i => i.id === id).feature === 'Renamed via sprint', 'Enter commits the new title');
+  // context menu offers Rename…
+  rowSel().dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 120 }));
+  ok(menu().some(b => /Rename/.test(b.textContent)), 'the row context menu offers Rename…');
+  click(menu().find(b => /Rename/.test(b.textContent)));
+  const ed2 = rowSel().querySelector('input.st-add-input');
+  ok(!!ed2, 'Rename… starts the same inline edit');
+  ed2.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  ok(state().items.find(i => i.id === id).feature === 'Renamed via sprint', 'Escape leaves the title alone');
+  // panel peek / toggle on Sprinting
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: ']', bubbles: true }));
+  ok(doc.querySelector('#panel').hidden && !doc.querySelector('#panelPeek').hidden,
+    '] hides the panel and shows the peek button on Sprinting');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: ']', bubbles: true }));
+  ok(!doc.querySelector('#panel').hidden, '] brings it back');
+  // story rows: text title, story panel on select
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click(menu().find(b => /Story/.test(b.textContent)));
+  const stRow = doc.querySelector('#sprintView .spv-row.spv-st');
+  ok(stRow && stRow.querySelector('[data-spf="story"]').tagName !== 'INPUT', 'story titles are text too');
+  click(stRow.querySelector('[data-spf="story"]'));
+  ok(!doc.querySelector('#panel').hidden && !!doc.querySelector('#panel textarea[data-stf="title"]'),
+    'selecting a story row shows the story panel');
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click(menu().find(b => /Feature/.test(b.textContent)));
+  window.HeadwayApp.ai.commit('restore', (s) => { window.RM.itemById(s, id).feature = it.feature; });
+  // sprint totals in story points when the story size scheme is numeric
+  {
+    const scheme0 = state().meta.storySizeScheme;
+    const fRow = doc.querySelector('#sprintView .spv-sec:not([data-spsec="u"]) .spv-row');
+    const fid = fRow.dataset.spid, secKey = fRow.dataset.spsec;
+    const hd = () => doc.querySelector('#sprintView .spv-sec[data-spsec="' + secKey + '"] .spv-sechd .pr-lanect');
+    const side = () => doc.querySelector('#sprintView .spv-sbtn[data-spside="' + secKey + '"] .pr-lanect');
+    window.HeadwayApp.ai.commit('story points setup', (s) => {
+      window.RM.setSizeScheme(s, 'fibonacci', 'story');
+      const f = window.RM.itemById(s, fid);
+      f.stories = f.stories || [];
+      while (f.stories.length < 3) f.stories.push({ id: window.RM.uid('s'), title: 'pt story', done: false });
+      f.stories.slice(0, 3).forEach((st) => { st.size = ''; st.startDay = null; st.durDays = null; });
+    });
+    ok(hd().textContent.trim() === String(doc.querySelectorAll('#sprintView .spv-sec[data-spsec="' + secKey + '"] .spv-row').length),
+      'a section whose stories are all unsized keeps the plain row count, not "0 pt"');
+    ok(side().textContent.trim() === hd().textContent.trim(), 'the sidebar entry shows the same count');
+    window.HeadwayApp.ai.commit('story points', (s) => {
+      const f = window.RM.itemById(s, fid);
+      f.stories[0].size = '3'; f.stories[1].size = '5'; f.stories[2].size = '';
+    });
+    ok(/^\d+ pt$/.test(hd().textContent.trim()), 'a numeric story scheme totals the sprint in points once a story is sized');
+    ok(Number(hd().textContent.replace(' pt', '')) === 8 && side().textContent.trim() === hd().textContent.trim(),
+      'sizing two stories 3 and 5 adds 8 points to the sprint total (an unsized story adds none)');
+    window.HeadwayApp.ai.commit('tshirt stories', (s) => { window.RM.setSizeScheme(s, 'tshirt', 'story'); });
+    ok(hd().textContent.trim() === String(doc.querySelectorAll('#sprintView .spv-sec[data-spsec="' + secKey + '"] .spv-row').length),
+      'a non-numeric story scheme keeps the plain item count');
+    window.HeadwayApp.ai.commit('restore sizing', (s) => {
+      window.RM.setSizeScheme(s, scheme0, 'story');
+      const f = window.RM.itemById(s, fid);
+      f.stories.slice(0, 3).forEach((st) => { st.size = ''; });
+    });
+  }
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
 ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'commits autosave to localStorage');
+// desktop: reload from disk only while auto-save is on
+{
+  ok(typeof window.HeadwayApp.autoSaveOn === 'function', 'HeadwayApp exposes autoSaveOn()');
+  const was = window.HeadwayApp.autoSaveOn();
+  click(doc.querySelector('.menu-btn[data-menu="file"]'));
+  const tog = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Auto.?save/i.test(b.textContent));
+  if (tog) {
+    click(tog);
+    ok(window.HeadwayApp.autoSaveOn() === !was, 'autoSaveOn() follows the File menu toggle');
+    click(doc.querySelector('.menu-btn[data-menu="file"]'));
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Auto.?save/i.test(b.textContent)));
+    ok(window.HeadwayApp.autoSaveOn() === was, 'toggling back restores it');
+  } else ok(true, 'auto-save toggle is desktop-only in this build');
+  const desk = fs.readFileSync(path.join(ROOT, 'js/desktop.js'), 'utf8');
+  ok(/autoSaveOn\(\)/.test(desk) && /if \(!hit \|\| reloading \|\| !app\(\)\.autoSaveOn\(\)\) return;/.test(desk),
+    'the disk watcher skips reloads while auto-save is off');
+}
+
+// rich text: URLs render as links; ⌘-click opens them; storage stays plain
+{
+  const url = 'https://example.com/path?q=1';
+  const firstRow = doc.querySelector('#rows .row.item[data-id]');
+  const it = state().items.find(i => i.id === firstRow.dataset.id);
+  window.HeadwayApp.ai.commit('desc', (s) => { window.RM.itemById(s, it.id).description = '<p>See ' + url + ', then (https://b.example/x). Not a link: example.com</p>'; });
+  // scoping tab renders the anchors
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  const cell = doc.querySelector('#rows .row.item[data-id="' + it.id + '"] .sc-rich[data-scope="description"]');
+  ok(!!cell, 'scoping shows the description cell');
+  const links = cell ? [...cell.querySelectorAll('a.auto-link')] : [];
+  ok(links.length === 2 && links[0].getAttribute('href') === url && links[0].textContent === url, 'a URL in a scoping cell renders as an auto-link');
+  ok(links[1] && links[1].getAttribute('href') === 'https://b.example/x' && /\)\./.test(cell.textContent), 'trailing punctuation stays outside the link');
+  ok(!/example\.com<\/a>/.test(cell.innerHTML.replace(url, '')), 'a bare domain without a scheme is not linked');
+  ok(state().items.find(i => i.id === it.id).description.indexOf('<a') === -1, 'the stored value carries no anchor');
+  // ⌘-click opens; a plain click does not
+  const opened = [];
+  const realOpen = window.open;
+  window.open = (u) => { opened.push(u); return null; };
+  links[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  ok(opened.length === 0, 'a plain click does not open the link');
+  links[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true }));
+  ok(opened.length === 1 && opened[0] === url, '⌘-click opens the URL in a new tab');
+  links[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+  ok(opened.length === 2, 'Ctrl-click opens it too');
+  window.open = realOpen;
+  // editing the cell and blurring stores plain text, not the anchor markup
+  cell.innerHTML = '<p>Go to <a class="auto-link" href="' + url + '">' + url + '</a> now</p>';
+  cell.dispatchEvent(new window.Event('input', { bubbles: true }));
+  cell.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  const stored = state().items.find(i => i.id === it.id).description;
+  ok(stored.indexOf('<a') === -1 && stored.indexOf(url) !== -1, 'reading an edited cell back drops the anchor and keeps the URL text');
+  // the right panel's description editor links too
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  window.__headway.selectItem(it.id);
+  const ed = doc.querySelector('#panel .wz-ed[data-f="col:description"]');
+  ok(!!ed && !!ed.querySelector('a.auto-link[href="' + url + '"]'), 'the panel description editor renders the URL as a link');
+  // desktop shell: capability and opener wiring exist
+  const cap = fs.readFileSync(path.join(ROOT, 'src-tauri/capabilities/default.json'), 'utf8');
+  const desk12 = fs.readFileSync(path.join(ROOT, 'js/desktop.js'), 'utf8');
+  ok(/opener:allow-open-url/.test(cap) && /openUrl/.test(desk12), 'the desktop shell can open URLs');
+}
+
+// reporting: Delivery-by-sprint counts an item in every sprint it is in flight
+{
+  const meta0 = state().meta;
+  const it = state().items.find(i => !i.milestone && i.startDay != null);
+  const prev = { startDay: it.startDay, durDays: it.durDays, riskDays: it.riskDays, locked: it.locked };
+  const perSprint = window.RM.sprintDays(meta0);
+  const nums = [];
+  for (let w = 0; w < meta0.numWeeks; w++) { const n = window.RM.sprintNumForWeek(meta0, w); if (nums.indexOf(n) === -1) nums.push(n); }
+  const startNum = nums[0];
+  // feature counts per delivery bar, keyed by the bar's label
+  const delivCounts = () => {
+    click(doc.querySelector('#viewTabs [data-view="reports"]'));
+    const card = [...doc.querySelectorAll('#reportsView .rp-card, .rp-card')].find(c => c.querySelector('h2') && /Delivery by/.test(c.querySelector('h2').textContent));
+    const out = {};
+    if (!card) return out;
+    [...card.querySelectorAll('.rp-bar-row')].forEach((r) => {
+      const m = r.querySelector('.rp-bar-val').textContent.match(/(\d+) feature/);
+      out[r.querySelector('.rp-bar-label').textContent] = m ? Number(m[1]) : 0;
+    });
+    return out;
+  };
+  window.HeadwayApp.ai.commit('span', (s) => { const t = window.RM.itemById(s, it.id); t.startDay = null; t.durDays = perSprint; t.riskDays = 0; t.locked = false; });
+  const base = delivCounts();
+  window.HeadwayApp.ai.commit('span', (s) => { const t = window.RM.itemById(s, it.id); t.startDay = window.RM.sprintStartDay(s.meta, startNum); t.durDays = perSprint * 3; });
+  const spanned = delivCounts();
+  const grew = Object.keys(spanned).filter(k => spanned[k] - (base[k] || 0) === 1);
+  ok(grew.length === 3, 'a three-sprint feature counts in three delivery bars (grew in ' + grew.length + ')');
+  // sprinting still lists that row exactly once, under the sprint it starts in
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  const rows = doc.querySelectorAll('#sprintView .spv-row[data-spid="' + it.id + '"]');
+  ok(rows.length === 1 && rows[0].dataset.spsec === String(startNum), 'sprinting still lists the spanning row once, in its start sprint');
+  window.HeadwayApp.ai.commit('span', (s) => {
+    const t = window.RM.itemById(s, it.id);
+    t.startDay = prev.startDay; t.durDays = prev.durDays; t.riskDays = prev.riskDays; t.locked = prev.locked;
+  });
+  const back = state().items.find(i => i.id === it.id);
+  ok(back.startDay === prev.startDay && back.durDays === prev.durDays, 'the item is restored to its original schedule');
+}
+
+// rich text: focusing and blurring an unchanged legacy value commits nothing
+{
+  const firstRow = doc.querySelector('#rows .row.item[data-id]');
+  const it = state().items.find(i => i.id === firstRow.dataset.id);
+  const legacy = 'See https://example.com/a\nline two';
+  window.HeadwayApp.ai.commit('desc', (s) => { window.RM.itemById(s, it.id).description = legacy; });
+  click(doc.querySelector('#viewTabs [data-view="scoping"]'));
+  const cell = doc.querySelector('#rows .row.item[data-id="' + it.id + '"] .sc-rich[data-scope="description"]');
+  ok(!!cell && !!cell.querySelector('a.auto-link'), 'the legacy value renders with a link');
+  const before = JSON.stringify(window.__headway.getState());
+  cell.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+  cell.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  const after = JSON.stringify(window.__headway.getState());
+  ok(before === after, 'a no-op focus/blur on a linkified cell commits nothing (state and history unchanged)');
+  ok(state().items.find(i => i.id === it.id).description === legacy, 'the stored description is byte-identical');
+}
+
+// sprinting: story level hides sprints whose features have no visible stories
+{
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Story/.test(b.textContent)));
+  const btns = [...doc.querySelectorAll('#sprintView .spv-sbtn')].filter(b => b.dataset.spside !== 'u');
+  const emptyEnd = b => b && parseInt(b.querySelector('.pr-lanect').textContent.trim(), 10) === 0 && !b.classList.contains('today');
+  ok(btns.length === 0 || (!emptyEnd(btns[0]) && !emptyEnd(btns[btns.length - 1])),
+    'story level trims empty sprints at both ends');
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
+}
+
+// 0.5 story points: option offered, totals sum fractions
+{
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  const prev = JSON.parse(JSON.stringify({ s: state().meta.storySizeScheme, o: state().meta.storySizeOrder, d: state().meta.storySizeDays }));
+  window.HeadwayApp.ai.commit('fib', (s) => { window.RM.setSizeScheme(s, 'fibonacci', 'story'); });
+  ok(state().meta.storySizeOrder.join(',') === '0,0.5,1,2,3,5,8,13', 'the Fibonacci story scale offers 0 and 0.5');
+  const row = doc.querySelector('#sprintView .spv-sec:not([data-spsec="u"]) .spv-row');
+  const id = row.dataset.spid, sec = row.dataset.spsec;
+  const it = state().items.find(i => i.id === id);
+  if (it.stories.length >= 2) {
+    const before = doc.querySelector('#sprintView .spv-sec[data-spsec="' + sec + '"] .pr-lanect').textContent;
+    window.HeadwayApp.ai.commit('half', (s) => { const t = window.RM.itemById(s, id); t.stories[0].size = '0.5'; t.stories[1].size = '3'; });
+    const txt = doc.querySelector('#sprintView .spv-sec[data-spsec="' + sec + '"] .pr-lanect').textContent;
+    ok(/^\d+(\.5)? pt$/.test(txt) && txt !== before, 'sprint totals include half points and show one decimal at most (' + txt + ')');
+    window.HeadwayApp.ai.commit('half', (s) => { const t = window.RM.itemById(s, id); t.stories[0].size = ''; t.stories[1].size = ''; });
+  } else ok(true, 'first sprint row has fewer than two stories');
+  window.HeadwayApp.ai.commit('restore', (s) => { s.meta.storySizeScheme = prev.s; s.meta.storySizeOrder = prev.o; s.meta.storySizeDays = prev.d; });
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- tags (panel editor + filter)
+let tagFilterChecks = () => Promise.resolve();
+let taggedForXlsx = null;
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const visibleIds = [...doc.querySelectorAll('#rows .row.item[data-id]')].map(r => r.dataset.id);
+  const visible = state().items.filter(i => visibleIds.indexOf(i.id) !== -1 && !i.milestone);
+  const tagged = visible.find(i => i.stories.length) || visible[0];
+  const other = visible.find(i => i.id !== tagged.id);
+  // a second item carries a tag already, so the datalist has something to offer
+  window.HeadwayApp.ai.commit('tags', (s) => { window.RM.setTags(s, window.RM.itemById(s, other.id), ['beta']); });
+
+  click(doc.querySelector('#rows .row.item[data-id="' + tagged.id + '"] .row-left'));
+  ok(!!doc.querySelector('#panel .p-sec[data-sec="tags"]'), 'the feature panel has a Tags section');
+  const tagIn = () => doc.querySelector('#panel .p-tag-in');
+  ok(!!tagIn(), 'the Tags section offers an input');
+  const typeTag = (v, k) => {
+    const inp = tagIn();
+    inp.value = v;
+    inp.dispatchEvent(new window.KeyboardEvent('keydown', { key: k || 'Enter', bubbles: true, cancelable: true }));
+  };
+  // the focus-restore call lands inside a requestAnimationFrame; run it
+  // synchronously here so the assertion below doesn't need to wait a real frame
+  {
+    const realRaf = window.requestAnimationFrame;
+    window.requestAnimationFrame = (cb) => cb();
+    typeTag('alpha');
+    window.requestAnimationFrame = realRaf;
+  }
+  const itemTags = id => state().items.find(i => i.id === id).tags;
+  ok(String(itemTags(tagged.id)) === 'alpha', 'Enter in the tag input stores the tag (' + itemTags(tagged.id) + ')');
+  ok(!!doc.querySelector('#panel .tag-chip [data-tagrm="alpha"]'), 'the tag renders as a removable chip');
+  ok(doc.querySelector('#panel .p-tag-in') === doc.activeElement, 'the input survives the re-render');
+  // a comma commits too, and duplicates collapse
+  typeTag('gamma', ',');
+  ok(String(itemTags(tagged.id)) === 'alpha,gamma', 'a comma commits the tag as well');
+  typeTag('ALPHA');
+  ok(String(itemTags(tagged.id)) === 'alpha,gamma', 'a case-insensitive duplicate is ignored');
+  const opts = [...doc.querySelectorAll('#panel #tagOptions option')].map(o => o.value);
+  ok(opts.indexOf('beta') !== -1 && opts.indexOf('alpha') === -1,
+    'the datalist offers other documents tags but not the ones already on this item (' + opts.join(',') + ')');
+  // Backspace on an empty input drops the last tag
+  const bsInp = tagIn();
+  bsInp.value = '';
+  bsInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }));
+  ok(String(itemTags(tagged.id)) === 'alpha', 'Backspace in an empty input removes the last tag');
+  // blur with text commits
+  const blurInp = tagIn();
+  blurInp.value = 'delta';
+  blurInp.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  ok(String(itemTags(tagged.id)) === 'alpha,delta', 'blurring with text adds the tag');
+  click(doc.querySelector('#panel .tag-chip [data-tagrm="delta"]'));
+  ok(String(itemTags(tagged.id)) === 'alpha', 'clicking a chips x removes that tag');
+
+  // the story panel edits story tags the same way
+  click(doc.querySelector('#panel [data-pst-edit]'));
+  ok(!!doc.querySelector('#panel .p-crumb') && !!doc.querySelector('#panel .p-sec[data-sec="st-tags"]'),
+    'the story panel has a Tags section too');
+  typeTag('sigma');
+  const storyTags = () => state().items.find(i => i.id === tagged.id).stories[0].tags;
+  ok(String(storyTags()) === 'sigma', 'the story panel stores tags on the story');
+  click(doc.querySelector('#panel .p-crumb'));
+
+  // a story tag makes its feature match; #alpha searches tags only
+  const storyTagged = visible.find(i => i.id !== tagged.id && i.stories.length && i.id !== other.id);
+  if (storyTagged) {
+    window.HeadwayApp.ai.commit('tags', (s) => {
+      window.RM.setTags(s, window.RM.itemById(s, storyTagged.id).stories[0], ['alpha']);
+    });
+  }
+  // the row filter is debounced (120 ms), so these run from the async chain below
+  const rowIdsNow = () => [...doc.querySelectorAll('#rows .row.item[data-id]')].map(r => r.dataset.id);
+  const allRows = rowIdsNow().length;
+  const typeFilter = (v) => new Promise((res) => {
+    const rf2 = doc.querySelector('#rowFilter');
+    rf2.value = v;
+    rf2.dispatchEvent(new window.Event('input', { bubbles: true }));
+    window.setTimeout(res, 220);
+  });
+  tagFilterChecks = () => typeFilter('#alpha').then(() => {
+    const hits = rowIdsNow();
+    ok(hits.length < allRows && hits.indexOf(tagged.id) !== -1,
+      '#alpha narrows the rows to tagged items (' + hits.length + ' of ' + allRows + ')');
+    ok(!storyTagged || hits.indexOf(storyTagged.id) !== -1, 'a feature whose story carries the tag matches too');
+    ok(hits.indexOf(other.id) === -1, 'an item tagged beta is filtered out by a tag-only query');
+    return typeFilter('');
+  }).then(() => {
+    ok(rowIdsNow().length === allRows, 'clearing the filter restores every row');
+    // the tags stay on the document so the export chain below can round-trip them
+    taggedForXlsx = { id: tagged.id, storyId: tagged.stories[0] && tagged.stories[0].id };
+  });
+}
+
+// explicit 0-point stories: sized, worth nothing, offered in the size picker
+{
+  click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+  const prevZ = JSON.parse(JSON.stringify({ s: state().meta.storySizeScheme, o: state().meta.storySizeOrder, d: state().meta.storySizeDays }));
+  window.HeadwayApp.ai.commit('fib0', (s) => { window.RM.setSizeScheme(s, 'fibonacci', 'story'); });
+  const rowZ = doc.querySelector('#sprintView .spv-sec:not([data-spsec="u"]) .spv-row');
+  const idZ = rowZ.dataset.spid, secZ = rowZ.dataset.spsec;
+  // every story in this section: only the chosen feature's two get a size
+  window.HeadwayApp.ai.commit('zero', (s) => {
+    s.items.forEach((it) => (it.stories || []).forEach((st) => { st.size = ''; }));
+    const t = window.RM.itemById(s, idZ);
+    t.stories[0].size = '0';
+    if (t.stories[1]) t.stories[1].size = '0';
+  });
+  const hdZ = doc.querySelector('#sprintView .spv-sec[data-spsec="' + secZ + '"] .pr-lanect').textContent.trim();
+  ok(hdZ === '0 pt', 'a section of only 0-point stories reads "0 pt", not a count (' + hdZ + ')');
+  // the story size picker offers 0 (story level shows the per-story chips)
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find((b) => /Story/.test(b.textContent)));
+  const stId0 = state().items.find((i) => i.id === idZ).stories[0].id;
+  const stRow = doc.querySelector('#sprintView .spv-row[data-spst="' + stId0 + '"]');
+  const szBtn = stRow && stRow.querySelector('[data-spact="st-size"]');
+  ok(!!szBtn, 'the 0-point story shows a size chip');
+  if (szBtn) {
+    click(szBtn);
+    const opts = [...doc.querySelectorAll('#popover .menu-list button')].map((b) => b.textContent.trim());
+    ok(opts.some((o) => /^0\b/.test(o)), 'the story size picker offers 0 (' + opts.slice(0, 3).join(' | ') + ')');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  } else ok(window.RM.sizeOrderOf(state(), 'story')[0] === '0', 'the story size scale offers 0');
+  click(doc.querySelector('#sprintView [data-spdd="level"]'));
+  click([...doc.querySelectorAll('#popover .menu-list button')].find((b) => /Feature/.test(b.textContent)));
+  window.HeadwayApp.ai.commit('restore0', (s) => {
+    s.items.forEach((it) => (it.stories || []).forEach((st) => { st.size = ''; }));
+    s.meta.storySizeScheme = prevZ.s; s.meta.storySizeOrder = prevZ.o; s.meta.storySizeDays = prevZ.d;
+  });
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// NOTE: this export promise chain must stay LAST in this file — its .then /
+// .catch bodies run after every synchronous block, and the .then calls
+// process.exit. New blocks go ABOVE this line.
 // ---------------------------------------------------------------- manual order (auto-order off) survives export → import
-const manualOrderRoundTrip = (function () {
+const manualOrderRoundTrip = () => {
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   const toggleAuto = () => {
     window.eval("document.querySelector('[data-menu=\"view\"]').click()");
@@ -3641,9 +4933,9 @@ const manualOrderRoundTrip = (function () {
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
     ok(byId(state(), A.id).order === A.order, 'undo restores the original key');
   });
-})();
+};
 
-manualOrderRoundTrip.catch((e) => {
+tagFilterChecks().then(manualOrderRoundTrip).catch((e) => {
   failed++;
   console.error('  ✗ manual order round-trip threw: ' + (e && e.message || e));
 }).then(() => window.RMExcel.exportWorkbook(state())).then((buf) => {
@@ -3661,6 +4953,12 @@ manualOrderRoundTrip.catch((e) => {
     window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab1)), 'Roadmap.xlsx', true)
   ).then(() => {
     ok(state().items[0].feature === 'Renamed on disk', 'disk reload: the data updated');
+    if (taggedForXlsx) {
+      const rtIt = state().items.find(i => i.id === taggedForXlsx.id);
+      ok(rtIt && String(rtIt.tags) === 'alpha', 'xlsx round trip: the feature keeps its tag (' + (rtIt && rtIt.tags) + ')');
+      const rtSt = rtIt && rtIt.stories.find(x => x.id === taggedForXlsx.storyId);
+      ok(!rtSt || String(rtSt.tags) === 'sigma', 'xlsx round trip: the story keeps its tag');
+    }
     ok(window.HeadwayApp.ai.ui().view === 'scoping', 'disk reload: the view did not change');
     ok(window.HeadwayApp.ai.ui().selectedNum === firstNum, 'disk reload: the selection survived');
     ok(window.HeadwayApp.unsavedNow() === false, 'disk reload: nothing to save');
@@ -3677,6 +4975,41 @@ manualOrderRoundTrip.catch((e) => {
     window.HeadwayAI.runTool('navigate', { view: 'scoping', num: state().items.find((i) => i.id === rowIds[0]).num }, window.HeadwayApp);
     ok(!!doc.querySelector('#panel .seg button.pt-crit.on'), 'the panel picker lights Must in tier crit');
     ok(!!doc.querySelector('#panel .seg button.pt-high'), 'Should sits in tier high');
+    // prioritizing: Priority/Risk chips stay available whatever the columns are; phase filter
+    {
+      click(doc.querySelector('#viewTabs [data-view="prio"]'));
+      const pick = re => click([...doc.querySelectorAll('#popover .menu-list button')].find(b => re.test(b.textContent)));
+      // columns by priority: the Fields menu still offers Priority and Risk, and cards show them
+      click(doc.querySelector('#prioView [data-prdd="cols"]'));
+      pick(/^Priority$/);
+      click(doc.querySelector('#prFieldsBtn'));
+      const labels = [...doc.querySelectorAll('#popover .menu-list button')].map(b => b.textContent.trim());
+      ok(labels.indexOf('Priority') !== -1 && labels.indexOf('Risk') !== -1, 'Fields menu offers Priority and Risk even when the columns are by priority');
+      click(doc.querySelector('#prioView'));
+      ok(!!doc.querySelector('#prioView .pr-card [data-pract="priority"]') && !!doc.querySelector('#prioView .pr-card [data-pract="risk"]'),
+        'cards show the priority and risk chips in the priority columns');
+      click(doc.querySelector('#prioView [data-prdd="cols"]'));
+      pick(/^Phase$/);
+      // phase filter, same as Sprinting
+      const cardsOf = () => [...doc.querySelectorAll('#prioView .pr-card[data-prcard]')];
+      const itemOf = c => state().items.find(i => i.id === c.dataset.prcard);
+      const before = cardsOf().length;
+      const ph = state().phases[1];
+      const fph = doc.querySelector('#prioView [data-prdd="fphase"]');
+      ok(!!fph, 'the prioritizing toolbar offers a phase filter');
+      click(fph);
+      pick(new RegExp('^' + ph.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'));
+      ok(cardsOf().length > 0 && cardsOf().length < before && cardsOf().every(c => itemOf(c).phaseId === ph.id),
+        'the phase filter narrows the cards to that phase');
+      const fph2 = doc.querySelector('#prioView [data-prdd="fphase"]');
+      ok(fph2.classList.contains('pr-on') && fph2.textContent.indexOf(ph.name) !== -1, 'an active phase filter lights up and names the phase');
+      click(fph2); pick(/All phases/);
+      ok(cardsOf().length === before && !doc.querySelector('#prioView [data-prdd="fphase"]').classList.contains('pr-on'),
+        'clearing the phase filter restores every card');
+      click(doc.querySelector('#viewTabs [data-view="sprints"]'));
+      ok(!doc.querySelector('#sprintView [data-spdd="fphase"].pr-on'), 'the prioritizing phase filter does not leak into Sprinting');
+      click(doc.querySelector('#viewTabs [data-view="planning"]'));
+    }
   }).then(() => {
   // opening a file is not an edit: no version-history entry, nothing unsaved
   const tpl = window.__headway.templateState();
@@ -3691,6 +5024,32 @@ manualOrderRoundTrip.catch((e) => {
     ok(window.HeadwayApp.unsavedNow() === false, 'a freshly opened doc has nothing to save');
   });
   });
+}).then(() => {
+  // ---- story numbers and story-to-story dependencies survive a save/reload
+  // (the Stories sheet's own "#" / "Depends on" columns are asserted in
+  // tests/core.test.js — ExcelJS writes whole rows through `row.values =
+  // [...]`, which silently drops arrays built in this jsdom realm)
+  const dependentId = 'story-dep-probe';
+  window.HeadwayApp.ai.commit('add a dependent story', (s) => {
+    const it = s.items[0];
+    it.stories.push({ id: dependentId, title: 'Dependent story', num: window.RM.nextNum(s), deps: [it.stories[0].num] });
+  });
+  const host0 = state().items[0];
+  ok(host0.stories.length >= 2 && host0.stories.every((x) => x.num > 0),
+    'every story carries a number (' + host0.stories.map((x) => x.num).join(',') + ')');
+  const depNum = host0.stories[0].num;
+  ok(String(window.RM.storyRef(state(), dependentId).st.deps) === String(depNum),
+    'the dependency is stored as a story number');
+  return window.RMExcel.exportWorkbook(state())
+    .then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
+    .then((ab) => window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), 'Deps.xlsx', true))
+    .then(() => {
+      const back = window.RM.storyRef(state(), dependentId);
+      ok(!!back && String(back.st.deps) === String(depNum),
+        'story dependencies survive an xlsx round trip (got ' + (back && back.st.deps) + ')');
+      ok(!!back && back.st.num > 0 && state().items[0].stories[0].num === depNum,
+        'story numbers survive an xlsx round trip');
+    });
 }).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);

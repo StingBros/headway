@@ -9,7 +9,7 @@
  *  - rows(state, opts) -> [{column: value}] (node-testable)
  *  - csv(state, opts)  -> CSV string (BOM, CRLF, RFC-4180 quoting)
  *  - fileName(state)   -> "<title>-jira.csv"
- * opts: features (bool), stories (bool), featureType, storyType.
+ * opts: features (bool), stories (bool). Issue types come from each row's type (Setup → Hierarchy).
  */
 (function (root) {
   'use strict';
@@ -19,10 +19,15 @@
 
   JR.COLUMNS = ['Summary', 'Issue Type', 'Description', 'Parent', 'Labels',
     'Priority', 'Due Date', 'Start Date', 'End Date', 'Blocked By', 'Jira Key'];
-  JR.DEFAULTS = { features: true, stories: false, featureType: 'Story', storyType: 'Sub-task' };
+  JR.DEFAULTS = { features: true, stories: false };
 
   function slug(s) {
     return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+  // free-form tags become plain slugged labels (no prefix — they are the
+  // user's own vocabulary)
+  function tagLabels(o) {
+    return ((o && o.tags) || []).map(slug);
   }
   function labelList(parts) {
     return parts.filter(Boolean).join(' ');
@@ -64,7 +69,7 @@
         }).join('\n');
         out.push({
           'Summary': it.feature,
-          'Issue Type': o.featureType,
+          'Issue Type': RM.jiraTypeName(state, RM.typeOf(state, it, 'feature').key),
           'Description': joinSections([
             RM.htmlToText(it.description),
             checklist ? 'Stories:\n' + checklist : '',
@@ -74,7 +79,7 @@
             section('Notes', it.notes)
           ]),
           'Parent': (it.epic && state.epicJira[it.epic]) || '',
-          'Labels': labelList([ws, phase, it.size ? 'size-' + slug(it.size) : '']),
+          'Labels': labelList([ws, phase, it.size ? 'size-' + slug(it.size) : ''].concat(tagLabels(it))),
           'Priority': it.priority || '',
           'Due Date': it.deadline || '',
           'Start Date': sched ? iso(meta, it.startDay) : '',
@@ -88,18 +93,18 @@
           var ssched = s.startDay != null && s.durDays > 0;
           out.push({
             'Summary': s.title,
-            'Issue Type': o.storyType,
+            'Issue Type': RM.jiraTypeName(state, RM.typeOf(state, s, 'story').key),
             'Description': joinSections([
               RM.htmlToText(s.description),
               section('Acceptance criteria', s.ac)
             ]),
             'Parent': it.jiraKey || '',
-            'Labels': labelList(['feature-' + slug(it.feature), ws, phase]),
+            'Labels': labelList(['feature-' + slug(it.feature), ws, phase].concat(tagLabels(s))),
             'Priority': s.priority || '',
             'Due Date': s.deadline || '',
             'Start Date': ssched ? iso(meta, s.startDay) : '',
             'End Date': ssched ? RM.fmtISO(RM.spanEndDate(meta, s.startDay, s.durDays)) : '',
-            'Blocked By': '',
+            'Blocked By': RM.resolveStoryDeps(state, s).deps.map(function (r) { return r.st.jiraKey; }).filter(Boolean).join(' '),
             'Jira Key': s.jiraKey || ''
           });
         });

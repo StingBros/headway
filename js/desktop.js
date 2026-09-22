@@ -84,7 +84,9 @@
       var hit = paths.some(function (p) { return samePath(p, currentPath); });
       // own writes are filtered by content (byte sig + embedded document
       // JSON, see below), never by timing
-      if (!hit || reloading) return;
+      // with auto-save off the document on screen is not what is on disk;
+      // a reload would throw away the unsaved edits
+      if (!hit || reloading || !app().autoSaveOn()) return;
       reloadFromDisk();
     }, { delayMs: 800 }).then(function (un) {
       unwatch = un;
@@ -129,6 +131,7 @@
   var RELOAD_RETRY_MS = [1200, 3000, 8000];
   function reloadFromDisk(attempt) {
     attempt = attempt || 0;
+    if (!app().autoSaveOn()) return;
     var p = currentPath;
     reloading = true;
     fs.readFile(p).then(function (bytes) {
@@ -826,6 +829,13 @@
         });
         return chain.then(function () { return dir; });
       });
+    },
+
+    // open an external http(s) link in the OS browser
+    openUrl: function (url) {
+      var op = window.__TAURI__ && window.__TAURI__.opener;
+      if (!op || !op.openUrl) { window.open(url, '_blank', 'noopener'); return Promise.resolve(); }
+      return op.openUrl(url).catch(function (err) { app().toast('Could not open link: ' + (err && err.message || err), 'err'); });
     },
 
     // open a known path (start page recents) — rejects if unreadable

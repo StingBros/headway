@@ -451,6 +451,9 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
   font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
   text-align: right; padding-right: 7px;
 }
+/* stories carry the same number chip; outside the Planning grid it hugs the
+   glyph instead of holding the feature column's fixed width */
+.r-num.st-num { width: auto; flex: 0 0 auto; text-align: left; padding-right: 0; }
 .r-dot { width: 8px; height: 8px; border-radius: 2.5px; flex: 0 0 8px; margin-right: 7px; }
 /* milestones carry a hollow diamond / star / circle, not a filled square:
    the inline background color shows only through the ring mask */
@@ -475,6 +478,24 @@ input.r-name {
   cursor: text;
 }
 input.r-name:hover { border-color: var(--line-2); background: var(--surface); }
+/* outside Scoping the title is plain text until a double-click (or Rename…)
+   swaps the editor in: same metrics, same hover affordance. No text selection:
+   a selected word would turn the next drag into a native text drag and the
+   row would not move */
+.r-name-txt, .st-title-txt { user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
+span.r-name {
+  flex: 1; min-width: 0;
+  font: inherit; font-weight: 400; color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent; border-radius: 5px;
+  padding: 1px 5px; margin-left: -5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: text;
+}
+span.r-name:hover { border-color: var(--line-2); background: var(--surface); }
+/* an untitled row shows a quiet placeholder */
+span.r-name.r-ph, .st-title.r-ph { color: var(--ink-3); }
+.row.done .r-name-txt { text-decoration: line-through; }
 .r-epic {
   font-size: 9.5px; color: var(--ink-3);
   border: 1px solid var(--line);
@@ -572,6 +593,13 @@ body.cap-off .hc-lab { display: none !important; }
 .r-warn.err { color: var(--err); }
 .r-warn.warn { color: var(--warn); }
 .r-warn.info { color: var(--ink-3); }
+.r-warn.flag { color: var(--flag, #e8710a); cursor: default; }
+.p-warnitem.flag { color: var(--flag, #e8710a); font-weight: 600; }
+.spv-flag, .pr-flag { color: var(--flag, #e8710a); display: inline-flex; align-items: center; }
+.spv-flag svg.lucide, .pr-flag svg.lucide { width: 13px; height: 13px; }
+.pr-flag { margin-left: 4px; flex: none; }
+.p-flag { display: inline-flex; align-items: center; gap: 4px; color: var(--flag, #e8710a); font-size: 11.5px; font-weight: 600; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--flag, #e8710a) 40%, transparent); border-radius: 999px; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.p-flag svg.lucide { width: 12px; height: 12px; flex: none; }
 
 /* instant hover popover for row alerts */
 #hoverTip {
@@ -644,9 +672,10 @@ body.cap-off .hc-lab { display: none !important; }
 .row.story { height: var(--story-h); }
 .row.story .row-left { background: var(--paper-2); border-bottom-color: var(--line); }
 .row.story .row-lane { border-bottom-color: transparent; }
-/* 85px = grip 18 + chev 20 + num 32 + dot 15 — story titles line up with
-   the feature titles above them */
-.st-pad { width: 85px; flex: 0 0 85px; position: relative; }
+/* 53px = grip 18 + chev 20 + dot 15; the story's #number holds the remaining
+   32px, so story titles still line up with the feature titles above them */
+.st-pad { width: 53px; flex: 0 0 53px; position: relative; }
+.row.story .r-num.st-num { width: 32px; flex: 0 0 32px; text-align: right; padding-right: 7px; }
 /* story rows drag by their grip (reorder, or move to another feature) */
 .st-grip {
   position: absolute; left: 0; top: 0; bottom: 0; width: 18px;
@@ -662,6 +691,12 @@ body.cap-off .hc-lab { display: none !important; }
 }
 .st-title { flex: 1; min-width: 0; font-size: 12px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; }
 .st-title.done { text-decoration: line-through; }
+/* a story title renames on double-click too — the same quiet hover box */
+.st-title-txt {
+  border: 1px solid transparent; border-radius: 5px;
+  padding: 1px 5px; margin-left: -5px;
+}
+.st-title-txt:hover { border-color: var(--line-2); background: var(--surface); }
 .st-del { opacity: 0; border: 0; background: transparent; color: var(--ink-3); font-size: 11px; padding: 0 7px; }
 .row.story:hover .st-del { opacity: 1; }
 .st-del:hover { color: var(--err); }
@@ -675,7 +710,7 @@ body.cap-off .hc-lab { display: none !important; }
   color: var(--ink);
 }
 .st-add-input:focus { outline: none; background: var(--surface); border-radius: 5px; box-shadow: inset 0 0 0 1px var(--line-2); }
-/* a story's own little timeline bar — move/resize like item bars, no ports */
+/* a story's own little timeline bar — move/resize and link like item bars */
 .st-bar {
   position: absolute; top: 5px; height: 17px; border-radius: 4px;
   background: var(--bar-c); opacity: .8; cursor: grab; z-index: 2;
@@ -716,6 +751,21 @@ body.cap-off .hc-lab { display: none !important; }
 .bar.selected { outline: 2px solid var(--ink); outline-offset: 1.5px; }
 /* a selected story wears the outline itself; its feature only keeps the row mark */
 .st-bar.selected { outline: 2px solid var(--ink); outline-offset: 1.5px; z-index: 3; }
+/* link ports on the shorter story bar: same circles, tucked a little closer */
+.st-bar .port {
+  position: absolute; top: 50%; margin-top: -5px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--surface); border: 2px solid var(--blue);
+  box-shadow: 0 1px 3px rgba(24, 36, 48, .3);
+  opacity: 0; transform: scale(.7);
+  transition: opacity .12s, transform .12s;
+  cursor: crosshair; z-index: 4;
+}
+.st-bar .port.p-in { left: -13px; }
+.st-bar .port.p-out { right: -13px; }
+.row:hover .st-bar .port, .st-bar:hover .port { opacity: 1; transform: scale(1); }
+.st-bar .port:hover { background: var(--blue); }
+.st-bar.link-target { outline: 2px solid var(--blue); outline-offset: 2px; }
 /* unscheduled story: its name sits where the feature starts — no box */
 .st-ghost {
   position: absolute; top: 0; bottom: 0; display: flex; align-items: center;
@@ -872,6 +922,9 @@ body.cap-off .hc-lab { display: none !important; }
 }
 /* number + milestone chip sit on one centered line at the top of the panel */
 .p-lead { display: inline-flex; align-items: center; gap: 6px; padding-top: 8px; min-width: 0; }
+/* in the story panel the number follows the breadcrumb, so it rides at the
+   crumb's height instead of the feature panel's centered line */
+.p-top .p-crumb + .p-lead { padding-top: 3px; }
 .p-num { font-family: var(--mono); font-size: 11px; color: var(--ink-3); display: inline-flex; align-items: center; }
 .p-num-edit {
   width: 44px; padding: 2px 3px;
@@ -985,6 +1038,12 @@ textarea.p-text { width: 100%; min-height: 52px; resize: vertical; font-size: 12
 .dep-chip.unknown { background: var(--err-bg); border-color: var(--err-line); }
 .dep-chip .x { border: 0; background: transparent; padding: 0 4px; color: var(--ink-3); font-size: 11px; cursor: pointer; }
 .dep-chip .x:hover { color: var(--err); }
+/* tags: pill chips plus a dashed "add" input, panel-only */
+.tag-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; border: 1px solid var(--line-2); border-radius: 999px; padding: 1px 4px 1px 8px; background: var(--paper-2); }
+.tag-chip button { border: 0; background: none; padding: 0; display: inline-flex; color: var(--ink-3); cursor: pointer; }
+.tag-chip button:hover { color: var(--err); }
+.tag-chip button svg { width: 11px; height: 11px; }
+.p-tag-in { border: 1px dashed var(--line-2); border-radius: 999px; padding: 2px 8px; font: inherit; font-size: 11px; min-width: 90px; background: transparent; }
 .p-check { display: flex; align-items: center; gap: 9px; font-size: 13.5px; color: var(--ink); cursor: pointer; }
 /* Setup → Apps: one row per header tab, icon + name + what it does */
 .su-app { padding: 7px 0; border-top: 1px solid var(--line); }
@@ -1048,6 +1107,7 @@ input[type="checkbox"]:focus-visible {
 .p-actions { display: flex; gap: 8px; margin-top: 18px; }
 .p-stories { display: flex; flex-direction: column; gap: 3px; }
 .p-story { display: flex; align-items: center; gap: 7px; padding: 2px 0; }
+.p-story .r-num.st-num { font-size: 10px; }
 .p-story input[type=text] { flex: 1; border-color: transparent; padding: 3px 6px; font-size: 12.5px; }
 .p-story input[type=text]:hover { border-color: var(--line-2); }
 
@@ -1473,7 +1533,7 @@ body[data-view="scoping"] .row.item .row-left .r-doneck { margin-top: 6px; }
 .sc-name:hover { background: var(--paper-2); }
 .sc-name:focus { background: var(--surface); outline: 2px solid rgba(0, 87, 184, .4); }
 body[data-view="scoping"] .row.item .row-left .r-num { line-height: 26px; }
-body[data-view="scoping"] .row.item .row-left .r-dot { margin-top: 9px; }
+body[data-view="scoping"] .row.item .row-left .r-dot, body[data-view="scoping"] .row.item .row-left .r-type { margin-top: 9px; }
 body[data-view="scoping"] .row.item .row-lane { background: var(--surface); }
 .sc-row { display: flex; height: 100%; }
 .sc-cell {
@@ -1614,6 +1674,9 @@ body[data-view="budget"] .hl-cols .bu-only { text-align: left; padding-left: 4px
 .wz-ed:empty::before { content: attr(data-ph); color: var(--ink-3); pointer-events: none; }
 .wz-ed ul, .wz-ed ol { margin: 4px 0; padding-left: 20px; }
 .wz-ed p, .wz-ed div { margin: 0 0 4px; }
+/* auto-linked URLs in any rich text field (display only; never stored) */
+.auto-link { color: var(--blue); text-decoration: underline; text-underline-offset: 2px; cursor: text; }
+.auto-link:hover { cursor: pointer; }
 .p-story .st-edit.has-body { color: var(--blue); }
 
 /* rich scoping cell mirrors the textarea look */
@@ -2098,6 +2161,11 @@ body.chrome-mac #startBar { padding-left: 96px; }
 }
 .p-crumb:hover { color: var(--blue); box-shadow: none; }
 .p-crumb svg.lucide { width: 13px; height: 13px; }
+.r-type { display: inline-flex; align-items: center; justify-content: center; width: 13px; margin-right: 7px; color: var(--ink-2); flex: 0 0 13px; }
+.r-type i, .r-type svg { width: 13px; height: 13px; }
+.r-type.fill svg { fill: currentColor; }
+.p-typechip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--well); color: var(--ink-2); margin-left: 6px; cursor: pointer; }
+.p-typechip i { width: 12px; height: 12px; }
 .p-rollup { display: flex; gap: 6px; flex-wrap: wrap; }
 .p-rollup .sc-chip {
   display: inline-flex; align-items: center; gap: 6px;
@@ -2220,7 +2288,7 @@ body.no-size .sz-lab { visibility: hidden; }
 #panelPeek svg.lucide { width: 14px; height: 14px; display: block; }
 #panelPeek:hover { color: var(--ink); box-shadow: var(--shadow-1); }
 body[data-view="budget"] #panelPeek, body[data-view="reports"] #panelPeek,
-body[data-view="prio"] #panelPeek, body[data-view="sprints"] #panelPeek,
+body[data-view="prio"] #panelPeek,
 body[data-view="setup"] #panelPeek { display: none; }
 
 /* settings tables (holidays, size options) */
@@ -2230,6 +2298,7 @@ body[data-view="setup"] #panelPeek { display: none; }
   padding: 2px 8px 6px 0; border-bottom: 1px solid var(--line);
 }
 .hol-table td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); }
+.jr-types td svg.lucide { width: 14px; height: 14px; vertical-align: -3px; margin-right: 4px; color: var(--ink-2); }
 .hol-table tr:last-child td { border-bottom: 0; }
 .hol-table .hol-dates { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
 .hol-table .hol-x { width: 30px; text-align: right; }
@@ -2379,12 +2448,23 @@ body[data-view="planning"] #zoomCtl { bottom: calc(var(--res-total, 0px) + 14px)
 }
 .su-rc-head span:nth-child(2), .su-rc-head span:nth-child(3) { width: 76px; text-align: center; }
 
+.su-hlevels { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.su-hlevel { display: grid; grid-template-columns: 160px 1fr; gap: 10px; align-items: center; }
+.su-hchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.su-hchip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--well); color: var(--ink-2); font-size: 12.5px; cursor: pointer; }
+.su-hchip.on { background: var(--surface); color: var(--ink); border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset; }
+.su-hchip i { width: 13px; height: 13px; }
+.su-sub { font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
+.su-hicon { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; }
+.su-hcolor { width: 22px; height: 22px; padding: 0; border: 1px solid var(--line-2); border-radius: 6px; margin-left: 4px; vertical-align: middle; background: none; }
+.su-htypes td:first-child { width: 36px; }
+
 /* ------------------------------------------------- reports dashboard */
 #reportsView { display: none; }
 
 /* ------------------------------------------------------------- sprinting */
 #sprintView { display: none; }
-body[data-view="sprints"] #sprintView { display: flex; flex: 1; min-height: 0; overflow: hidden; background: var(--paper); }
+body[data-view="sprints"] #sprintView { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: var(--paper); }
 body[data-view="sprints"] #board,
 body[data-view="sprints"] #leftRzLine,
 body[data-view="sprints"] #resPanel,
@@ -2416,7 +2496,7 @@ body[data-view="sprints"] #rowFilter { display: none; }
   background: var(--blue); margin-left: 6px; vertical-align: middle;
 }
 /* main: one scrolling page of sprint sections */
-.spv-main { flex: 1; min-width: 0; overflow: auto; padding: 0 22px 60px; }
+.spv-main { flex: 1; min-width: 0; max-width: 1180px; overflow: auto; padding: 0 22px 60px; } /* rows read badly past ~1200px */
 /* the toolbar rides the top of the scroll area; section headers tuck under it */
 .spv-main .pr-bar { position: sticky; top: 0; z-index: 3; background: var(--paper); padding: 18px 0 6px; margin: 0 0 8px; }
 .spv-sec { margin-bottom: 26px; border-radius: 10px; }
@@ -2446,18 +2526,28 @@ body[data-view="sprints"] #rowFilter { display: none; }
 .spv-grip svg { width: 14px; height: 14px; }
 .spv-row:hover .spv-grip { color: var(--ink-3); }
 .spv-row .r-num { flex: none; width: 34px; }
-.spv-row .r-dot { margin-right: 0; }
+.spv-row .r-dot, .spv-row .r-type { margin-right: 0; }
 .spv-title {
-  flex: 1; min-width: 80px; border: 1px solid transparent; background: transparent;
+  flex: 0 1 auto; max-width: 45%; min-width: 60px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border: 1px solid transparent; background: transparent;
   font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink); padding: 3px 6px; border-radius: 6px;
 }
-.spv-title:hover { border-color: var(--line-2); background: var(--surface); }
+.spv-title.spv-ph { color: var(--ink-3); font-weight: 500; }
+.spv-title:hover { border-color: var(--line-2); background: var(--surface); cursor: text; }
 .spv-title:focus { outline: none; border-color: var(--blue); background: var(--surface); }
-.spv-st .spv-title { font-weight: 500; margin-left: 40px; }
+input.spv-title { max-width: 60%; }
+/* the filler after the sprint tag pushes every chip to the right edge */
+.spv-fill { flex: 1 1 auto; min-width: 8px; }
+.spv-st .spv-title { font-weight: 500; }
+.spv-st .r-num.st-num { width: 34px; margin-left: 26px; text-align: right; padding-right: 7px; }
 .spv-tag {
   flex: none; font-size: 10px; font-weight: 600; color: var(--ink-3);
   border: 1px dashed var(--line-3); border-radius: 999px; padding: 1px 7px; white-space: nowrap;
 }
+.spv-snum { border-style: solid; color: var(--ink-2); }
+.spv-info { display: inline-flex; flex: none; color: var(--ink-3); cursor: help; }
+.spv-info svg { width: 13px; height: 13px; }
 .spv-chip {
   display: inline-flex; align-items: center; gap: 5px; flex: none; max-width: 160px;
   border: 1px solid var(--line-2); border-radius: 999px; padding: 2px 9px;
@@ -2466,16 +2556,14 @@ body[data-view="sprints"] #rowFilter { display: none; }
 }
 .spv-chip:hover { border-color: var(--line-3); background: var(--surface); }
 .spv-chip svg { width: 11px; height: 11px; flex: none; }
-.spv-dates { flex: none; width: 120px; font-size: 10.5px; color: var(--ink-3); font-family: var(--mono); text-align: right; }
 /* estimate chips (size · priority · risk · weeks) on Sprinting rows */
 .spv-est { display: inline-flex; align-items: center; gap: 2px; flex: none; }
-.spv-phase { flex: none; width: 120px; font-size: 10.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
 .spv-feat {
   display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px 0 28px;
   background: var(--paper-2); border-bottom: 1px solid var(--line); font-size: 12px; font-weight: 700; color: var(--ink);
 }
 .spv-feat .r-num { width: 34px; }
-.spv-feat .r-dot { margin-right: 0; }
+.spv-feat .r-dot, .spv-feat .r-type { margin-right: 0; }
 .spv-featname { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .spv-empty { padding: 14px 12px; font-size: 12px; color: var(--ink-3); font-style: italic; }
 .spv-add {
@@ -2492,7 +2580,7 @@ body[data-view="prio"] #leftRzLine,
 body[data-view="prio"] #resPanel,
 body[data-view="prio"] #filterCell .filter-kbd,
 body[data-view="prio"] #rowFilter { display: none; }
-.sp-page { padding: 18px 22px 40px; max-width: 1500px; margin: 0 auto; }
+.sp-page { padding: 18px 22px 40px; } /* full width: the board grows with the window */
 .sp-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
 .sp-toolbar .dd-btn { min-width: 230px; }
 .sp-modeseg button { padding: 6px 12px; }
@@ -2611,6 +2699,7 @@ body[data-view="prio"] #rowFilter { display: none; }
 }
 #prioView .sp-col { display: flex; flex-direction: column; padding: 10px; }
 #prioView .sp-colbody { flex: 0 0 auto; } /* Add stays under the cards; the column surface stretches on */
+.pr-empty { color: var(--ink-3); font-size: 12px; font-style: italic; padding: 10px 6px; text-align: center; }
 .pr-card {
   cursor: grab;
   border-radius: 10px;
@@ -2624,10 +2713,14 @@ body[data-view="prio"] #rowFilter { display: none; }
   border-color: color-mix(in srgb, var(--line-3) 60%, var(--ws-c, var(--line-3)));
   box-shadow: 0 2px 4px rgba(0, 0, 0, .08), 0 6px 18px rgba(0, 0, 0, .07);
 }
+/* the card the panel shows */
+.pr-card.selected { border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-soft), 0 3px 10px rgba(0, 0, 0, .05); }
 .pr-card input, .pr-card [contenteditable] {
   border-color: transparent; background: transparent;
   padding: 3px 5px; margin: 0 -5px; width: calc(100% + 10px);
 }
+.pr-head { display: flex; align-items: center; gap: 2px; }
+.pr-head .pr-title { flex: 1; min-width: 0; width: auto; margin: 0 -5px 0 0; }
 .pr-card input:hover, .pr-card [contenteditable]:hover { border-color: var(--line-2); background: var(--paper-2); }
 .pr-card input:focus, .pr-card [contenteditable]:focus { border-color: var(--blue); background: var(--paper-2); }
 .pr-title { font-size: 12.5px; font-weight: 600; color: var(--ink); }
@@ -2857,8 +2950,23 @@ body[data-view="scoping"] .row.story .sc-edit { height: 50px; min-height: 50px; 
 .pr-stories { display: flex; flex-direction: column; gap: 2px; margin-top: 7px; }
 .pr-story { display: flex; align-items: center; gap: 5px; }
 .pr-story .pr-st-ico { width: 11px; height: 11px; color: var(--ink-3); flex: none; margin-left: 2px; }
+.pr-story .r-num.st-num, .pr-stcard .pr-head .r-num.st-num { font-size: 10px; }
 .pr-story .pr-st-title { flex: 1; min-width: 0; font-size: 11.5px; padding: 2px 4px; }
 .pr-story .r-risk, .pr-story .r-size, .pr-story .r-wk { flex: none; }
+/* card titles are text until a double-click (or Rename…) opens the editor:
+   they sit exactly where the input did and hover the same way */
+.pr-card span.pr-title, .pr-card span.pr-st-title {
+  display: block; min-width: 0; width: calc(100% + 10px);
+  border: 1px solid transparent; border-radius: 6px;
+  padding: 3px 5px; margin: 0 -5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text;
+}
+.pr-head span.pr-title { flex: 1; width: auto; margin: 0 -5px 0 0; }
+.pr-story span.pr-st-title { flex: 1; width: auto; padding: 2px 4px; margin: 0; }
+.pr-card span.pr-title:hover, .pr-card span.pr-st-title:hover {
+  border-color: var(--line-2); background: var(--paper-2);
+}
+.pr-ph { color: var(--ink-3); font-weight: 500; }
 .pr-st-add {
   align-self: flex-start; border: 0; background: transparent; box-shadow: none;
   color: var(--ink-3); font-size: 11px; padding: 2px 4px; margin-top: 1px;
@@ -3134,6 +3242,11 @@ html[data-theme="dark"] .ai-bubble { background: rgba(0, 100, 210, .18); border-
 .ai-body pre { background: var(--card); border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; overflow-x: auto; margin: 0 0 8px; }
 .ai-body pre code { background: none; border: 0; padding: 0; }
 .ai-body blockquote { margin: 0 0 8px; padding: 2px 10px; border-left: 3px solid var(--line-2); color: var(--ink-2); }
+.ai-tbl { overflow-x: auto; margin: 0 0 8px; }
+.ai-tbl:last-child { margin-bottom: 0; }
+.ai-tbl table { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+.ai-tbl th, .ai-tbl td { border: 1px solid var(--line); padding: 3px 8px; text-align: left; vertical-align: top; white-space: nowrap; }
+.ai-tbl th { background: var(--card); font-weight: 600; }
 .ai-body a { color: var(--blue); }
 .ai-ref { font-family: var(--mono); font-size: 12px; text-decoration: none; border-bottom: 1px dotted var(--blue); }
 .ai-ref:hover { background: var(--blue-soft); }

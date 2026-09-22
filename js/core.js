@@ -29,8 +29,11 @@
     fibonacci: {
       name: 'Story points',
       hint: 'Fibonacci scale (Scrum) — uncertainty grows with size',
-      sizes: ['1', '2', '3', '5', '8', '13'],
-      days: { 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 }
+      sizes: ['0', '0.5', '1', '2', '3', '5', '8', '13'],
+      days: { '0': 0, '0.5': 0.5, 1: 1, 2: 2, 3: 3, 5: 5, 8: 10, 13: 20 },
+      // a 0-point estimate is a story-level idea (a placeholder, a spike
+      // already done, tracking-only work): features never offer it
+      storyOnly: ['0']
     },
     points5: {
       name: 'Points 1–5',
@@ -83,9 +86,13 @@
     var def = RM.SIZE_SCHEMES[scheme];
     if (!def || scheme === 'custom') return;
     var m = state.meta, k = sizeKeys(kind);
+    var skip = (kind !== 'story' && def.storyOnly) || [];
     m[k.scheme] = scheme;
-    m[k.order] = def.sizes.slice();
-    m[k.days] = RM.clone(def.days);
+    m[k.order] = def.sizes.filter(function (l) { return skip.indexOf(l) === -1; });
+    m[k.days] = {};
+    Object.keys(def.days).forEach(function (l) {
+      if (skip.indexOf(l) === -1) m[k.days][l] = def.days[l];
+    });
   };
   RM.renameSizeOption = function (state, oldLabel, newLabel, kind) {
     var m = state.meta, k = sizeKeys(kind);
@@ -100,7 +107,7 @@
     var m = state.meta, k = sizeKeys(kind);
     if (!label || m[k.order].indexOf(label) !== -1) return;
     m[k.order].push(label);
-    m[k.days][label] = isFinite(+days) && +days > 0 ? +days : 5;
+    m[k.days][label] = isFinite(+days) && +days >= 0 ? +days : 5;
     m[k.scheme] = 'custom';
   };
   RM.removeSizeOption = function (state, label, kind) {
@@ -110,6 +117,31 @@
     eachOfKind(state, kind, function (o) { if (o.size === label) o.size = null; });
     m[k.scheme] = 'custom';
   };
+  // Documents saved before Fibonacci grew its small steps pick them up, as
+  // long as they still hold an untouched old default order (an edited scale is
+  // the project's own — leave it be; Setup can add the steps by hand).
+  // Features get 0.5 only; the 0 step is story-scale work.
+  RM.FIB_PRE_HALF_ORDER = ['1', '2', '3', '5', '8', '13'];
+  RM.FIB_PRE_ZERO_ORDER = ['0.5', '1', '2', '3', '5', '8', '13'];
+  function sameOrder(o, want) {
+    if (o.length !== want.length) return false;
+    for (var i = 0; i < o.length; i++) if (o[i] !== want[i]) return false;
+    return true;
+  }
+  function addSmallFibSteps(m, k, kind) {
+    if (m[k.scheme] !== 'fibonacci' || !Array.isArray(m[k.order])) return;
+    var o = m[k.order];
+    var steps = [];
+    if (sameOrder(o, RM.FIB_PRE_HALF_ORDER)) steps = kind === 'story' ? ['0.5', '0'] : ['0.5'];
+    else if (kind === 'story' && sameOrder(o, RM.FIB_PRE_ZERO_ORDER)) steps = ['0'];
+    if (!steps.length) return;
+    m[k.days] = m[k.days] || {};
+    steps.forEach(function (l) {
+      o.unshift(l);
+      m[k.days][l] = RM.SIZE_SCHEMES.fibonacci.days[l];
+    });
+  }
+
   RM.RISK_ORDER = ['L', 'M', 'H']; // low / medium / high (severity, not a size)
 
   // Assessment ("Risk") column schemes. Most projects track nothing here —
@@ -254,6 +286,194 @@
   RM.msStyleOf = function (it) {
     return RM.MS_STYLES.indexOf(it && it.msStyle) > 0 ? it.msStyle : 'diamond';
   };
+  // ---- item types & hierarchy. Three fixed storage levels (epic tag →
+  // item → story); each level lists the types it accepts. A type is a
+  // label + icon + Jira issue type name; behavior always follows the level.
+  RM.LEVEL_KEYS = ['epic', 'feature', 'story'];
+  RM.DEFAULT_ITEM_TYPES = [
+    { key: 'epic', label: 'Epic', icon: 'layers', jira: 'Epic' },
+    { key: 'feature', label: 'Feature', icon: 'square', jira: 'Story' },
+    { key: 'bug', label: 'Bug', icon: 'bug', jira: 'Bug' },
+    { key: 'task', label: 'Task', icon: 'check-square', jira: 'Task' },
+    { key: 'story', label: 'Story', icon: 'bookmark', jira: 'Sub-task' },
+    { key: 'subtask', label: 'Subtask', icon: 'corner-down-right', jira: 'Sub-task' }
+  ];
+  // icons the first release shipped as defaults; stored documents still on
+  // them pick up the new default glyphs
+  RM.LEGACY_TYPE_ICONS = { feature: 'rows-3', story: 'list-tree' };
+  RM.DEFAULT_HIERARCHY_LEVELS = [
+    { key: 'epic', label: 'Epic', types: ['epic'] },
+    { key: 'feature', label: 'Feature', types: ['feature', 'bug', 'task'] },
+    { key: 'story', label: 'Story', types: ['story', 'subtask', 'bug'] }
+  ];
+  RM.itemTypes = function (state) {
+    var m = state && state.meta;
+    return (m && Array.isArray(m.itemTypes) && m.itemTypes.length) ? m.itemTypes : RM.DEFAULT_ITEM_TYPES;
+  };
+  RM.itemType = function (state, key) {
+    var list = RM.itemTypes(state);
+    for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i];
+    return null;
+  };
+  RM.levelOf = function (state, kind) {
+    var h = state && state.meta && state.meta.hierarchy;
+    var levels = (h && Array.isArray(h.levels) && h.levels.length) ? h.levels : RM.DEFAULT_HIERARCHY_LEVELS;
+    kind = kind || 'feature';
+    for (var i = 0; i < levels.length; i++) if (levels[i].key === kind) return levels[i];
+    return RM.DEFAULT_HIERARCHY_LEVELS[RM.LEVEL_KEYS.indexOf(kind) === -1 ? 1 : RM.LEVEL_KEYS.indexOf(kind)];
+  };
+  RM.levelLabel = function (state, kind, plural) {
+    var lbl = RM.levelOf(state, kind).label || kind;
+    if (!plural) return lbl;
+    if (/s$/i.test(lbl)) return lbl;
+    if (/y$/i.test(lbl)) return lbl.slice(0, -1) + 'ies';
+    return lbl + 's';
+  };
+  RM.anyTypeAnyLevel = function (state) {
+    var h = state && state.meta && state.meta.hierarchy;
+    return !!(h && h.anyTypeAnyLevel);
+  };
+  RM.typesFor = function (state, kind) {
+    var all = RM.itemTypes(state);
+    if (RM.anyTypeAnyLevel(state)) return all.slice();
+    var keys = RM.levelOf(state, kind).types || [];
+    return keys.map(function (k) { return RM.itemType(state, k); }).filter(Boolean);
+  };
+  RM.defaultTypeFor = function (state, kind) {
+    var lv = RM.levelOf(state, kind).types || [];
+    var first = lv.length ? RM.itemType(state, lv[0]) : null;
+    if (first) return first.key;
+    var dflt = RM.DEFAULT_HIERARCHY_LEVELS[RM.LEVEL_KEYS.indexOf(kind)] || RM.DEFAULT_HIERARCHY_LEVELS[1];
+    return RM.itemType(state, dflt.types[0]) ? dflt.types[0] : RM.itemTypes(state)[0].key;
+  };
+  // the type record of an item, story, or (kind 'epic') an epic NAME
+  RM.typeOf = function (state, obj, kind) {
+    kind = kind || 'feature';
+    var key = kind === 'epic'
+      ? (state && state.epicTypes ? state.epicTypes[obj] : null)
+      : (obj && obj.type);
+    return RM.itemType(state, key) || RM.itemType(state, RM.defaultTypeFor(state, kind)) || RM.itemTypes(state)[0];
+  };
+  RM.jiraTypeName = function (state, typeKey) {
+    var t = RM.itemType(state, typeKey);
+    return t ? (t.jira || t.label) : String(typeKey || '');
+  };
+  // normalize meta.itemTypes / meta.hierarchy in place (called from
+  // normalizeState before items are mapped; safe to call again any time)
+  RM.normalizeTypes = function (state) {
+    var m = state.meta;
+    var legacy = m.jira && typeof m.jira === 'object' ? m.jira : null;
+    var hadTypes = Array.isArray(m.itemTypes) && m.itemTypes.length > 0;
+    var seenKey = {};
+    var types = (hadTypes ? m.itemTypes : RM.DEFAULT_ITEM_TYPES).map(function (t) {
+      if (!t || typeof t !== 'object') return null;
+      var key = String(t.key || '').trim();
+      if (!key || seenKey[key]) return null;
+      seenKey[key] = true;
+      var icon = String(t.icon || 'tag');
+      if (RM.LEGACY_TYPE_ICONS[key] === icon) icon = RM.DEFAULT_ITEM_TYPES.filter(function (d) { return d.key === key; })[0].icon;
+      return { key: key, label: String(t.label || key), icon: icon, jira: String(t.jira || ''), color: resolveColor(t.color) || '' };
+    }).filter(Boolean);
+    if (!types.length) types = RM.DEFAULT_ITEM_TYPES.map(function (t) { return { key: t.key, label: t.label, icon: t.icon, jira: t.jira, color: '' }; });
+    types.forEach(function (t, i) { if (!t.color) t.color = RM.HASH_PALETTE[i % RM.HASH_PALETTE.length]; });
+    if (!hadTypes && legacy) {
+      // one-time migration of the old three Jira type names
+      var mig = { epic: legacy.epicType, feature: legacy.featureType, story: legacy.storyType };
+      types.forEach(function (t) { if (mig[t.key]) t.jira = String(mig[t.key]); });
+    }
+    m.itemTypes = types;
+    var h = m.hierarchy && typeof m.hierarchy === 'object' ? m.hierarchy : {};
+    var given = {};
+    (Array.isArray(h.levels) ? h.levels : []).forEach(function (l) { if (l && l.key) given[l.key] = l; });
+    m.hierarchy = {
+      levels: RM.DEFAULT_HIERARCHY_LEVELS.map(function (d) {
+        var g = given[d.key] || {};
+        var list = (Array.isArray(g.types) ? g.types : []).filter(function (k) { return !!seenKey[k]; });
+        if (!list.length) list = d.types.filter(function (k) { return !!seenKey[k]; });
+        if (!list.length) list = [types[0].key];
+        return { key: d.key, label: String(g.label || d.label), types: list };
+      }),
+      anyTypeAnyLevel: !!h.anyTypeAnyLevel
+    };
+    var et = {};
+    if (state.epicTypes && typeof state.epicTypes === 'object') {
+      Object.keys(state.epicTypes).forEach(function (name) { if (seenKey[state.epicTypes[name]]) et[name] = state.epicTypes[name]; });
+    }
+    state.epicTypes = et;
+  };
+  function typeSlug(label) {
+    return String(label || 'type').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'type';
+  }
+  RM.addItemType = function (state, label, icon, jira) {
+    RM.normalizeTypes(state);
+    var base = typeSlug(label), key = base, sfx = 2;
+    while (RM.itemType(state, key)) key = base + '-' + (sfx++);
+    var n = state.meta.itemTypes.length;
+    state.meta.itemTypes.push({ key: key, label: String(label || 'New type'), icon: String(icon || 'tag'), jira: String(jira || ''), color: RM.HASH_PALETTE[n % RM.HASH_PALETTE.length] });
+    return key;
+  };
+  RM.renameItemType = function (state, key, label) {
+    var t = RM.itemType(state, key);
+    if (t && String(label || '').trim()) t.label = String(label).trim();
+  };
+  RM.setItemTypeIcon = function (state, key, icon) {
+    var t = RM.itemType(state, key);
+    if (t) t.icon = String(icon || 'tag');
+  };
+  RM.setItemTypeColor = function (state, key, color) {
+    var t = RM.itemType(state, key);
+    var hex = resolveColor(color);
+    if (t && hex) t.color = hex;
+  };
+  RM.colorForType = function (state, key) {
+    var t = RM.itemType(state, key);
+    return (t && resolveColor(t.color)) || RM.PALETTE.neutral;
+  };
+  RM.setItemTypeJira = function (state, key, jira) {
+    var t = RM.itemType(state, key);
+    if (t) t.jira = String(jira || '').trim();
+  };
+  RM.setLevelLabel = function (state, kind, label) {
+    RM.normalizeTypes(state);
+    var lv = RM.levelOf(state, kind);
+    if (String(label || '').trim()) lv.label = String(label).trim();
+  };
+  RM.setAnyTypeAnyLevel = function (state, on) {
+    RM.normalizeTypes(state);
+    state.meta.hierarchy.anyTypeAnyLevel = !!on;
+  };
+  // allow / disallow a type at a level; refuses to empty a level
+  RM.setTypeAllowed = function (state, kind, key, on) {
+    RM.normalizeTypes(state);
+    if (!RM.itemType(state, key)) return false;
+    var lv = RM.levelOf(state, kind);
+    var i = lv.types.indexOf(key);
+    if (on) { if (i === -1) lv.types.push(key); return true; }
+    if (i === -1) return true;
+    if (lv.types.length === 1) return false;
+    lv.types.splice(i, 1);
+    return true;
+  };
+  // remove a type: refused while it is the only type of some level;
+  // otherwise items, stories and epics of that type fall back to their
+  // level default and the key leaves every level list
+  RM.removeItemType = function (state, key) {
+    RM.normalizeTypes(state);
+    if (!RM.itemType(state, key)) return false;
+    var levels = state.meta.hierarchy.levels;
+    if (levels.some(function (l) { return l.types.length === 1 && l.types[0] === key; })) return false;
+    levels.forEach(function (l) { l.types = l.types.filter(function (k) { return k !== key; }); });
+    state.meta.itemTypes = state.meta.itemTypes.filter(function (t) { return t.key !== key; });
+    var fF = RM.defaultTypeFor(state, 'feature'), fS = RM.defaultTypeFor(state, 'story'), fE = RM.defaultTypeFor(state, 'epic');
+    (state.items || []).forEach(function (it) {
+      if (it.type === key) it.type = fF;
+      (it.stories || []).forEach(function (s) { if (s.type === key) s.type = fS; });
+    });
+    Object.keys(state.epicTypes || {}).forEach(function (name) {
+      if (state.epicTypes[name] === key) { if (fE === 'epic') delete state.epicTypes[name]; else state.epicTypes[name] = fE; }
+    });
+    return true;
+  };
   RM.SCOPE_FIXED_KEYS = ['assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream', 'epic'];
   RM.SCOPE_DEFAULT_ORDER = ['description', 'ac', 'epic', 'assignees', 'size', 'risk', 'priority', 'duration', 'start', 'deadline', 'workstream'];
 
@@ -316,7 +536,7 @@
   };
   // What bar colors follow. The mode is a UI preference the app sets on
   // load; every renderer and export reads colorForItem, so they all agree.
-  RM.COLOR_MODES = ['workstream', 'epic', 'assignee', 'priority'];
+  RM.COLOR_MODES = ['workstream', 'epic', 'assignee', 'priority', 'type'];
   var colorMode = 'workstream';
   RM.setColorMode = function (mode) { colorMode = RM.COLOR_MODES.indexOf(mode) !== -1 ? mode : 'workstream'; };
   RM.colorMode = function () { return colorMode; };
@@ -408,6 +628,7 @@
       return RM.colorForMember(m);
     }
     if (colorMode === 'priority') return RM.colorForPriority(state, it);
+    if (colorMode === 'type') return RM.colorForType(state, RM.typeOf(state, it, 'feature').key);
     return RM.colorForWs(state, it.workstream);
   };
   // legend entries for a set of items under the active color mode:
@@ -425,6 +646,9 @@
         var sch = RM.prioritySchemeOf(state);
         var lbl = sch === 'none' ? 'No priority' : sch === 'rice' ? 'RICE' : (it.priority || 'No priority');
         add(lbl, RM.colorForPriority(state, it));
+      } else if (colorMode === 'type') {
+        var ty = RM.typeOf(state, it, 'feature');
+        add(ty.label, RM.colorForType(state, ty.key));
       } else add(it.workstream || RM.defaultWsName(state), RM.colorForWs(state, it.workstream));
     });
     if (colorMode === 'workstream') {
@@ -994,6 +1218,54 @@
     return k ? k : null;
   };
 
+  // ---- tags: free-form labels on features and stories. Accepts an array or a
+  // comma-separated string; trims, drops empties, caps each at 40 chars and
+  // de-duplicates case-insensitively (the first spelling wins).
+  RM.TAG_MAX = 40;
+  RM.normalizeTags = function (v) {
+    var raw;
+    if (Array.isArray(v)) raw = v;
+    else if (typeof v === 'string') raw = v.split(',');
+    else return [];
+    var out = [], seen = {};
+    raw.forEach(function (t) {
+      if (typeof t !== 'string') return;
+      var s = t.trim().slice(0, RM.TAG_MAX);
+      if (!s) return;
+      var k = s.toLowerCase();
+      if (seen[k]) return;
+      seen[k] = true;
+      out.push(s);
+    });
+    return out;
+  };
+  // every tag used anywhere in the document, sorted case-insensitively
+  RM.allTags = function (state) {
+    var seen = {}, out = [];
+    function take(list) {
+      (list || []).forEach(function (t) {
+        var k = String(t).toLowerCase();
+        if (seen[k]) return;
+        seen[k] = true;
+        out.push(t);
+      });
+    }
+    ((state && state.items) || []).forEach(function (it) {
+      take(it.tags);
+      (it.stories || []).forEach(function (st) { take(st.tags); });
+    });
+    out.sort(function (a, b) {
+      var x = a.toLowerCase(), y = b.toLowerCase();
+      return x < y ? -1 : x > y ? 1 : 0;
+    });
+    return out;
+  };
+  RM.setTags = function (state, target, tags) {
+    if (!target) return [];
+    target.tags = RM.normalizeTags(tags);
+    return target.tags;
+  };
+
   RM.htmlToText = function (html) {
     if (!html) return '';
     var t = String(html)
@@ -1098,6 +1370,15 @@
   };
 
   // ---------------------------------------------------------------- state
+  // an attention flag: null, or { reason } (reason may be empty). Accepts
+  // true / a string / an object so hand-written JSON and the AI both work.
+  RM.normalizeFlag = function (f) {
+    if (!f) return null;
+    if (f === true) return { reason: '' };
+    if (typeof f === 'string') return { reason: f.trim() };
+    if (typeof f === 'object') return { reason: typeof f.reason === 'string' ? f.reason.trim() : '' };
+    return null;
+  };
   RM.normalizeState = function (raw) {
     var state = RM.clone(raw || {});
     state.meta = state.meta || {};
@@ -1286,12 +1567,17 @@
         return true;
       });
     } else {
-      m.sizeOrder = (RM.SIZE_SCHEMES[m.sizeScheme].sizes || RM.SIZE_ORDER).slice();
+      var featureSkip = RM.SIZE_SCHEMES[m.sizeScheme].storyOnly || [];
+      m.sizeOrder = (RM.SIZE_SCHEMES[m.sizeScheme].sizes || RM.SIZE_ORDER)
+        .filter(function (l) { return featureSkip.indexOf(l) === -1; })
+        .slice();
     }
+    addSmallFibSteps(m, sizeKeys('feature'), 'feature');
     var schemeDays = RM.SIZE_SCHEMES[m.sizeScheme].days || {};
     m.sizeOrder.forEach(function (l) {
-      if (!isFinite(+m.sizeDays[l]) || +m.sizeDays[l] <= 0) {
-        m.sizeDays[l] = schemeDays[l] || 5;
+      var v = m.sizeDays[l];
+      if (v == null || v === '' || !isFinite(+v) || +v < 0) {
+        m.sizeDays[l] = schemeDays[l] != null ? schemeDays[l] : 5;
       }
     });
     // the story scale: a doc from before it existed hands stories the
@@ -1320,11 +1606,13 @@
     } else {
       m.storySizeOrder = (RM.SIZE_SCHEMES[m.storySizeScheme].sizes || []).slice();
     }
-    var storySchemeDays = RM.SIZE_SCHEMES[m.storySizeScheme].days || {};
     m.storySizeDays = m.storySizeDays && typeof m.storySizeDays === 'object' ? m.storySizeDays : {};
+    addSmallFibSteps(m, sizeKeys('story'), 'story');
+    var storySchemeDays = RM.SIZE_SCHEMES[m.storySizeScheme].days || {};
     m.storySizeOrder.forEach(function (l) {
-      if (!isFinite(+m.storySizeDays[l]) || +m.storySizeDays[l] <= 0) {
-        m.storySizeDays[l] = storySchemeDays[l] || 5;
+      var sv = m.storySizeDays[l];
+      if (sv == null || sv === '' || !isFinite(+sv) || +sv < 0) {
+        m.storySizeDays[l] = storySchemeDays[l] != null ? storySchemeDays[l] : 5;
       }
     });
     // workstream feature switch — ON unless the project turned it off
@@ -1405,6 +1693,7 @@
     state.phases.forEach(function (p) { phaseIds[p.id] = true; });
     var fallbackPhase = state.phases[0].id;
 
+    RM.normalizeTypes(state);
     var riskOrder = RM.RISK_SCHEMES[m.riskScheme].order || RM.RISK_ORDER;
     var prioOrder = RM.PRIORITY_SCHEMES[m.priorityScheme].order || [];
     var storyPrioOrder = RM.PRIORITY_SCHEMES[m.storyPriorityScheme].order || [];
@@ -1434,7 +1723,8 @@
         })(),
         depsText: it.depsText || [],
         extDeps: it.extDeps || '',
-        size: it.size && RM.SIZE_ORDER.indexOf(it.size) !== -1 ? it.size : (it.size || null),
+        // milestones are dates, not work: they carry neither size nor priority
+        size: it.milestone ? null : (it.size && RM.SIZE_ORDER.indexOf(it.size) !== -1 ? it.size : (it.size || null)),
         // assessment value — validated against the active scheme's options;
         // legacy t-shirt risk values migrate: XS/S → L, XL → H
         risk: (function () {
@@ -1447,7 +1737,7 @@
           }
           return null;
         })(),
-        priority: it.priority && prioOrder.indexOf(String(it.priority).toUpperCase()) !== -1
+        priority: !it.milestone && it.priority && prioOrder.indexOf(String(it.priority).toUpperCase()) !== -1
           ? String(it.priority).toUpperCase() : null,
         // hard deadline: a calendar date (ISO), so it survives work-week edits
         deadline: /^\d{4}-\d{2}-\d{2}$/.test(String(it.deadline || '')) ? String(it.deadline) : null,
@@ -1456,6 +1746,10 @@
         teamType: it.teamType != null && it.teamType !== '' ? String(it.teamType) : '',
         // milestones are fixed dates: zero-duration diamonds on the timeline
         milestone: !!it.milestone,
+        // item type (Feature / Bug / …): a key into meta.itemTypes. Unknown
+        // keys fall back to the level default; a known-but-disallowed key
+        // is kept (validation warns) so turning the switch off is lossless
+        type: RM.itemType(state, it.type) ? it.type : RM.defaultTypeFor(state, 'feature'),
         // milestone marker shape; absent = diamond (kept on bars so a
         // feature converted back and forth remembers its choice)
         msStyle: RM.MS_STYLES.indexOf(it.msStyle) > 0 ? it.msStyle : undefined,
@@ -1465,6 +1759,8 @@
         // risk t-shirt is planning metadata only — it never pads the schedule
         riskDays: 0,
         locked: !!it.locked,
+        // attention flag (orange flag on the row) with an optional reason
+        flag: RM.normalizeFlag(it.flag),
         // custom scoping-column values, keyed by column key
         custom: (function () {
           var out = {};
@@ -1487,14 +1783,34 @@
         // team-member ids working on this feature (validated against the
         // roster once the team is normalized below)
         assignees: Array.isArray(it.assignees) ? it.assignees.map(String) : [],
+        // free-form labels (see RM.normalizeTags)
+        tags: RM.normalizeTags(it.tags),
         done: !!it.done,
         stories: (it.stories || []).map(function (s) {
           // stories may carry their own little timeline (startDay/durDays);
           // both null = no timeline (the default)
-          var sched = s.startDay != null && isFinite(s.startDay) && s.durDays > 0;
+          // a scheduled story always spans at least one day — a 0-point story
+          // saved with durDays 0 stays on the timeline rather than vanishing
+          var sched = s.startDay != null && isFinite(s.startDay) && s.durDays != null && isFinite(s.durDays) && s.durDays >= 0;
           return {
             id: s.id || RM.uid('s'), title: s.title || '', done: !!s.done,
             order: typeof s.order === 'string' && s.order ? s.order : null,
+            flag: RM.normalizeFlag(s.flag),
+            // stories are numbered from the same pool as features; a missing
+            // or colliding number is assigned by RM.dedupeStoryNums below
+            num: s.num != null && isFinite(s.num) ? Math.round(s.num) : null,
+            // story -> story dependencies by story number (same pool as
+            // features); unknown numbers stay so validation can point at them
+            deps: (function () {
+              var seen = {}, out = [];
+              (Array.isArray(s.deps) ? s.deps : []).forEach(function (d) {
+                var n = parseInt(d, 10);
+                if (!isFinite(n) || n < 1 || seen[n]) return;
+                seen[n] = true; out.push(n);
+              });
+              return out;
+            })(),
+            type: RM.itemType(state, s.type) ? s.type : RM.defaultTypeFor(state, 'story'),
             jiraKey: RM.jiraKeyOf(s.jiraKey),
             size: s.size || null,
             priority: s.priority && storyPrioOrder.indexOf(String(s.priority).toUpperCase()) !== -1
@@ -1503,6 +1819,7 @@
             risk: s.risk && riskOrder.indexOf(String(s.risk).toUpperCase()) !== -1
               ? String(s.risk).toUpperCase() : null,
             assignees: Array.isArray(s.assignees) ? s.assignees.map(String) : [],
+            tags: RM.normalizeTags(s.tags),
             // stories carry their own hard deadline, same shape as items
             deadline: /^\d{4}-\d{2}-\d{2}$/.test(String(s.deadline || '')) ? String(s.deadline) : null,
             // rich-text (sanitized HTML) story body + acceptance criteria
@@ -1522,7 +1839,7 @@
             startDay: sched ? Math.max(0, Math.round(s.startDay)) : null,
             // an unscheduled story may still carry a duration (used when it
             // lands on the timeline, shown in the scoping grid)
-            durDays: sched ? Math.round(s.durDays)
+            durDays: sched ? Math.max(1, Math.round(s.durDays))
               : (s.durDays != null && isFinite(s.durDays) && s.durDays > 0 ? Math.round(s.durDays) : null)
           };
         })
@@ -1534,9 +1851,11 @@
       RM.ensureOrder(it.stories);
     });
     // canonical array order first, so a num collision resolves the same way
-    // on every machine; then deps (which reference ids) can be resolved
+    // on every machine; then deps (which reference ids) can be resolved.
+    // Stories draw from the same number pool and are settled the same way.
     RM.ensureOrder(state.items);
     RM.dedupeNums(state);
+    RM.dedupeStoryNums(state);
     RM.migrateDepsToIds(state);
 
     state.epicColors = state.epicColors || {}; // legacy — display now keys off workstream
@@ -1708,9 +2027,38 @@
     return null;
   };
 
+  // Stories are numbered from the same pool as features, so a number resolves
+  // to at most one of the two.
+  RM.storyByNum = function (state, num) {
+    for (var i = 0; i < state.items.length; i++) {
+      var sts = state.items[i].stories || [];
+      for (var j = 0; j < sts.length; j++) if (sts[j].num === num) return { it: state.items[i], st: sts[j] };
+    }
+    return null;
+  };
+
+  RM.byNum = function (state, num) {
+    var it = RM.itemByNum(state, num);
+    if (it) return { kind: 'feature', it: it };
+    var ref = RM.storyByNum(state, num);
+    return ref ? { kind: 'story', it: ref.it, st: ref.st } : null;
+  };
+
+  // { it, st } for a story id (ids are unique across the document).
+  RM.storyRef = function (state, stId) {
+    for (var i = 0; i < state.items.length; i++) {
+      var sts = state.items[i].stories || [];
+      for (var j = 0; j < sts.length; j++) if (sts[j].id === stId) return { it: state.items[i], st: sts[j] };
+    }
+    return null;
+  };
+
   RM.nextNum = function (state) {
     var mx = 0;
-    state.items.forEach(function (it) { if (it.num > mx) mx = it.num; });
+    state.items.forEach(function (it) {
+      if (it.num > mx) mx = it.num;
+      (it.stories || []).forEach(function (st) { if (st.num > mx) mx = st.num; });
+    });
     return mx + 1;
   };
 
@@ -1739,6 +2087,44 @@
     state.items.forEach(function (it, i) { pos[it.id] = i; });
     loose.sort(function (p, q) { return pos[p.id] - pos[q.id]; });
     loose.forEach(function (it) { maxNum += 1; it.num = maxNum; });
+    return state;
+  };
+
+  // Story numbers share the feature pool. A story keeps its number unless it
+  // collides with a feature or an older story (uid creation time, then array
+  // position decide — the same answer on every machine). Blank or bumped
+  // stories are numbered past everything in use, in document order. A story
+  // never depends on itself. Idempotent.
+  RM.dedupeStoryNums = function (state) {
+    var taken = {}, maxNum = 0;
+    state.items.forEach(function (it) {
+      if (it.num != null && isFinite(it.num)) { taken[it.num] = true; if (it.num > maxNum) maxNum = it.num; }
+    });
+    var all = [], byNum = {};
+    state.items.forEach(function (it, i) {
+      (it.stories || []).forEach(function (st, j) {
+        var rec = { st: st, i: i, j: j };
+        all.push(rec);
+        if (st.num == null || !isFinite(st.num) || taken[st.num]) { rec.loose = true; return; }
+        (byNum[st.num] = byNum[st.num] || []).push(rec);
+        if (st.num > maxNum) maxNum = st.num;
+      });
+    });
+    Object.keys(byNum).forEach(function (n) {
+      var group = byNum[n];
+      if (group.length < 2) return;
+      group.sort(function (p, q) {
+        var tp = RM.uidTime(p.st.id), tq = RM.uidTime(q.st.id);
+        return tp !== tq ? tp - tq : (p.i !== q.i ? p.i - q.i : p.j - q.j);
+      });
+      group.slice(1).forEach(function (x) { x.loose = true; });
+    });
+    all.forEach(function (rec) { if (rec.loose) { maxNum += 1; rec.st.num = maxNum; } });
+    state.items.forEach(function (it) {
+      (it.stories || []).forEach(function (st) {
+        st.deps = (st.deps || []).filter(function (n) { return n !== st.num; });
+      });
+    });
     return state;
   };
 
@@ -2178,17 +2564,14 @@
     return edges;
   };
 
-  // Set of item ids participating in at least one dependency cycle.
-  RM.cycleMembers = function (state) {
-    var adj = {};
-    state.items.forEach(function (it) { adj[it.id] = []; });
-    RM.depEdges(state).forEach(function (e) { adj[e[0].id].push(e[1].id); });
-
-    // Tarjan SCC, iterative.
+  // Tarjan SCC, iterative: given a list of node ids and an adjacency map
+  // (id -> [id]), return the set of ids that sit in a cycle (self-loops
+  // included). Shared by the feature and story dependency graphs.
+  function sccCycles(ids, adj) {
     var index = 0, stack = [], onStack = {}, idx = {}, low = {}, cyclic = {};
-    state.items.forEach(function (root0) {
-      if (idx[root0.id] != null) return;
-      var work = [[root0.id, 0]];
+    ids.forEach(function (root0) {
+      if (idx[root0] != null) return;
+      var work = [[root0, 0]];
       while (work.length) {
         var top = work[work.length - 1];
         var v = top[0];
@@ -2197,7 +2580,7 @@
           stack.push(v); onStack[v] = true;
         }
         var advanced = false;
-        var neighbors = adj[v];
+        var neighbors = adj[v] || [];
         while (top[1] < neighbors.length) {
           var w = neighbors[top[1]];
           top[1] += 1;
@@ -2213,7 +2596,7 @@
           else {
             // self-loop
             var self = comp[0];
-            if (adj[self].indexOf(self) !== -1) cyclic[self] = true;
+            if ((adj[self] || []).indexOf(self) !== -1) cyclic[self] = true;
           }
         }
         work.pop();
@@ -2223,7 +2606,90 @@
         }
       }
     });
-    return cyclic;
+    // rebuild in document order — callers (and diffs) read the set as a list
+    var out = {};
+    ids.forEach(function (id) { if (cyclic[id]) out[id] = true; });
+    return out;
+  }
+
+  // Set of item ids participating in at least one dependency cycle.
+  RM.cycleMembers = function (state) {
+    var adj = {};
+    var ids = [];
+    state.items.forEach(function (it) { adj[it.id] = []; ids.push(it.id); });
+    RM.depEdges(state).forEach(function (e) { adj[e[0].id].push(e[1].id); });
+    return sccCycles(ids, adj);
+  };
+
+  // ------------------------------------------------------ story dependencies
+  // Stories depend on other stories by number; feature <-> story links are out
+  // of scope, so a number that resolves to a feature counts as unknown.
+
+  // '#14 · Story title' for a { it, st } ref.
+  RM.storyLabel = function (state, ref) {
+    if (!ref || !ref.st) return '';
+    return '#' + ref.st.num + ' · ' + (ref.st.title || '(untitled)');
+  };
+
+  // The days a story occupies: its own little timeline when it has one, else
+  // the feature's bar, else null (nothing scheduled).
+  RM.storyWindow = function (state, it, st) {
+    if (!st) return null;
+    if (st.startDay != null && st.durDays != null) {
+      return { startDay: st.startDay, endDay: st.startDay + Math.max(1, st.durDays) };
+    }
+    if (it && it.startDay != null && it.durDays != null) {
+      return { startDay: it.startDay, endDay: it.startDay + RM.itemSpan(it) };
+    }
+    return null;
+  };
+
+  // Concrete dependency refs from a story's numbered deps.
+  RM.resolveStoryDeps = function (state, st) {
+    var out = { deps: [], unknown: [] };
+    (st.deps || []).forEach(function (num) {
+      var ref = RM.storyByNum(state, num);
+      // mirrors RM.resolveDeps: a self-reference is ignored, not "unknown"
+      if (!ref) out.unknown.push(num);
+      else if (ref.st.id !== st.id) out.deps.push(ref);
+    });
+    return out;
+  };
+
+  // All concrete story edges as [depRef, ref] pairs, in document order.
+  RM.storyDepEdges = function (state) {
+    var edges = [];
+    state.items.forEach(function (it) {
+      (it.stories || []).forEach(function (st) {
+        RM.resolveStoryDeps(state, st).deps.forEach(function (dep) {
+          edges.push([dep, { it: it, st: st }]);
+        });
+      });
+    });
+    return edges;
+  };
+
+  // Stories that list this story as a dependency.
+  RM.storyDependents = function (state, st) {
+    var out = [];
+    if (!st || st.num == null) return out;
+    state.items.forEach(function (it) {
+      (it.stories || []).forEach(function (other) {
+        if (other.id !== st.id && (other.deps || []).indexOf(st.num) !== -1) out.push({ it: it, st: other });
+      });
+    });
+    return out;
+  };
+
+  // Set of story ids participating in at least one story-dependency cycle.
+  RM.storyCycleMembers = function (state) {
+    var adj = {};
+    var ids = [];
+    state.items.forEach(function (it) {
+      (it.stories || []).forEach(function (st) { adj[st.id] = []; ids.push(st.id); });
+    });
+    RM.storyDepEdges(state).forEach(function (e) { adj[e[0].st.id].push(e[1].st.id); });
+    return sccCycles(ids, adj);
   };
 
   // ------------------------------------------------------------ capacity
@@ -2434,14 +2900,20 @@
 
     // duplicate nums
     var byNum = {};
-    state.items.forEach(function (it) { (byNum[it.num] = byNum[it.num] || []).push(it); });
+    state.items.forEach(function (it) { (byNum[it.num] = byNum[it.num] || []).push({ it: it }); });
+    // stories share the pool: a story number equal to any other number is a duplicate too
+    state.items.forEach(function (it) { (it.stories || []).forEach(function (st) { (byNum[st.num] = byNum[st.num] || []).push({ it: it, st: st }); }); });
     Object.keys(byNum).forEach(function (n) {
       if (byNum[n].length > 1) {
-        byNum[n].forEach(function (it) { add(it, 'error', 'DUP_NUM', 'Duplicate ID #' + n); });
+        byNum[n].forEach(function (x) {
+          if (x.st) global.push({ level: 'error', code: 'DUP_NUM', storyId: x.st.id, itemId: x.it.id, msg: 'Duplicate ID #' + n + ' (' + RM.levelLabel(state, 'story').toLowerCase() + ' "' + (x.st.title || '(untitled)') + '")' });
+          else add(x.it, 'error', 'DUP_NUM', 'Duplicate ID #' + n);
+        });
       }
     });
 
     var cyclic = RM.cycleMembers(state);
+    var storyCyc = RM.storyCycleMembers(state);
     var phaseById = {};
     state.phases.forEach(function (p) { phaseById[p.id] = p; });
     var horizon = RM.numDays(state.meta);
@@ -2454,6 +2926,21 @@
       if (cyclic[it.id]) add(it, 'error', 'CYCLE', 'Part of a dependency cycle');
       if (it.deps.indexOf(it.id) !== -1) add(it, 'warn', 'SELF_DEP', 'Depends on itself (ignored)');
       if (!it.feature.trim()) add(it, 'warn', 'NO_TITLE', 'Feature has no title');
+
+      if (!RM.anyTypeAnyLevel(state)) {
+        var okTypes = RM.levelOf(state, 'feature').types;
+        if (okTypes.indexOf(RM.typeOf(state, it, 'feature').key) === -1) {
+          add(it, 'warn', 'TYPE_LEVEL', RM.levelLabel(state, 'feature') + ' #' + it.num + ' is a ' + RM.typeOf(state, it, 'feature').label +
+            ', which is not allowed at the ' + RM.levelLabel(state, 'feature') + ' level');
+        }
+        var okStory = RM.levelOf(state, 'story').types;
+        (it.stories || []).forEach(function (st) {
+          if (okStory.indexOf(RM.typeOf(state, st, 'story').key) === -1) {
+            global.push({ level: 'warn', code: 'TYPE_LEVEL', msg: RM.levelLabel(state, 'story') + ' "' + (st.title || '(untitled)') + '" under #' + it.num +
+              ' is a ' + RM.typeOf(state, st, 'story').label + ', which is not allowed at the ' + RM.levelLabel(state, 'story') + ' level' });
+          }
+        });
+      }
 
       var scheduled = it.startDay != null && it.durDays != null;
       var phase = phaseById[it.phaseId];
@@ -2473,7 +2960,57 @@
         add(it, 'info', 'UNSCHEDULED', 'In an active phase but not on the timeline');
       }
 
+      // story dependencies — stories have no byItem bucket, so these are
+      // global rows carrying storyId/itemId for the consumers that care
+      (it.stories || []).forEach(function (st) {
+        var sl = '#' + st.num + ' "' + (st.title || '(untitled)') + '"';
+        var lv = RM.levelLabel(state, 'story');
+        var rs = RM.resolveStoryDeps(state, st);
+        rs.unknown.forEach(function (n) {
+          var isFeat = !!RM.itemByNum(state, n);
+          global.push({
+            level: 'warn', code: 'STORY_UNKNOWN_DEP', storyId: st.id, itemId: it.id,
+            msg: lv + ' ' + sl + ' depends on #' + n + (isFeat
+              ? ', but #' + n + ' is a feature, not a ' + lv.toLowerCase()
+              : ', which does not exist')
+          });
+        });
+        if (storyCyc[st.id]) {
+          global.push({
+            level: 'error', code: 'STORY_CYCLE', storyId: st.id, itemId: it.id,
+            msg: lv + ' ' + sl + ' is part of a dependency cycle'
+          });
+        }
+        var win = RM.storyWindow(state, it, st);
+        if (!win) return;
+        rs.deps.forEach(function (dep) {
+          if (dep.st.done) return;
+          var dl = '#' + dep.st.num + ' "' + (dep.st.title || '(untitled)') + '"';
+          var dw = RM.storyWindow(state, dep.it, dep.st);
+          if (!dw) {
+            global.push({
+              level: 'info', code: 'STORY_DEP_UNSCHEDULED', storyId: st.id, itemId: it.id,
+              msg: lv + ' ' + sl + ' depends on ' + dl + ', which is not scheduled'
+            });
+          } else if (win.startDay < dw.endDay) {
+            global.push({
+              level: 'warn', code: 'STORY_DEP_ORDER', storyId: st.id, itemId: it.id,
+              msg: lv + ' ' + sl + ' starts before ' + dl + ' finishes'
+            });
+          }
+        });
+      });
     });
+
+    if (!RM.anyTypeAnyLevel(state)) {
+      var okEpic = RM.levelOf(state, 'epic').types;
+      Object.keys(state.epicTypes || {}).forEach(function (name) {
+        if (okEpic.indexOf(RM.typeOf(state, name, 'epic').key) === -1) {
+          global.push({ level: 'warn', code: 'TYPE_LEVEL', msg: RM.levelLabel(state, 'epic') + ' "' + name + '" is a ' + RM.typeOf(state, name, 'epic').label +
+            ', which is not allowed at the ' + RM.levelLabel(state, 'epic') + ' level' });
+        }
+      });
+    }
 
     var cap = RM.capacity(state);
     cap.weeks.forEach(function (cell, w) {
@@ -2765,11 +3302,47 @@
     var old = it.num;
     var n = parseInt(wanted, 10);
     var taken = {};
-    state.items.forEach(function (x) { if (x.id !== itemId) taken[x.num] = true; });
+    state.items.forEach(function (x) {
+      if (x.id !== itemId) taken[x.num] = true;
+      // stories share the number pool
+      (x.stories || []).forEach(function (st) { taken[st.num] = true; });
+    });
     if (!isFinite(n) || n < 1 || taken[n]) n = RM.nextNum(state);
     if (n === old) return n;
     it.num = n;
     return n;
+  };
+
+  // Renumber a story, same rules as RM.renumberItem. Story dependency
+  // references across the document follow the rename.
+  RM.renumberStory = function (state, itemId, stId, wanted) {
+    var it = RM.itemById(state, itemId);
+    var st = it && (it.stories || []).filter(function (s) { return s.id === stId; })[0];
+    if (!st) return null;
+    var old = st.num;
+    var n = parseInt(wanted, 10);
+    var taken = {};
+    state.items.forEach(function (x) {
+      taken[x.num] = true;
+      (x.stories || []).forEach(function (s) { if (s.id !== stId) taken[s.num] = true; });
+    });
+    if (!isFinite(n) || n < 1 || taken[n]) n = RM.nextNum(state);
+    if (n === old) return n;
+    st.num = n;
+    state.items.forEach(function (x) {
+      (x.stories || []).forEach(function (s) {
+        s.deps = (s.deps || []).map(function (d) { return d === old ? n : d; });
+      });
+    });
+    return n;
+  };
+
+  // Rewrite story deps inside a freshly copied set of stories (old -> new
+  // number); numbers outside the copy keep pointing where they pointed.
+  RM.remapStoryDeps = function (stories, numMap) {
+    (stories || []).forEach(function (st) {
+      st.deps = (st.deps || []).map(function (d) { return numMap[d] != null ? numMap[d] : d; });
+    });
   };
 
   // Ripple move: cascade the dragged item's end-change through its dependents
@@ -2836,7 +3409,8 @@
     if (num == null) { st.startDay = null; st.durDays = null; }
     else {
       st.startDay = RM.sprintStartDay(state.meta, num);
-      if (st.durDays == null) st.durDays = RM.stretchSpan(state.meta, st.startDay, RM.storyEffortDays(state, st));
+      // a 0-effort (0-point) story still occupies one working day on the grid
+      if (st.durDays == null) st.durDays = RM.stretchSpan(state.meta, st.startDay, Math.max(1, RM.storyEffortDays(state, st)));
     }
     // before another story (else last): its order key follows the row
     if (beforeStId !== stId) placeInList(it.stories, st, beforeStId || null, function () { return true; });

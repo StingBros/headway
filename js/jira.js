@@ -32,7 +32,8 @@
   var RM = root.RM || (typeof require !== 'undefined' ? require('./core.js') : null);
   var JR = {};
 
-  JR.DEFAULTS = { epicType: 'Epic', featureType: 'Story', storyType: 'Sub-task', pushEpics: true, pushStories: true, sprints: true, auto: true, startField: '' };
+  JR.DEFAULTS = { pushEpics: true, pushStories: true, sprints: true, auto: true, startField: '' };
+  JR.lastTypes = null; // the last discovered project's resolved types, for the settings card
   JR.AUTO_MS = 5 * 60 * 1000; // auto-sync cadence once a sync has succeeded
   // Your Jira login (email + API token) lives ONLY in this machine's local
   // storage under this key. The document carries the shared part (site,
@@ -42,6 +43,10 @@
   // ------------------------------------------------------------ helpers
   function slug(s) {
     return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+  // free-form tags push as plain slugged labels
+  function tagLabels(o) {
+    return ((o && o.tags) || []).map(slug);
   }
   function section(title, html) {
     var t = RM.htmlToText(html);
@@ -128,8 +133,17 @@
   // ------------------------------------------------------------ fields
   // info (optional): discover() output — resolved type names, the Start
   // date field id and the assignee account ids
-  function typeName(info, kind, fallback) {
-    return (info && info.types && info.types[kind]) || fallback;
+  // the Jira issue type for an epic name / item / story
+  function typeName(info, state, obj, kind) {
+    var key = RM.typeOf(state, obj, kind).key;
+    var r = info && info.types && info.types.byKey && info.types.byKey[key];
+    return r ? r.name : RM.jiraTypeName(state, key);
+  }
+  function isSubtask(info, state, st) {
+    var key = RM.typeOf(state, st, 'story').key;
+    var r = info && info.types && info.types.byKey && info.types.byKey[key];
+    // no project info yet: assume the default Sub-task nesting
+    return r ? !!r.subtask : true;
   }
   function withDates(f, meta, startDay, durDays, deadline, info) {
     var on = startDay != null && durDays != null;
@@ -152,7 +166,7 @@
     }).join('\n');
     var f = {
       project: { key: cfg.project },
-      issuetype: { name: typeName(info, 'feature', cfg.featureType) },
+      issuetype: { name: typeName(info, state, it, 'feature') },
       summary: it.feature || '(untitled)',
       description: JR.adf(joinSections([
         RM.htmlToText(it.description),
@@ -166,7 +180,7 @@
         it.workstream ? 'ws-' + slug(it.workstream) : '',
         phase ? 'phase-' + slug(phase.name) : '',
         it.size ? 'size-' + slug(it.size) : ''
-      ].filter(Boolean)
+      ].concat(tagLabels(it)).filter(Boolean)
     };
     var pr = priorityField(RM.prioritySchemeOf(state), it.priority);
     if (pr) f.priority = pr;
@@ -179,13 +193,14 @@
     var meta = state.meta;
     var f = {
       project: { key: cfg.project },
-      issuetype: { name: typeName(info, 'story', cfg.storyType) },
+      issuetype: { name: typeName(info, state, st, 'story') },
       summary: st.title || '(untitled)',
       description: JR.adf(joinSections([
         RM.htmlToText(st.description),
         section('Acceptance criteria', st.ac)
       ])),
-      labels: ['feature-' + slug(it.feature), it.workstream ? 'ws-' + slug(it.workstream) : ''].filter(Boolean)
+      labels: ['feature-' + slug(it.feature), it.workstream ? 'ws-' + slug(it.workstream) : '']
+        .concat(tagLabels(st)).filter(Boolean)
     };
     var pr = priorityField(RM.prioritySchemeOf(state, 'story'), st.priority);
     if (pr) f.priority = pr;
@@ -212,7 +227,7 @@
     return lo ? { start: lo, end: hi } : null;
   };
   JR.epicFields = function (name, cfg, info, state) {
-    var f = { project: { key: cfg.project }, issuetype: { name: typeName(info, 'epic', cfg.epicType) }, summary: name };
+    var f = { project: { key: cfg.project }, issuetype: { name: typeName(info, state, name, 'epic') }, summary: name };
     var span = state ? JR.epicSpan(state, name) : null;
     if (span) {
       f.duedate = span.end;
@@ -259,10 +274,7 @@
       sprints: null, notes: (info.notes || []).slice() };
     // stories nest under their feature only as sub-tasks; any other type
     // sits beside the feature (same level) and is tied to it with a link
-    var nest = !info.types || info.types.storyIsSubtask;
-    if (cfg.pushStories && info.types && !info.types.storyIsSubtask) {
-      plan.notes.push('The project has no sub-task type, so stories are created as “' + info.types.story + '” beside their feature, linked to it and labelled feature-…. Add the Subtask issue type to the project to nest them.');
-    }
+    var anyFlat = false;
     var epicKey = {};
     Object.keys(state.epicJira || {}).forEach(function (e) { if (state.epicJira[e]) epicKey[e] = state.epicJira[e]; });
     var work = state.items.filter(function (it) {
@@ -319,6 +331,8 @@
       if (sched(it)) placeInSprint({ kind: 'feature', id: it.id }, it.startDay);
       if (cfg.pushStories) {
         it.stories.forEach(function (st) {
+          var nest = isSubtask(info, state, st);
+          if (!nest) anyFlat = true;
           var sf = JR.storyFields(state, it, st, cfg, nest ? (it.jiraKey || null) : null, info);
           var se = { id: st.id, itemId: it.id, title: st.title, fields: sf, kind: 'story', nest: nest };
           if (!nest) plan.storyLinks.push({ storyId: st.id, itemId: it.id });
@@ -336,13 +350,17 @@
           }
           // sub-tasks follow their parent's sprint in Jira; other story
           // types are placed by their own start, else the feature's
-          if (!(info.types && info.types.storyIsSubtask)) {
+          if (!nest) {
             var day = st.startDay != null && st.durDays > 0 ? st.startDay : (sched(it) ? it.startDay : null);
             placeInSprint({ kind: 'story', id: st.id }, day);
           }
         });
       }
     });
+    if (cfg.pushStories && anyFlat && info.types && info.types.known) {
+      plan.notes.push('Some ' + RM.levelLabel(state, 'story', true).toLowerCase() + ' use a type that is not a sub-task in Jira; they are created beside their ' +
+        RM.levelLabel(state, 'feature').toLowerCase() + ', linked to it and labelled feature-….');
+    }
     // dependency links: "X blocks Y" for every dep whose two ends will both
     // have keys once creates land (resolved in apply); milestones excluded
     var workId = {};
@@ -355,6 +373,23 @@
         plan.links.push({ blockerNum: dep.num, blockerId: dep.id, blockedNum: it.num, blockedId: it.id });
       });
     });
+    // story -> story dependencies become the same Blocks link, as long as
+    // both stories are being pushed (their features are in this run)
+    if (cfg.pushStories) {
+      work.forEach(function (it) {
+        it.stories.forEach(function (st) {
+          var res = RM.resolveStoryDeps(state, st);
+          res.deps.forEach(function (ref) {
+            if (!workId[ref.it.id]) return;
+            plan.links.push({
+              story: true,
+              blockerNum: ref.st.num, blockerId: ref.st.id, blockerTitle: ref.st.title,
+              blockedNum: st.num, blockedId: st.id, blockedTitle: st.title
+            });
+          });
+        });
+      });
+    }
     // people: who resolved, who did not
     var people = {}, unresolved = [];
     work.forEach(function (it) {
@@ -478,23 +513,26 @@
     for (var l = 0; l < 4; l++) lanes.push(next());
     return Promise.all(lanes).then(function () { return out; });
   };
-  // the project's issue types, resolved against the configured names:
-  // { epic, feature, story, storyIsSubtask }
-  JR.resolveTypes = function (issueTypes, cfg) {
+  // the project's issue types resolved per Headway type key:
+  // { byKey: { key: { name, subtask } }, known, notes }
+  JR.resolveTypes = function (issueTypes, state) {
     var list = Array.isArray(issueTypes) ? issueTypes : [];
-    function byName(n) { return list.filter(function (t) { return lc(t.name) === lc(n); })[0]; }
+    function byName(n) { return n ? list.filter(function (t) { return lc(t.name) === lc(n); })[0] : null; }
     function first(pred) { return list.filter(pred)[0]; }
-    var epic = byName(cfg.epicType) || first(function (t) { return t.hierarchyLevel === 1; }) || byName('Epic');
-    var feature = byName(cfg.featureType) || byName('Story') || byName('Task') ||
-      first(function (t) { return !t.subtask && t.hierarchyLevel !== 1 && lc(t.name) !== 'epic'; });
-    var story = byName(cfg.storyType) || first(function (t) { return !!t.subtask; }) || byName('Story') || byName('Task');
-    return {
-      epic: epic ? epic.name : cfg.epicType,
-      feature: feature ? feature.name : cfg.featureType,
-      story: story ? story.name : cfg.storyType,
-      storyIsSubtask: !!(story && story.subtask),
-      known: list.length > 0
-    };
+    var epicKeys = RM.levelOf(state, 'epic').types, storyKeys = RM.levelOf(state, 'story').types;
+    var out = { byKey: {}, known: list.length > 0, notes: [] };
+    RM.itemTypes(state).forEach(function (t) {
+      var want = t.jira || t.label;
+      var hit = byName(want);
+      if (!hit && list.length) {
+        if (epicKeys.indexOf(t.key) !== -1) hit = first(function (x) { return x.hierarchyLevel === 1; }) || byName('Epic');
+        else if (storyKeys.indexOf(t.key) !== -1) hit = first(function (x) { return !!x.subtask; }) || byName('Story') || byName('Task');
+        if (!hit) hit = byName('Story') || byName('Task') || first(function (x) { return !x.subtask && x.hierarchyLevel !== 1 && lc(x.name) !== 'epic'; });
+        if (hit) out.notes.push('Type “' + want + '” (' + t.label + ') is not in the project; using “' + hit.name + '”');
+      }
+      out.byKey[t.key] = { name: hit ? hit.name : want, subtask: !!(hit && hit.subtask) };
+    });
+    return out;
   };
   // Jira's Start date field: the configured id, else the field named so
   JR.findStartField = function (fields, configured) {
@@ -538,10 +576,9 @@
       .then(function () {
         progress('Reading project ' + cfg.project + '…');
         return client.get('/rest/api/3/project/' + encodeURIComponent(cfg.project)).then(function (p) {
-          info.types = JR.resolveTypes((p && p.issueTypes) || [], cfg);
-          if (lc(info.types.feature) !== lc(cfg.featureType)) info.notes.push('Feature type “' + cfg.featureType + '” is not in the project; using “' + info.types.feature + '”');
-          if (cfg.pushStories && lc(info.types.story) !== lc(cfg.storyType)) info.notes.push('Story type “' + cfg.storyType + '” is not in the project; using “' + info.types.story + '”');
-          if (cfg.pushEpics && lc(info.types.epic) !== lc(cfg.epicType)) info.notes.push('Epic type “' + cfg.epicType + '” is not in the project; using “' + info.types.epic + '”');
+          info.types = JR.resolveTypes((p && p.issueTypes) || [], state);
+          info.types.notes.forEach(function (n) { info.notes.push(n); });
+          JR.lastTypes = info.types;
         }, function (err) { info.notes.push('Could not read the project: ' + errText(err)); });
       })
       .then(function () {
@@ -600,7 +637,7 @@
       var who = (me && me.displayName) || (me && me.emailAddress) || 'signed in';
       if (!project) return { user: who };
       return c.get('/rest/api/3/project/' + encodeURIComponent(project)).then(function (p) {
-        return { user: who, project: (p && p.name) || project };
+        return { user: who, project: (p && p.name) || project, issueTypes: (p && p.issueTypes) || [] };
       });
     });
   };
@@ -746,6 +783,10 @@
         var keyOf = {};
         plan.features.forEach(function (f) { if (f.key) keyOf[f.id] = f.key; });
         plan.updates.forEach(function (u) { if (u.kind === 'feature') keyOf[u.id] = u.key; });
+        // story links resolve against the stories created in step 3 and the
+        // ones that already had a key (ids never collide across the two)
+        plan.stories.forEach(function (s2) { if (s2.key) keyOf[s2.id] = s2.key; });
+        plan.updates.forEach(function (u) { if (u.kind === 'story') keyOf[u.id] = u.key; });
         var links = plan.links.filter(function (l) { return keyOf[l.blockerId] && keyOf[l.blockedId]; });
         var i = 0;
         return links.reduce(function (p, l) {
@@ -1173,6 +1214,7 @@
   };
 
   JR.settingsHtml = function () {
+    var st = app().ai.state();
     var c = JR.loadCreds();
     var d = docCfg();
     var desktop = !!root.__TAURI__;
@@ -1193,15 +1235,22 @@
       '<div class="m-sec"><label>Site</label>' + inp('jrSite', d.site || c.site, 'your-team.atlassian.net') + '</div>' +
       '<div class="p-grid2">' +
       '<div class="m-sec"><label>Project key</label>' + inp('jrProject', d.project, 'e.g. HW') + '</div>' +
-      '<div class="m-sec"><label>Epic type</label>' + inp('jrEpicType', d.epicType, JR.DEFAULTS.epicType) + '</div>' +
-      '<div class="m-sec"><label>Feature type</label>' + inp('jrFeatureType', d.featureType, JR.DEFAULTS.featureType) + '</div>' +
-      '<div class="m-sec"><label>Story type</label>' + inp('jrStoryType', d.storyType, JR.DEFAULTS.storyType) + '</div>' +
       '<div class="m-sec"><label>Start date field id</label>' + inp('jrStartField', d.startField, 'found automatically') + '</div>' +
       '</div>' +
       ck('jrPushEpics', d.pushEpics, 'Create an epic per Headway epic and parent features to it') +
       ck('jrPushStories', d.pushStories, 'Sync stories as their own issues under the feature') +
       ck('jrSprints', d.sprints, 'Place issues in the board’s sprints by start date, creating missing sprints') +
       ck('jrAuto', d.auto, 'Sync automatically every 5 minutes once anything is linked to Jira') +
+      '<h2 style="margin-top:18px">Issue types</h2>' +
+      '<div class="m-hint">Each Headway type becomes this Jira issue type. Types are defined in Setup → Hierarchy; the Jira name can be edited here or there.</div>' +
+      '<table class="hol-table jr-types"><thead><tr><th>Headway type</th><th>Jira issue type</th><th>In project</th></tr></thead><tbody>' +
+      RM.itemTypes(st).map(function (t) {
+        var r = JR.lastTypes && JR.lastTypes.byKey && JR.lastTypes.byKey[t.key];
+        var res = !r ? '' : (lc(r.name) === lc(t.jira || t.label) ? '✓' : 'falls back to ' + esc(r.name));
+        return '<tr><td><i data-lucide="' + esc(t.icon) + '"></i> ' + esc(t.label) + '</td>' +
+          '<td><input data-jrtype="' + esc(t.key) + '" value="' + esc(t.jira || '') + '" placeholder="' + esc(t.label) + '"></td>' +
+          '<td class="m-hint">' + res + '</td></tr>';
+      }).join('') + '</tbody></table>' +
       '<div class="m-hint">Site, project and issue types travel with the file, so teammates only add their own login. ' +
       'Every synced issue gets a Start date and a Due date from the timeline; milestones are never sent. ' +
       'Types that do not exist in the project fall back to what it has. Jira keys land back on features, stories and epics after a sync; ' +
@@ -1242,9 +1291,6 @@
       return {
         site: JR.siteUrl($('#jrSite').value),
         project: $('#jrProject').value.trim().toUpperCase(),
-        epicType: $('#jrEpicType').value.trim() || JR.DEFAULTS.epicType,
-        featureType: $('#jrFeatureType').value.trim() || JR.DEFAULTS.featureType,
-        storyType: $('#jrStoryType').value.trim() || JR.DEFAULTS.storyType,
         startField: $('#jrStartField').value.trim(),
         pushEpics: $('#jrPushEpics').checked,
         pushStories: $('#jrPushStories').checked,
@@ -1252,7 +1298,7 @@
         auto: $('#jrAuto').checked
       };
     }
-    ['#jrSite', '#jrProject', '#jrEpicType', '#jrFeatureType', '#jrStoryType', '#jrStartField', '#jrPushEpics', '#jrPushStories', '#jrSprints', '#jrAuto'].forEach(function (sel) {
+    ['#jrSite', '#jrProject', '#jrStartField', '#jrPushEpics', '#jrPushStories', '#jrSprints', '#jrAuto'].forEach(function (sel) {
       $(sel).addEventListener('change', function () {
         var m = mapping();
         app().ai.commit('jira settings', function (s) {
@@ -1261,6 +1307,12 @@
           s.meta.jira = cur;
         });
       });
+    });
+    host.addEventListener('change', function (ev) {
+      var inp = ev.target.closest && ev.target.closest('[data-jrtype]');
+      if (!inp) return;
+      var key = inp.dataset.jrtype, val = inp.value;
+      app().ai.commit('jira issue type', function (s) { RM.setItemTypeJira(s, key, val); });
     });
     $('#jrTest').addEventListener('click', function () {
       var out = $('#jrTestOut');
@@ -1271,6 +1323,10 @@
       out.textContent = 'Connecting…';
       JR.testConnection(full, $('#jrProject').value.trim().toUpperCase()).then(function (r) {
         out.textContent = 'Connected as ' + r.user + (r.project ? ' · project “' + r.project + '”' : '');
+        if (r.issueTypes) {
+          JR.lastTypes = JR.resolveTypes(r.issueTypes, app().ai.state());
+          app().openSetup('jira');
+        }
       }, function (err) { out.textContent = 'Failed: ' + errText(err); });
     });
     $('#jrSync').addEventListener('click', function () { JR.syncModal(); });
@@ -1357,11 +1413,10 @@
         plan = JR.plan(state, cfg, info);
         var c = plan.counts;
         if (!c.create && !c.update && !c.pull && !c.link && !c.sprintAssign && !c.done) { body.innerHTML = '<div class="m-hint">Nothing to sync.</div>' + list('Notes', plan.notes); return; }
-        var t = info.types || {};
         body.innerHTML = '<ul class="jr-plan">' +
-          line(plan.epics.length, 'epic' + (plan.epics.length === 1 ? '' : 's') + ' to create in ' + esc(cfg.project) + ' as ' + esc(t.epic || cfg.epicType)) +
-          line(plan.features.length, 'feature' + (plan.features.length === 1 ? '' : 's') + ' to create as ' + esc(t.feature || cfg.featureType)) +
-          line(plan.stories.length, 'stor' + (plan.stories.length === 1 ? 'y' : 'ies') + ' to create as ' + esc(t.story || cfg.storyType)) +
+          line(plan.epics.length, esc(RM.levelLabel(state, 'epic', plan.epics.length !== 1).toLowerCase()) + ' to create in ' + esc(cfg.project)) +
+          line(plan.features.length, esc(RM.levelLabel(state, 'feature', plan.features.length !== 1).toLowerCase()) + ' to create') +
+          line(plan.stories.length, esc(RM.levelLabel(state, 'story', plan.stories.length !== 1).toLowerCase()) + ' to create') +
           line(c.update, 'linked issue' + (c.update === 1 ? '' : 's') + ' to update') +
           line(c.link, 'dependency link' + (c.link === 1 ? '' : 's') + ' to add') +
           line(c.sprintsCreate, 'sprint' + (c.sprintsCreate === 1 ? '' : 's') + ' to create on ' + esc(plan.sprints ? plan.sprints.boardName : '')) +
