@@ -9213,7 +9213,7 @@
     if (titleMeasure) {
       var cs = getComputedStyle(t);
       titleMeasure.font = cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
-      w = Math.ceil(titleMeasure.measureText(t.value || '').width) + 18;
+      w = Math.min(260, Math.ceil(titleMeasure.measureText(t.value || '').width) + 18); // capped: the header must leave room for tabs and toolbar
     } else {
       w = (t.value || '').length * 8 + 18; // headless fallback (no canvas 2d)
     }

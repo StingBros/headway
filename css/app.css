@@ -253,9 +253,10 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
 /* view tabs (top center) + the round Setup button on their right */
 .tabs-center {
   display: flex; align-items: center; gap: 9px;
-  /* true centering in the header, independent of the unequal widths on
-     either side (brand+menus left, toolbar right) */
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  /* centred in the space between the menus and the toolbar by its auto margins.
+     (It used to be absolutely centred in the header, which collided with the
+     menus whenever a long title or plan name pushed them past the middle.) */
+  margin: 0 auto;
 }
 .view-tabs {
   display: flex; gap: 3px;
@@ -270,6 +271,29 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
 #btnSetup.on, #btnHistory.on { color: var(--blue); }
 
 .tb-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+/* ---- header room: long titles and plan names truncate; tabs drop their labels
+   before they can collide with the toolbar; on narrow windows the tab group
+   leaves its absolute centring and wraps with the rest of the header */
+.tb-title { max-width: 260px; }
+#optBtn { max-width: 220px; }
+#optBtn > span:first-of-type { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
+/* view tabs: icon-only except the active tab, so the group always fits between the
+   menus and the toolbar next to a long title or plan name (hover shows the name) */
+.view-tabs .tab-l { display: none; }
+.view-tabs button { padding: 5px 9px; }
+.view-tabs button.on .tab-l { display: inline; }
+@media (max-width: 1560px) {
+  .tb-title { max-width: 200px; }
+  #optBtn { max-width: 170px; }
+  #optBtn > span:first-of-type { max-width: 120px; }
+}
+@media (max-width: 1100px) {
+  .tabs-center { order: 5; flex-basis: 100%; justify-content: center; }
+  .tb-title { max-width: 160px; }
+  #optBtn { max-width: 140px; }
+  #optBtn > span:first-of-type { max-width: 90px; }
+}
 .chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 5px 12px; }
 .chip b { font-size: 14px; }
 #valDot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); display: inline-block; }
@@ -1864,7 +1888,7 @@ body.chrome-win #topbar { padding-right: 0; }
 .win-caption svg { pointer-events: none; }
 
 /* ------------------------------------------------- title pencil + filter */
-#topbar { position: relative; } /* anchors the absolutely-centered view tabs */
+#topbar { position: relative; }
 #docTitle[readonly] {
   pointer-events: none; /* clicks fall through to the header (drag region) */
   border-color: transparent; background: transparent;
