@@ -286,3 +286,30 @@ Where the build refined the text above:
 - Plan-folder garbage collection is not implemented (tombstoned entries stay, files stay).
 - Tests: `tests/desktop.test.js` (fake plugin fs, 182) and `tests/wiring.test.js` (the real
   app in jsdom against that fs, 347) join core (563) and smoke (600) in `make test`.
+
+## Upstream merge notes (2026-09-22, v1.0.13)
+
+Upstream added item types & hierarchy, story numbers and story-to-story dependencies, flags,
+tags, 0 / 0.5-point stories and a Prioritizing/Sprinting refresh between v1.0.11 and v1.0.13.
+What that means for the bundle format:
+
+- **Per-entity fields flow through unchanged.** Envelopes store whatever `normalizeState`
+  produces, so `flag`, `tags`, `type`, `num`, `msStyle`, `rice`, `jiraKey` on features and
+  stories merge field-by-field like everything else. No shard layout change.
+- **`epicTypes` joins `META_KEYS`.** The epic-name → type map is a top-level object like
+  `epicJira`; it now rides in `meta.json` (whole-key LWW). Before this it was silently dropped
+  on Convert.
+- **Story numbers come from the shared feature pool** (upstream). Assembling shards on two
+  machines must number stories identically, so upstream's in-place "first occurrence wins"
+  pass is replaced by `RM.dedupeStoryNums`: a story keeps its number unless it collides with a
+  feature or an older story (uid creation time, then array position), and blank or bumped
+  stories are numbered past the pool in canonical order — the same rule `RM.dedupeNums` uses
+  for features.
+- **Known gap — story dependencies are still by number.** `story.deps` holds story numbers,
+  so when two people create stories concurrently and one is renumbered, a dependency that
+  named the old number now points at the winner. Features solved this with deps-by-id
+  (`RM.migrateDepsToIds`); stories should follow: store ids, show numbers, migrate legacy
+  numbers once, and remap on duplicate/import. Touch points: story panel dependency picker and
+  arrows (`app.js`), Stories sheet column (`excel.js`), AI tools (`ai.js`), Jira "Blocked By"
+  (`jira.js`, `export-jira.js`), `RM.resolveStoryDeps` / `RM.storyDepEdges` / validation codes
+  in `core.js`. Until then the hazard is confined to same-window concurrent story creation.

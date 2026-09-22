@@ -1848,6 +1848,37 @@ eq(RB.mergePlanList(renamed, renamed2)[1].name, 'Renamed', 'LWW rename: newer up
 eq(RB.mergePlanList(renamed2, renamed)[1].name, 'Renamed', '…in either order');
 
 // ------------------------------------------------------------- deps by id
+section('bundle: meta shard carries every top-level map');
+var sMk = mkState([{ id: 'iMk', num: 1, feature: 'Login flow', epic: 'Login', phaseId: 'p1' }], { epicTypes: { Login: 'epic' }, epicJira: { Login: 'HW-1' } });
+var migMk = RB.migrateFromState(sMk, 'ann-1', T0);
+var planMk = migMk.plans[Object.keys(migMk.plans)[0]];
+eq(planMk.meta.fields.epicTypes, { Login: 'epic' }, 'epicTypes (item types & hierarchy) rides in the meta shard');
+eq(planMk.meta.fields.epicJira, { Login: 'HW-1' }, 'epicJira still there');
+var backMk = RM.normalizeState(RB.assembleState(planMk.meta, { items: planMk.items, phases: planMk.phases, team: planMk.team, costs: planMk.costs }));
+eq(backMk.epicTypes, { Login: 'epic' }, 'assembling the plan restores epicTypes');
+
+section('story numbers: settled the same way on every machine');
+// two machines assemble the same shards in a different array order; a story
+// that collides with an older one (uid time) yields, whatever the order
+var uidAt = function (prefix, t) { return prefix + (1790000000000 + t).toString(36) + '-0-zzzzz'; }; // 8 base-36 chars, like RM.uid
+var sOld = uidAt('s', 1000), sNew = uidAt('s', 2000);
+ok(RM.uidTime(sOld) < RM.uidTime(sNew), 'fixture ids carry distinct creation times');
+var mkDoc = function (order) {
+  var f1 = { id: uidAt('i', 100), num: 1, feature: 'one', phaseId: 'p1', stories: [{ id: sOld, num: 7, title: 'older seven', deps: [7, 8] }] };
+  var f2 = { id: uidAt('i', 200), num: 2, feature: 'two', phaseId: 'p1', stories: [{ id: sNew, num: 7, title: 'younger seven' }, { id: uidAt('s', 3000), title: 'blank' }] };
+  return mkState(order === 'a' ? [f1, f2] : [f2, f1]);
+};
+var dA = mkDoc('a'), dB = mkDoc('b');
+var numsOf = function (d) { var m = {}; d.items.forEach(function (it) { it.stories.forEach(function (st) { m[st.id] = st.num; }); }); return m; };
+eq(numsOf(dA), numsOf(dB), 'the same story numbers regardless of array order');
+eq(numsOf(dA)[sOld], 7, 'the older story keeps the contested number');
+ok(numsOf(dA)[sNew] > 2 && numsOf(dA)[sNew] !== 7, 'the younger one is renumbered past the pool');
+var stOld = RM.itemById(dA, uidAt('i', 100)).stories[0];
+eq(stOld.deps, [8], 'a story never depends on itself; other deps stay');
+var allNums = [];
+dA.items.forEach(function (it) { allNums.push(it.num); it.stories.forEach(function (st) { allNums.push(st.num); }); });
+eq(allNums.filter(function (n, i) { return allNums.indexOf(n) === i; }).length, allNums.length, 'features and stories share one pool without collisions');
+
 section('deps by id');
 var sIds = mkState([
   { num: 1, feature: 'root' },
