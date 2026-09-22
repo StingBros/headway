@@ -1275,7 +1275,10 @@ if (!ExcelJS) {
                   return wbT3.xlsx.load(bufT).then(function () {
                     wbT3.removeWorksheet(wbT3.getWorksheet('_RoadmapTool').id);
                     var rws3 = wbT3.getWorksheet('Roadmap');
-                    rws3.spliceColumns(rws3.columnCount, 1);
+                    // drop the Tags column by its header (it is no longer the last column: Est. low / Est. high follow it)
+                    var tagsCol = 0;
+                    rws3.getRow(3).eachCell({ includeEmpty: false }, function (c, n) { if (String(c.value).toLowerCase() === 'tags') tagsCol = n; });
+                    rws3.spliceColumns(tagsCol, rws3.columnCount - tagsCol + 1);
                     var sws3 = wbT3.getWorksheet('Stories');
                     sws3.spliceColumns(7, 3);
                     return wbT3.xlsx.writeBuffer();
@@ -1879,6 +1882,33 @@ eq(stOld.deps, [8], 'a story never depends on itself; other deps stay');
 var allNums = [];
 dA.items.forEach(function (it) { allNums.push(it.num); it.stories.forEach(function (st) { allNums.push(st.num); }); });
 eq(allNums.filter(function (n, i) { return allNums.indexOf(n) === i; }).length, allNums.length, 'features and stories share one pool without collisions');
+
+section('estimate range');
+var sEr = mkState([{ id: 'iEr', num: 1, feature: 'ranged', phaseId: 'p1', startDay: 0, durDays: 10, estLow: 12, estHigh: 6,
+  stories: [{ id: 'sEr', title: 's', estLow: '2', estHigh: 'x' }] }]);
+eq([sEr.meta.estimateMode, sEr.meta.estimateUnit, sEr.meta.estimateBasis, sEr.meta.daysPerUnit], ['single', 'days', 'high', 1], 'documents default to single estimates in working days, basis high');
+var iEr = RM.itemById(sEr, 'iEr');
+eq([iEr.estLow, iEr.estHigh], [6, 12], 'a reversed range is swapped on normalize');
+eq([iEr.stories[0].estLow, iEr.stories[0].estHigh], [2, null], 'story range: numbers parse, junk becomes null');
+ok(!RM.rangeEnabled(sEr), 'single mode reports range off');
+sEr.meta.estimateMode = 'range';
+var rsEr = RM.rangeSpans(sEr, iEr);
+eq([rsEr.low, rsEr.high, rsEr.planned], [6, 12, 10], 'range spans carry low / high / planned working days');
+ok(rsEr.lowEnd < iEr.startDay + iEr.durDays && rsEr.highEnd > iEr.startDay + iEr.durDays, 'low ends inside the bar, high past it');
+eq(RM.basisDays(sEr, iEr), 12, 'basis high → the high estimate');
+sEr.meta.estimateBasis = 'low';
+eq(RM.basisDays(sEr, iEr), 6, 'basis low → the low estimate');
+sEr.meta.estimateUnit = 'hours'; sEr.meta.daysPerUnit = 1 / 8;
+eq(RM.estRange(sEr, iEr).high, 1.5, 'hours convert to working days through daysPerUnit');
+sEr.meta.estimateUnit = 'days'; sEr.meta.daysPerUnit = 1;
+iEr.durDays = 20;
+ok(/EST_RANGE/.test(JSON.stringify(RM.validate(sEr))), 'a planned duration outside the range is noted (EST_RANGE)');
+iEr.durDays = 8;
+ok(!/EST_RANGE/.test(JSON.stringify(RM.validate(sEr))), 'inside the range: no note');
+sEr.meta.estimateMode = 'single'; iEr.durDays = 20;
+ok(!/EST_RANGE/.test(JSON.stringify(RM.validate(sEr))), 'single mode never notes the range');
+var sErN = RM.normalizeState(RM.clone(sEr));
+eq([sErN.meta.estimateMode, RM.itemById(sErN, 'iEr').estLow, RM.itemById(sErN, 'iEr').estHigh], ['single', 6, 12], 'mode and range survive normalize');
 
 section('deps by id');
 var sIds = mkState([

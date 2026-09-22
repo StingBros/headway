@@ -4885,6 +4885,42 @@ let taggedForXlsx = null;
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
+// ---------------------------------------------------------------- range estimates (Setup → Sizing → Estimates)
+{
+  click(doc.querySelector('#btnSetup'));
+  suTab('sizing');
+  ok(!!doc.querySelector('#setupView [data-suest="single"]') && !!doc.querySelector('#setupView [data-suest="range"]'), 'Setup offers single / range estimates');
+  ok(!doc.querySelector('#setupView [data-suestbasis]'), 'no unit / basis pickers in single mode');
+  click(doc.querySelector('#setupView [data-suest="range"]'));
+  ok(state().meta.estimateMode === 'range', 'range mode commits');
+  ok(!!doc.querySelector('#setupView [data-suestunit="points"]') && !!doc.querySelector('#setupView [data-suestbasis="low"]'), 'unit and basis pickers appear in range mode');
+  click(doc.querySelector('#setupView [data-suestunit="hours"]'));
+  ok(state().meta.estimateUnit === 'hours' && state().meta.daysPerUnit === 1 / 8, 'unit commits with its default rate');
+  click(doc.querySelector('#setupView [data-suestunit="days"]'));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const rbar = doc.querySelector('#rows .bar:not(.ms)[data-bar]');
+  const rid = rbar.getAttribute('data-bar');
+  click(doc.querySelector('#rows .row.item[data-id="' + rid + '"] .r-num'));
+  const lowIn = doc.querySelector('#panel input[data-f="estLow"]'), highIn = doc.querySelector('#panel input[data-f="estHigh"]');
+  ok(!!lowIn && !!highIn, 'the panel shows Low / High estimate fields in range mode');
+  ok(/Estimate low \(d\)/.test(doc.querySelector('#panel').textContent), 'labels carry the project unit (d), not a per-row unit');
+  const before = state().items.find(i => i.id === rid).durDays;
+  highIn.value = String(before + 5); highIn.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const lowIn2 = doc.querySelector('#panel input[data-f="estLow"]');
+  lowIn2.value = String(Math.max(1, before - 3)); lowIn2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const itR = state().items.find(i => i.id === rid);
+  ok(itR.estLow === Math.max(1, before - 3) && itR.estHigh === before + 5, 'low / high commit: ' + JSON.stringify([itR.estLow, itR.estHigh]));
+  ok(itR.durDays >= before + 5, 'basis high: the planned bar follows the high estimate');
+  ok(!!doc.querySelector('#rows .bar-range[data-range="' + rid + '"]'), 'a min/max span is drawn behind the bar');
+  click(doc.querySelector('#btnSetup'));
+  suTab('sizing');
+  click(doc.querySelector('#setupView [data-suest="single"]'));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  ok(!doc.querySelector('#rows .bar-range'), 'single mode hides the span again');
+  ok(!doc.querySelector('#panel input[data-f="estLow"]'), '…and the fields');
+  window.HeadwayApp.ai.commit('restoreEst', (s) => { const t = window.RM.itemById(s, rid); t.estLow = null; t.estHigh = null; t.durDays = before; });
+}
+
 // NOTE: this export promise chain must stay LAST in this file — its .then /
 // .catch bodies run after every synchronous block, and the .then calls
 // process.exit. New blocks go ABOVE this line.

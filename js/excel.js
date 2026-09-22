@@ -97,9 +97,12 @@
       status: futureCol + 5,
       // free-form tags: a trailing visible column (the sprint grid owns the
       // columns right after 'Dependency Risk/Size', so it appends here)
-      tags: futureCol + 6
+      tags: futureCol + 6,
+      // range estimate (project unit), see Setup → Sizing → Estimates
+      estLow: futureCol + 7,
+      estHigh: futureCol + 8
     };
-    var lastCol = extraCols.tags;
+    var lastCol = extraCols.estHigh;
 
     var ws = wb.addWorksheet('Roadmap', {
       views: [{ state: 'frozen', xSplit: 4, ySplit: 3 }]
@@ -187,6 +190,8 @@
     r3.getCell(extraCols.end).value = 'End';
     r3.getCell(extraCols.status).value = 'Status';
     r3.getCell(extraCols.tags).value = 'Tags';
+    r3.getCell(extraCols.estLow).value = 'Est. low';
+    r3.getCell(extraCols.estHigh).value = 'Est. high';
     Object.keys(extraCols).forEach(function (k) {
       r3.getCell(extraCols[k]).font = { bold: true, italic: true };
     });
@@ -240,6 +245,8 @@
         r.getCell(9).value = RM.htmlToText(it.extDeps || '') || null;
         r.getCell(10).value = it.size || null;
         r.getCell(11).value = it.risk || null;
+        r.getCell(extraCols.estLow).value = it.estLow != null ? it.estLow : null;
+        r.getCell(extraCols.estHigh).value = it.estHigh != null ? it.estHigh : null;
         [4, 5, 6, 7, 9].forEach(function (c) {
           r.getCell(c).alignment = { wrapText: true, vertical: 'top' };
         });
@@ -505,7 +512,13 @@
           // rich fields export flattened — only a real Excel-side edit (vs the
           // flattened text) replaces the stored value, as plain text
           var stored = f[1] === 'feature' ? it[f[1]] : RM.htmlToText(it[f[1]] || '');
-          if (norm(v) !== norm(stored)) it[f[1]] = norm(v);
+          var vN = norm(v), sN = norm(stored);
+          if (vN === sN) return;
+          // not an edit: ExcelJS mangles a surrogate pair at some in-cell offsets (U+FFFD where
+          // the stored text has none) and Excel caps a cell at 32,767 characters
+          var mangled = vN.indexOf('�') !== -1 && sN.indexOf('�') === -1;
+          var capped = sN.length > 32767 && vN === sN.slice(0, vN.length);
+          if (!mangled && !capped) it[f[1]] = vN;
         });
       }
     }
@@ -581,6 +594,8 @@
       else if (t === 'team type') extraMap.teamType = colNumber;
       else if (t === 'status') extraMap.status = colNumber;
       else if (t === 'tags') extraMap.tags = colNumber;
+      else if (t === 'est. low' || t === 'est low') extraMap.estLow = colNumber;
+      else if (t === 'est. high' || t === 'est high') extraMap.estHigh = colNumber;
     });
     if (!sprintCols.length) throw new Error('No sprint date columns found in the header row');
     sprintCols.sort(function (a, b) { return a.col - b.col; });
@@ -708,6 +723,8 @@
         durDays: durDays,
         riskDays: riskDays,
         tags: extraMap.tags ? cellText(row.getCell(extraMap.tags)) : '',
+        estLow: extraMap.estLow ? cellText(row.getCell(extraMap.estLow)) : null,
+        estHigh: extraMap.estHigh ? cellText(row.getCell(extraMap.estHigh)) : null,
         locked: statusText === 'locked',
         done: statusText === 'done',
         stories: []

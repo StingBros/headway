@@ -155,6 +155,19 @@
   }
   function isScheduled(it) { return it.startDay != null && it.durDays != null; }
 
+  // Low / High estimate fields (range mode). attr = 'f' for the item panel, 'stf' for a story
+  function estRangeHtml(x, attr) {
+    if (!RM.rangeEnabled(state)) return '';
+    var u = RM.estUnitShort(state);
+    var v = function (n) { return n != null ? n : ''; };
+    return '<div class="p-grid2" style="margin-top:8px">' +
+      '<div><label class="p-lab">Estimate low (' + esc(u) + ')</label>' +
+      '<input type="number" data-' + attr + '="estLow" min="0" step="0.25" value="' + v(x.estLow) + '" placeholder="–" style="width:100%"></div>' +
+      '<div><label class="p-lab">Estimate high (' + esc(u) + ')</label>' +
+      '<input type="number" data-' + attr + '="estHigh" min="0" step="0.25" value="' + v(x.estHigh) + '" placeholder="–" style="width:100%"></div>' +
+      '</div>';
+  }
+
   // ------------------------------------------------------------ persistence
   // one place defines "the UI prefs" — written to localStorage on every
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
@@ -4805,6 +4818,15 @@
       var workW = Math.max(6, it.durDays * dayPx());
       var riskW = (it.riskDays || 0) * dayPx();
       var width = workW + riskW;
+      var rsp = RM.rangeEnabled(state) && (it.estLow != null || it.estHigh != null) ? RM.rangeSpans(state, it) : null;
+      var rangeHtml = '';
+      if (rsp && (rsp.highEnd !== it.startDay + it.durDays || rsp.lowEnd !== it.startDay + it.durDays)) {
+        var hiW = Math.max(width, (rsp.highEnd - it.startDay) * dayPx());
+        var loX = Math.max(2, (rsp.lowEnd - it.startDay) * dayPx());
+        rangeHtml = '<div class="bar-range" data-range="' + it.id + '" style="left:' + left + 'px;width:' + hiW + 'px;--bar-c:' + color + '"' +
+          ' title="' + esc('Estimate ' + rsp.low + '–' + rsp.high + ' working days · planned ' + rsp.planned) + '">' +
+          '<span class="br-low" style="left:' + loX + 'px"></span></div>';
+      }
       var hcTag = '';
       // label rides inside the bar when it fits (~6.3px/char at 10.5px bold);
       // otherwise it sits just right of the bar in ink
@@ -4813,11 +4835,12 @@
       var dates = RM.fmtShort(RM.dayToDate(meta, it.startDay)) + ' → ' +
         RM.fmtShort(RM.spanEndDate(meta, it.startDay, RM.itemSpan(it)));
       var tip = it.feature + '  ·  ' + dates + (it.size ? '  ·  ' + it.size : '') +
+        (rsp ? '  ·  est ' + rsp.low + '–' + rsp.high + ' d' : '') +
         (it.risk ? '  ·  risk ' + it.risk : '') +
         (it.description ? '\n' + RM.htmlToText(it.description) : '');
       // one uniform duration on the timeline — the work/risk split lives in
       // the panel, not the paint
-      laneInner =
+      laneInner = rangeHtml +
         '<div class="bar' + (isSel(it.id) && !selStory ? ' selected' : '') +
         (it.locked ? ' locked' : '') + (it.done ? ' done-bar' : '') + (width < 34 ? ' tiny' : '') +
         (showCrit && critCache && critCache.items[it.id] ? ' crit' : '') +
@@ -5504,6 +5527,7 @@
         '<button data-f="snap">Snap earliest</button>' +
         '</div>';
     }
+    scheduleInfo += estRangeHtml(it, 'f');
     // hard deadline rides with every schedule variant
     scheduleInfo += '<div style="margin-top:8px"><label class="p-lab">Deadline' +
       (RM.pastDeadline(meta, it) ? ' <span class="p-dl-late">— runs past it</span>' : '') + '</label>' +
@@ -5686,6 +5710,7 @@
     } else {
       timeline = '<div class="m-hint">No timeline — double-click the story’s lane on the Planning tab to add one.</div>';
     }
+    timeline += estRangeHtml(st, 'stf');
     // estimate: the story's own size / priority / risk scales (Setup → Sizing)
     var stSizeBtns = RM.sizingEnabled(state, 'story')
       ? '<label class="p-lab">Size</label><div class="seg">' +
@@ -6559,6 +6584,17 @@
         });
         return;
       }
+      if (stf === 'estLow' || stf === 'estHigh') {
+        var sEst = RM.estDays(sval);
+        commit('story estimate range', function (s) {
+          var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
+          if (!st2) return;
+          st2[stf] = sEst; RM.fixEstRange(st2);
+          var sbd = RM.basisDays(s, st2);
+          if (sbd != null && sbd > 0 && st2.startDay != null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, sbd);
+        });
+        return;
+      }
       if (stf === 'durWeeks') {
         var swv = Math.max(0.2, parseFloat(sval) || 1);
         commit('story duration', function (s) {
@@ -6632,6 +6668,18 @@
         var nd2 = Math.max(0, day2);
         if (t.startDay != null) RM.shiftStories(t, nd2 - t.startDay);
         t.startDay = nd2;
+      });
+      return;
+    }
+    if (f === 'estLow' || f === 'estHigh') {
+      var estV = RM.estDays(val);
+      commit('estimate range', function (s) {
+        var t = RM.itemById(s, it.id);
+        if (!t) return;
+        t[f] = estV; RM.fixEstRange(t);
+        // the planned bar follows the project's basis (Setup → Sizing → Estimates)
+        var bd = t.milestone ? null : RM.basisDays(s, t);
+        if (bd != null && bd > 0) t.durDays = t.startDay != null ? RM.stretchSpan(s.meta, t.startDay, bd) : bd;
       });
       return;
     }
@@ -11010,6 +11058,37 @@
         '<section class="su-card"><h2>' + esc(lvl('feature') + ' sizing') + '</h2>' +
         '<div class="su-schemes">' + schemeRows + '</div>' +
         '</section>' + sizingCards +
+        (function () {
+          var rangeOn = RM.rangeEnabled(state);
+          var unit = RM.estUnit(state);
+          var pick = function (attr, key, on, title, hint) {
+            return '<button class="su-scheme' + (on ? ' on' : '') + '" data-' + attr + '="' + key + '">' +
+              '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
+              '<span class="su-scheme-main"><b>' + esc(title) + '</b><span>' + esc(hint) + '</span></span></button>';
+          };
+          return '<section class="su-card"><h2>Estimates</h2>' +
+            '<div class="su-schemes">' +
+            pick('suest', 'single', !rangeOn, 'Single estimate', 'One planned duration per row — the default') +
+            pick('suest', 'range', rangeOn, 'Range estimate', 'Low and high per feature and story; bars show the min/max span') +
+            '</div>' +
+            (rangeOn
+              ? '<div class="su-schemes" style="margin-top:8px">' +
+                RM.ESTIMATE_UNIT_ORDER.map(function (k) {
+                  var def = RM.ESTIMATE_UNITS[k];
+                  return pick('suestunit', k, unit === k, def.name, k === 'days' ? 'Estimates are working days' : k === 'points' ? 'Converted to working days at the rate below' : 'Converted to working days at the rate below');
+                }).join('') + '</div>' +
+                (unit !== 'days'
+                  ? '<div class="p-row" style="margin-top:8px"><label class="p-lab">Working days per ' + esc(def1(unit)) + '</label>' +
+                    '<input type="number" id="suEstDaysPerUnit" min="0.01" step="0.05" value="' + m.daysPerUnit + '" style="width:90px"></div>'
+                  : '') +
+                '<div class="p-row" style="margin-top:8px"><span class="p-lab">Planned bar follows</span>' +
+                '<div class="seg"><button data-suestbasis="high" class="' + (m.estimateBasis !== 'low' ? 'on' : '') + '">High</button>' +
+                '<button data-suestbasis="low" class="' + (m.estimateBasis === 'low' ? 'on' : '') + '">Low</button></div></div>'
+              : '') +
+            '<div class="m-hint">Range mode adds Low / High fields to the panel and draws a hatched min/max span behind each bar. The planned duration is what schedules; it follows the basis when a range is entered.</div>' +
+            '</section>';
+          function def1(k) { return k === 'points' ? 'point' : 'hour'; }
+        })() +
         '<section class="su-card"><h2>' + esc(lvl('story') + ' sizing') + '</h2>' +
         '<div class="su-schemes">' + storySchemeRows + '</div>' +
         '<div class="m-hint">Stories estimate on their own scale — story points by default.</div>' +
@@ -11251,6 +11330,12 @@
       commit('sprint number', function (s2) { s2.meta.sprintAnchorNum = n; });
       return;
     }
+    if (t.id === 'suEstDaysPerUnit') {
+      var dpu = parseFloat(t.value);
+      if (!isFinite(dpu) || dpu <= 0) { render(); return; }
+      commit('estimate rate', function (s2) { s2.meta.daysPerUnit = dpu; });
+      return;
+    }
     if (t.dataset.susz) {
       var sz = t.dataset.susz, szKeys = RM.sizeKeys(t.dataset.kind || 'feature');
       var cur = (state.meta[szKeys.days] || {})[sz];
@@ -11283,6 +11368,25 @@
     if (holrm != null) {
       var holIdx = parseInt(holrm, 10);
       commit('holiday rm', function (s2) { RM.removeHolidayRange(s2.meta, holIdx); });
+      return;
+    }
+    if (t.dataset.suest) {
+      var estMode = t.dataset.suest;
+      if (estMode === state.meta.estimateMode) return;
+      commit('estimate mode', function (s2) { s2.meta.estimateMode = estMode; });
+      toast(estMode === 'range' ? 'Range estimates on — Low / High fields in the panel' : 'Single estimates');
+      return;
+    }
+    if (t.dataset.suestunit) {
+      var estUnit = t.dataset.suestunit;
+      if (estUnit === state.meta.estimateUnit) return;
+      commit('estimate unit', function (s2) { s2.meta.estimateUnit = estUnit; s2.meta.daysPerUnit = RM.ESTIMATE_UNITS[estUnit].daysPerUnit; });
+      return;
+    }
+    if (t.dataset.suestbasis) {
+      var estBasis = t.dataset.suestbasis;
+      if (estBasis === state.meta.estimateBasis) return;
+      commit('estimate basis', function (s2) { s2.meta.estimateBasis = estBasis; });
       return;
     }
     if (t.dataset.suscheme) {

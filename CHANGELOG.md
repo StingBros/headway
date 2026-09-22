@@ -7,6 +7,14 @@ both come from the matching section here. Newest first.
 Format: short sections, bullets, one bold title per notable change —
 `**Feature title**: a short, impactful description and use case.`
 
+## Unreleased
+
+### New
+- **Range estimates**: Setup → Sizing → Estimates switches a project from one planned duration to a low / high estimate per feature and story, in working days, story points or hours (with a days-per-unit rate). The Planning bar shows the min/max span as a hatched band behind the planned bar, the panel gains Low / High fields, the planned duration follows a chosen basis (high or low), and the Roadmap sheet carries `Est. low` / `Est. high` columns. Off by default — single-estimate documents look exactly as before.
+
+### Fixed
+- Re-importing a workbook no longer overwrites a rich Notes / Enables / Out-of-scope value with a mangled copy when ExcelJS corrupts a surrogate pair in the visible sheet, or when Excel's 32,767-character cell cap truncated it.
+
 ## 1.0.13 — 2026-09-09
 
 ### New

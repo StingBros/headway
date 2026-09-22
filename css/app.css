@@ -747,6 +747,14 @@ body.cap-off .hc-lab { display: none !important; }
   touch-action: none;
 }
 .bar:hover { box-shadow: 0 2px 7px rgba(24, 36, 48, .3); filter: saturate(1.06); }
+/* range estimate: the min/max span behind a bar (Setup → Sizing → Estimates) */
+.bar-range {
+  position: absolute; top: 11px; height: 14px; border-radius: 4px; z-index: 2;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--bar-c, var(--c-product)) 38%, transparent) 0 4px, transparent 4px 9px);
+  border: 1px dashed color-mix(in srgb, var(--bar-c, var(--c-product)) 70%, transparent);
+  pointer-events: none;
+}
+.bar-range .br-low { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--ink-2); opacity: .8; }
 .bar.dragging { opacity: .88; box-shadow: var(--shadow-2); z-index: 8; cursor: grabbing; }
 .bar.selected { outline: 2px solid var(--ink); outline-offset: 1.5px; }
 /* a selected story wears the outline itself; its feature only keeps the row mark */

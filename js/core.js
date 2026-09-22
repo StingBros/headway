@@ -13,6 +13,42 @@
   // Working days per size — measured in weeks: XS 2d · S 1w · M 2w · L 4w · XL 8w.
   RM.DEFAULT_SIZE_DAYS = { XS: 2, S: 5, M: 10, L: 20, XL: 40 };
   RM.LEGACY_SIZE_DAYS = { XS: 2, S: 3, M: 5, L: 10, XL: 20 };
+
+  // ---- range estimates (a project setting, Setup → Sizing → Estimates).
+  // meta.estimateMode 'single' (one planned duration, the default) or 'range'
+  // (estLow / estHigh per feature and story). meta.estimateUnit is what those
+  // numbers are counted in; meta.daysPerUnit converts them to working days.
+  RM.ESTIMATE_UNITS = {
+    days: { name: 'Working days', short: 'd', daysPerUnit: 1 },
+    points: { name: 'Story points', short: 'pts', daysPerUnit: 1 },
+    hours: { name: 'Hours', short: 'h', daysPerUnit: 1 / 8 }
+  };
+  RM.ESTIMATE_UNIT_ORDER = ['days', 'points', 'hours'];
+  RM.estDays = function (v) {
+    var n = v == null || v === '' ? NaN : Number(v);
+    return isFinite(n) && n >= 0 ? Math.round(n * 4) / 4 : null;
+  };
+  RM.rangeEnabled = function (state) {
+    var m = state && state.meta ? state.meta : state;
+    return !!m && m.estimateMode === 'range';
+  };
+  RM.estUnit = function (state) {
+    var m = state && state.meta ? state.meta : state;
+    return RM.ESTIMATE_UNITS[m && m.estimateUnit] ? m.estimateUnit : 'days';
+  };
+  RM.estUnitShort = function (state) { return RM.ESTIMATE_UNITS[RM.estUnit(state)].short; };
+  // estimate value (in the project unit) → working days
+  RM.estToDays = function (state, v) {
+    var m = state && state.meta ? state.meta : state;
+    if (v == null) return null;
+    var per = m && isFinite(m.daysPerUnit) && m.daysPerUnit > 0 ? m.daysPerUnit : RM.ESTIMATE_UNITS[RM.estUnit(state)].daysPerUnit;
+    return Math.max(0, Math.round(v * per * 2) / 2);
+  };
+  RM.fixEstRange = function (x) {
+    if (x && x.estLow != null && x.estHigh != null && x.estLow > x.estHigh) { var t = x.estLow; x.estLow = x.estHigh; x.estHigh = t; }
+    return x;
+  };
+
   RM.SIZE_ORDER = ['XS', 'S', 'M', 'L', 'XL'];
 
   // Sizing approaches (meta.sizeScheme). Every option maps to working days so
@@ -1399,6 +1435,10 @@
     // capacity feature switch — roster-based scheduling constraints and the
     // capacity header row. OFF by default; enabled per-document in Setup.
     m.capacityEnabled = !!m.capacityEnabled;
+    m.estimateMode = m.estimateMode === 'range' ? 'range' : 'single';
+    m.estimateUnit = RM.ESTIMATE_UNITS[m.estimateUnit] ? m.estimateUnit : 'days';
+    m.estimateBasis = m.estimateBasis === 'low' ? 'low' : 'high';
+    m.daysPerUnit = isFinite(m.daysPerUnit) && m.daysPerUnit > 0 ? +m.daysPerUnit : RM.ESTIMATE_UNITS[m.estimateUnit].daysPerUnit;
     // apps switch (Setup → Apps): which header tabs this project shows. All
     // on by default; Planning is the home view and can never go off.
     var apps = (m.apps && typeof m.apps === 'object') ? m.apps : {};
@@ -1758,6 +1798,8 @@
           ? Math.max(it.milestone ? 0 : 1, it.durDays) : null,
         // risk t-shirt is planning metadata only — it never pads the schedule
         riskDays: 0,
+        // range estimate, in the project's estimate unit (null = not estimated)
+        estLow: RM.estDays(it.estLow), estHigh: RM.estDays(it.estHigh),
         locked: !!it.locked,
         // attention flag (orange flag on the row) with an optional reason
         flag: RM.normalizeFlag(it.flag),
@@ -1813,6 +1855,7 @@
             type: RM.itemType(state, s.type) ? s.type : RM.defaultTypeFor(state, 'story'),
             jiraKey: RM.jiraKeyOf(s.jiraKey),
             size: s.size || null,
+            estLow: RM.estDays(s.estLow), estHigh: RM.estDays(s.estHigh),
             priority: s.priority && storyPrioOrder.indexOf(String(s.priority).toUpperCase()) !== -1
               ? String(s.priority).toUpperCase() : null,
             // stories rate risk on the document's risk scheme, like features
@@ -1848,6 +1891,8 @@
 
     state.items.forEach(function (it) {
       delete it.leadDays;
+      RM.fixEstRange(it);
+      it.stories.forEach(RM.fixEstRange);
       RM.ensureOrder(it.stories);
     });
     // canonical array order first, so a num collision resolves the same way
@@ -2539,6 +2584,33 @@
   // Risk is metadata only now — it contributes no working days to the plan.
   RM.riskEffortDays = function () { return 0; };
 
+  // The low / high of a row in WORKING DAYS; a missing side falls back to the
+  // planned duration (working days inside the bar). null when nothing is known.
+  RM.estRange = function (state, x) {
+    var meta = state && state.meta ? state.meta : state;
+    var planned = x.startDay != null && x.durDays != null ? RM.workInSpan(meta, x.startDay, x.durDays)
+      : (x.durDays != null ? x.durDays : null);
+    var low = x.estLow != null ? RM.estToDays(state, x.estLow) : planned;
+    var high = x.estHigh != null ? RM.estToDays(state, x.estHigh) : planned;
+    if (low == null && high == null) return null;
+    return { low: low != null ? low : high, high: high != null ? high : low, planned: planned };
+  };
+  // where the low / high estimate would end on the grid for a scheduled row
+  RM.rangeSpans = function (state, x) {
+    var meta = state && state.meta ? state.meta : state;
+    var r = RM.estRange(state, x);
+    if (!r || x.startDay == null) return null;
+    return { low: r.low, high: r.high, planned: r.planned,
+      lowEnd: x.startDay + RM.stretchSpan(meta, x.startDay, r.low),
+      highEnd: x.startDay + RM.stretchSpan(meta, x.startDay, r.high) };
+  };
+  // working days the planned bar carries under the document's basis
+  RM.basisDays = function (state, x) {
+    var r = RM.estRange(state, x);
+    if (!r) return null;
+    return (state.meta || state).estimateBasis === 'low' ? r.low : r.high;
+  };
+
   // ------------------------------------------------------------ dependencies
   // Concrete dependency item list from the explicit deps (item ids); unknown
   // = ids with no item, i.e. deleted. ("All above" support was removed —
@@ -2947,6 +3019,12 @@
       if (scheduled) {
         if (it.startDay < 0 || it.startDay + RM.itemSpan(it) > horizon) {
           add(it, 'warn', 'OFF_TIMELINE', 'Bar extends outside the timeline');
+        }
+        if (RM.rangeEnabled(state) && (it.estLow != null || it.estHigh != null)) {
+          var er = RM.estRange(state, it);
+          if (er && er.planned != null && (er.planned < er.low || er.planned > er.high)) {
+            add(it, 'info', 'EST_RANGE', 'Planned duration (' + er.planned + ' working days) is outside its estimate range (' + er.low + '–' + er.high + ')');
+          }
         }
         res.deps.forEach(function (dep) {
           var depEnd = RM.itemEnd(dep);
