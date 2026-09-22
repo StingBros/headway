@@ -1870,7 +1870,8 @@ var mkDoc = function (order) {
 };
 var dA = mkDoc('a'), dB = mkDoc('b');
 var numsOf = function (d) { var m = {}; d.items.forEach(function (it) { it.stories.forEach(function (st) { m[st.id] = st.num; }); }); return m; };
-eq(numsOf(dA), numsOf(dB), 'the same story numbers regardless of array order');
+var pairsOf = function (d) { var m = numsOf(d); return Object.keys(m).sort().map(function (k) { return k + '=' + m[k]; }); };
+eq(pairsOf(dA), pairsOf(dB), 'the same story numbers regardless of array order');
 eq(numsOf(dA)[sOld], 7, 'the older story keeps the contested number');
 ok(numsOf(dA)[sNew] > 2 && numsOf(dA)[sNew] !== 7, 'the younger one is renumbered past the pool');
 var stOld = RM.itemById(dA, uidAt('i', 100)).stories[0];
