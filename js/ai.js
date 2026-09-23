@@ -570,6 +570,8 @@
         return;
       }
       if (sameJson(b, it)) return; // untouched: the user's copy stays
+      // stories the tool reordered (or inserted mid-list) keep keys in sequence
+      if (Array.isArray(it.stories) && it.stories.some(function (st) { return st.order; })) rekeyInSequence(it.stories);
       if (liveIdx[it.id] != null) live[liveIdx[it.id]] = it; // (deleted by the user meanwhile: stays deleted)
     });
     // numbers are one pool across features and stories: a number the tool
@@ -603,13 +605,33 @@
         if (rb == null) return -1;
         return ra - rb;
       });
+      rekeyInSequence(live);
     }
+  }
+  // The document order is the order keys (normalizeState sorts by them, a
+  // shared roadmap syncs them): after the tool reordered a list, re-key the
+  // entries that break the key sequence, each between its new neighbours.
+  function rekeyInSequence(list) {
+    var prevKey = null;
+    list.forEach(function (x, i) {
+      if (!x.order || (prevKey != null && x.order <= prevKey)) {
+        var nextKey = null;
+        for (var j = i + 1; j < list.length && nextKey == null; j++) {
+          if (list[j].order && (prevKey == null || list[j].order > prevKey)) nextKey = list[j].order;
+        }
+        x.order = RM.orderBetween(prevKey, nextKey);
+      }
+      prevKey = x.order;
+    });
   }
   function applyChanges(s, base, next) {
     Object.keys(next).forEach(function (k) {
       if (k === 'history') return;
       if (k === 'items') { applyItemChanges(s, base.items || [], next.items || []); return; }
-      if (!sameJson(base[k], next[k])) s[k] = next[k];
+      if (sameJson(base[k], next[k])) return;
+      s[k] = next[k];
+      // keyed lists (a phase or person moved by a path op) keep keys in sequence
+      if ((k === 'phases' || k === 'team' || k === 'costs') && Array.isArray(s[k])) rekeyInSequence(s[k]);
     });
     Object.keys(base).forEach(function (k) {
       if (k !== 'history' && k !== 'items' && !(k in next)) delete s[k];

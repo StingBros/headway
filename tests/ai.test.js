@@ -586,6 +586,28 @@ function done() {
 }
 
 function finish() {
+  console.log('— reorder keeps order keys in sequence');
+  {
+    var sR = RM.normalizeState({ meta: { title: 'T', timelineStart: '2026-07-27', numWeeks: 20 }, phases: [{ id: 'p1', name: 'P' }],
+      items: [{ id: 'a', num: 1, phaseId: 'p1', feature: 'A' }, { id: 'b', num: 2, phaseId: 'p1', feature: 'B' }, { id: 'c', num: 3, phaseId: 'p1', feature: 'C' }] });
+    var baseR = RM.clone(sR), nextR = RM.clone(sR);
+    nextR.items = [nextR.items[2], nextR.items[0], nextR.items[1]]; // the tool moved C to the top
+    AI.applyChanges(sR, baseR, nextR);
+    eq(sR.items.map(function (i) { return i.id; }), ['c', 'a', 'b'], 'the tool\'s order applies');
+    var keysR = sR.items.map(function (i) { return i.order; });
+    ok(keysR.every(function (k, i) { return !!k && (i === 0 || k > keysR[i - 1]); }), 'order keys ascend with the new order');
+    eq(RM.normalizeState(RM.clone(sR)).items.map(function (i) { return i.id; }), ['c', 'a', 'b'], 'and a reload (sort by key) keeps it');
+    var sN = RM.normalizeState(RM.clone(baseR)), keysN = sN.items.map(function (i) { return i.order; });
+    AI.applyChanges(sN, RM.clone(sN), RM.clone(sN));
+    eq(sN.items.map(function (i) { return i.order; }), keysN, 'no reorder, no key touched');
+    var sS = RM.normalizeState({ meta: { title: 'T', timelineStart: '2026-07-27', numWeeks: 20 }, phases: [{ id: 'p1', name: 'P' }],
+      items: [{ id: 'f', num: 1, phaseId: 'p1', feature: 'F', stories: [{ id: 's1', title: 'one' }, { id: 's2', title: 'two' }, { id: 's3', title: 'three' }] }] });
+    var nextS = RM.clone(sS);
+    nextS.items[0].stories.reverse(); // the tool reversed the stories
+    AI.applyChanges(sS, RM.clone(sS), nextS);
+    eq(RM.normalizeState(RM.clone(sS)).items[0].stories.map(function (x) { return x.id; }), ['s3', 's2', 's1'], 'a story reorder by the tool survives a reload');
+  }
+
   console.log('— desktop transport');
   {
     // The Tauri http plugin's reqwest trusts only bundled Mozilla roots unless
