@@ -4254,6 +4254,12 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok(after.history.length === hLen + 1 && after.history[after.history.length - 1].label === 'auto timeline',
       'the click is one version-history entry, labelled auto timeline');
     ok([...doc.querySelectorAll('#toasts .toast')].some((t) => /Auto timeline moved \d+ item/.test(t.textContent)), 'and toasts how many items moved');
+    {
+      const was = JSON.parse(before);
+      const nMoved = after.items.filter((b) => { const a = was.find((x) => x.id === b.id); return a && (a.startDay !== b.startDay || a.durDays !== b.durDays); }).length;
+      ok([...doc.querySelectorAll('#toasts .toast')].some((t) => t.textContent.indexOf('moved ' + nMoved + ' item') !== -1),
+        'the toast counts the units that moved (' + nMoved + ')');
+    }
     ok(zapOf(ph0).disabled && /already in place/.test(zapOf(ph0).getAttribute('title') || zapOf(ph0).dataset.tip || ''),
       'right after the click the button is disabled: everything is in place');
     ok(!after.phases.some((p) => 'auto' in p), 'no phase carries an auto flag');
@@ -4265,6 +4271,56 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     window.HeadwayApp.ai.autoTimelineNow();
     ok(realPhases.every((p) => zapOf(p.id).disabled), 'autoTimelineNow() runs every real phase: every button is disabled after');
     ok(window.HeadwayApp.ai.autoTimelineNow(ph0) === 0, 'and a second run of the same phase changes nothing');
+    // a snap picked in the View menu re-renders the rows: the buttons follow the new snap
+    {
+      const zOld = zapOf(ph0);
+      const curFeat = window.HeadwayApp.ai.ui().snapFeat;
+      const other = curFeat === 'day' ? 'sprint' : 'day';
+      const pickSnap = (mode) => {
+        click(doc.querySelector('.menu-btn[data-menu="view"]'));
+        const want = new RegExp('snap to ' + { day: 'day', week: 'week', sprint: 'sprint' }[mode], 'i');
+        const b = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].filter((x) => want.test(x.textContent))[0];
+        if (b) click(b);
+        return !!b;
+      };
+      ok(pickSnap(other), 'the View menu offers a feature snap');
+      ok(window.HeadwayApp.ai.ui().snapFeat === other, 'and picking it switches the feature snap');
+      ok(zapOf(ph0) !== zOld, 'the rows re-render, so the band button is rebuilt');
+      const dryO = window.RM.autoPhase(window.HeadwayApp.ai.state(), ph0, { autoOrder: window.HeadwayApp.ai.ui().autoOrder, snap: { feature: other, story: window.HeadwayApp.ai.ui().snapStory } });
+      ok(zapOf(ph0).disabled === (dryO.changed === 0), 'and its disabled state matches a dry run under the new snap');
+      pickSnap(curFeat);
+      ok(window.HeadwayApp.ai.ui().snapFeat === curFeat, 'the snap is back');
+    }
+    // the phase dialog's Auto timeline button saves the dialog's edits first
+    {
+      const st0 = window.HeadwayApp.ai.state();
+      const open = st0.items.filter((i) => i.phaseId === ph0 && !i.milestone && !i.locked && !i.done && i.startDay != null);
+      window.HeadwayApp.ai.commit('overlap', (s) => { s.items.find((i) => i.id === open[1].id).startDay = open[0].startDay; });
+      click(doc.querySelector('#rows .row.band[data-phase="' + ph0 + '"] [data-act="phase-edit"]'));
+      const nameIn = doc.querySelector('#phName');
+      const oldName = nameIn.value;
+      nameIn.value = oldName + ' renamed';
+      const run = doc.querySelector('#phAutoRun');
+      ok(!!run && !run.disabled, 'the dialog button is enabled for an overlapping phase');
+      click(run);
+      const st1 = window.HeadwayApp.ai.state();
+      ok(st1.phases.find((p) => p.id === ph0).name === oldName + ' renamed', 'the dialog\u2019s pending rename was saved, not dropped');
+      ok(st1.history[st1.history.length - 1].label === 'auto timeline', 'and then the action ran');
+      ok(zapOf(ph0).disabled, 'leaving the phase in place');
+      // a unit the roster can never fit is left where it is, and the toast says so
+      window.HeadwayApp.ai.commit('crowd', (s) => {
+        const a = s.items.find((i) => i.id === open[0].id), b = s.items.find((i) => i.id === open[1].id);
+        a.capMult = 3; b.startDay = a.startDay;
+      });
+      [...doc.querySelectorAll('#toasts .toast')].forEach((t) => t.remove());
+      if (!zapOf(ph0).disabled) {
+        click(zapOf(ph0));
+        ok([...doc.querySelectorAll('#toasts .toast')].some((t) => / \u00b7 1 could not be placed/.test(t.textContent)),
+          'the toast says a unit could not be placed');
+      } else ok(false, 'a crowded phase enables the button');
+    }
+    ok(/body\.ro[^{]*\.band-zap/.test(fs.readFileSync(require('path').join(__dirname, '..', 'css', 'app.css'), 'utf8')),
+      'read-only documents hide the Auto timeline button');
     // editing capacity no longer toasts about a switched-off Auto flag
     window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
     ok(zapOf(ph0).disabled, 'turning capacity planning off disables the button');
@@ -5261,6 +5317,16 @@ ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'co
   const rawH = window.RM.autoSizeDays(state(), ff());
   const roundH = window.RM.autoSizeDays(state(), ff(), { snap: { feature: 'week' } });
   ok(roundH > rawH, 'the week snap rounds the short hull up (' + rawH + ' → ' + roundH + ')');
+  // the click sizes the feature from that rounded span, and a size set from
+  // stories never reads as a size/bar mismatch: the bar is the stories' hull
+  window.HeadwayApp.ai.setPref('snapFeat', 'week');
+  const zapW = doc.querySelector('#rows .row.band[data-phase="' + f0.phaseId + '"] .band-zap');
+  if (zapW && !zapW.disabled) click(zapW);
+  const szB = doc.querySelector('#rows .row.item[data-id="' + f0.id + '"] [data-act="size"]');
+  ok(!!szB && !szB.classList.contains('custom'),
+    'a derived size never reads as a size/bar mismatch under a week feature snap');
+  window.HeadwayApp.ai.setPref('snapFeat', 'day');
+
 
   // a story buys whole snap units: 3 days under a week snap stores 5
   window.HeadwayApp.ai.setPref('snapStory', 'week');

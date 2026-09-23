@@ -500,9 +500,15 @@
   var AUTO_TL_TIP = 'Auto timeline: move this phase\u2019s items to follow dependencies and capacity';
   var autoDry = { rev: -1, key: '', byPhase: {} };
   function autoPhaseDryRun(phaseId) {
-    var key = snapFeat + '|' + snapStory + '|' + RM.todayDay(state.meta);
+    var key = snapFeat + '|' + snapStory + '|' + autoOrder + '|' + RM.todayDay(state.meta);
     if (autoDry.rev !== stateRev || autoDry.key !== key) autoDry = { rev: stateRev, key: key, byPhase: {} };
-    if (!autoDry.byPhase[phaseId]) autoDry.byPhase[phaseId] = RM.autoPhase(state, phaseId, snapOpts());
+    if (!autoDry.byPhase[phaseId]) {
+      // auto-order rides along inside the action (it re-sorts between passes),
+      // so the dry run and the click agree
+      var o = snapOpts();
+      o.autoOrder = autoOrder;
+      autoDry.byPhase[phaseId] = RM.autoPhase(state, phaseId, o);
+    }
     return autoDry.byPhase[phaseId];
   }
   // { disabled, tip } for the band button, the band menu entry and the dialog
@@ -527,13 +533,14 @@
     commit('auto timeline', function (s) {
       s.items = r.state.items;
       s.meta = r.state.meta;
-      if (autoOrder && r.moved) RM.sortItemsByStart(s);
     });
     var sz = r.sized.length;
-    var szTxt = sz ? 'resized ' + sz + ' ' + lvl('feature').toLowerCase() + (sz === 1 ? '' : 's') : '';
-    toast(r.moved
+    var szTxt = sz ? 'resized ' + sz + ' ' + (sz === 1 ? lvl('feature') : lvl('feature', true)).toLowerCase() : '';
+    var stuck = (r.notes || []).filter(function (n) { return /never fits/.test(n); }).length;
+    toast((r.moved
       ? 'Auto timeline moved ' + r.moved + ' item' + (r.moved === 1 ? '' : 's') + (sz ? ' and ' + szTxt : '')
-      : 'Auto timeline ' + szTxt);
+      : sz ? 'Auto timeline ' + szTxt : 'Auto timeline rebuilt the ' + lvl('feature').toLowerCase() + ' bars') +
+      (stuck ? ' \u00b7 ' + stuck + ' could not be placed' : ''));
     return r.changed;
   }
   // every real phase, one after another (the assistant's hook); returns the
@@ -4332,6 +4339,9 @@
     if (!it.size || !isScheduled(it)) return true;
     // a derived size is whatever the bar says it is — never a mismatch
     if (RM.sizeRollup(state)) return true;
+    // at the Stories level a feature whose bar is the hull of its scheduled
+    // stories draws from the stories, not from its size
+    if (RM.planLevel(state) === 'story' && (it.stories || []).some(function (st) { return st.startDay != null && st.durDays != null; })) return true;
     var work = RM.workInSpan(state.meta, it.startDay, it.durDays);
     return work === RM.itemSizeDays(state, it, snapOpts());
   }
@@ -8810,7 +8820,7 @@
       SNAP_MODES.forEach(function (mode) {
         snapItems.push({ icon: 'magnet', label: labelHtml + ' snap to ' + SNAP_LABELS[mode], checked: snapModeFor(k[0]) === mode, fn: function () {
           setSnapMode(k[0], mode);
-          saveLocal(); renderTopbar();
+          saveLocal(); render(); // the rows too: the Auto timeline buttons depend on the snap
           toast(raw + ' snap: ' + SNAP_LABELS[mode]);
         } });
       });
@@ -8858,7 +8868,7 @@
         autoOrder = !autoOrder;
         saveLocal();
         if (autoOrder) commit('auto-order', function (s) { RM.sortItemsByStart(s); });
-        else renderTopbar();
+        else render(); // the Auto timeline buttons' dry runs follow auto-order
         toast('Auto-order ' + (autoOrder ? 'on — rows follow the timeline' : 'off'));
       } },
       state.meta.capacityEnabled ? { icon: 'zap', label: 'Auto timeline: the \u26a1 button on a phase band', disabled: true, fn: function () {} } : null,
@@ -9053,7 +9063,8 @@
       function (host) {
         $('[data-m=x]', host).onclick = closeModal;
         $('[data-m=x2]', host).onclick = closeModal;
-        $('#phSave', host).onclick = function () {
+        // Save, and the Auto timeline button, which saves the pending edits first
+        function savePhase() {
           var name = $('#phName', host).value.trim() || 'Phase';
           var desc = sanitizeHtml($('#phDescEd .wz-ed', host).innerHTML);
           var bucket = $('#phBucket', host).checked;
@@ -9080,9 +9091,10 @@
               });
             });
           }
-        };
+        }
+        $('#phSave', host).onclick = savePhase;
         var autoRun = $('#phAutoRun', host);
-        if (autoRun) autoRun.onclick = function () { closeModal(); autoTimelinePhase(phaseId); };
+        if (autoRun) autoRun.onclick = function () { savePhase(); autoTimelinePhase(phaseId); };
         var del = $('#phDelete', host);
         if (del) del.onclick = function () {
           closeModal();

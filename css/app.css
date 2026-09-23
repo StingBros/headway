@@ -583,7 +583,7 @@ body.ro #btnSave, body.ro #btnAI, body.ro #btnExport, body.ro #btnJira, body.ro 
 body.ro #optBtn, body.ro #menus [data-menu="file"], body.ro #menus [data-menu="edit"], body.ro #resManage,
 body.ro .st-del, body.ro .row.story-add, body.ro .raddrow, body.ro .pr-st-add, body.ro .spv-add, body.ro [data-pradd],
 body.ro .r-grip, body.ro .st-grip, body.ro .spv-grip, body.ro .su-grip, body.ro .rr-grip, body.ro #leftRz,
-body.ro .band-add, body.ro .band-edit, body.ro .mi-edit, body.ro .pf-name { display: none !important; }
+body.ro .band-add, body.ro .band-edit, body.ro .band-zap, body.ro .mi-edit, body.ro .pf-name { display: none !important; }
 body.ro .sc-edit, body.ro .sc-name, body.ro .st-name, body.ro .pr-title, body.ro .spv-title, body.ro input.r-name { cursor: default; }
 body.ro .bar, body.ro .st-bar, body.ro .sp-card, body.ro .spv-row { cursor: default; }
 /* rolled-up sizes read, never edit */
