@@ -9,6 +9,8 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- The capacity type chip in the Planning left pane shows the whole type name once its column is wide enough (it was cut to eight characters regardless).
+- Planning rows no longer show the epic tag beside the feature title; add the Epic column when you want it.
 - The assistant's close button no longer sits under the right-panel toggle.
 - **Auto-sized features**: at the Stories planning level, a feature in an Auto phase with at least one sized story is sized from its stories automatically — the nearest label on the feature scale for the working days its stories' timelines span (parallel stories do not add up); its size chip reads as derived.
 - Auto-sized features round up to the feature snap (day / week / sprint).

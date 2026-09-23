@@ -2064,7 +2064,7 @@
     if (key === 'cap') {
       if (!state.meta.capacityEnabled) return '';
       return '<span class="r-cap' + (st.capType ? '' : ' empty') + '" tabindex="0" role="button" ' + attr + '="st-cap" title="' +
-        esc('Capacity type' + (st.capType ? '\nNow: ' + st.capType : '')) + '">' + (st.capType ? esc(shorten(st.capType, 8)) : blank) + '</span>';
+        esc('Capacity type' + (st.capType ? '\nNow: ' + st.capType : '')) + '">' + (st.capType ? esc(st.capType) : blank) + '</span>';
     }
     if (key === 'mult') {
       if (!state.meta.capacityEnabled || state.meta.capMode === 'points') return '';
@@ -4019,10 +4019,8 @@
         // top-aligned and wrapping like every other cell
         ? '<div class="r-name sc-name" contenteditable="true" spellcheck="false" aria-label="Feature title">' + esc(it.feature) + '</div>'
         : plNameHtml(it)) +
-      // scoping has an Epic column of its own — no tag beside the title there
-      (it.epic && !groupEpic && view !== 'scoping' ? '<span class="r-epic" title="' + esc(it.epic) + '">' +
-        (RM.iconForEpic(state, it.epic) ? '<i data-lucide="' + RM.iconForEpic(state, it.epic) + '"></i>' : '') +
-        esc(it.epic) + '</span>' : '') +
+      // no epic tag beside the title: the Epic column (Planning) / Epic
+      // cell (Scoping) carries it when wanted
       '</div>' +
       (view === 'scoping' ? '' : (function () {
         // the planning chips follow the user's column order/visibility
@@ -4042,7 +4040,7 @@
           cap: state.meta.capacityEnabled && RM.planLevel(state) === 'feature' && !it.milestone
             ? '<span class="r-cap' + (RM.itemCapType(state, it) ? '' : ' empty') + (itemCapInherited(it) ? ' inherited' : '') + '" tabindex="0" role="button" data-act="cap" title="' +
               esc(itemCapInherited(it) ? CAP_INHERIT_TITLE : 'Capacity type' + (RM.itemCapType(state, it) ? '\nNow: ' + RM.itemCapType(state, it) : '')) + '">' +
-              (RM.itemCapType(state, it) ? esc(shorten(RM.itemCapType(state, it), 8)) : '·') + '</span>'
+              (RM.itemCapType(state, it) ? esc(RM.itemCapType(state, it)) : '·') + '</span>'
             : '<span class="r-cap r-blank"></span>',
           mult: state.meta.capacityEnabled && RM.planLevel(state) === 'feature' && !it.milestone && state.meta.capMode !== 'points'
             ? '<span class="r-mult editable' + ((it.capMult || 1) === 1 ? ' one' : '') + '" tabindex="0" role="button" data-act="mult" title="Capacity multiplier — people this needs at once">×' + fmtPe(it.capMult || 1) + '</span>'

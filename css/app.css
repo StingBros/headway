@@ -598,7 +598,8 @@ body.ro .bar, body.ro .st-bar, body.ro .sp-card, body.ro .spv-row { cursor: defa
   width: 58px; flex: 0 0 58px; text-align: center;
   font-size: 10px; font-weight: 600; color: var(--ink-2);
   border: 1px solid transparent; border-radius: 5px; padding: 1px 2px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  /* the full type name is always rendered; only the column width clips it */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
 }
 .r-cap:hover { border-color: var(--line-2); background: var(--surface); }
 .r-cap.empty { color: var(--ink-3); }
@@ -1223,7 +1224,7 @@ input[type="checkbox"]:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px rgba(0, 87, 184, .22);
 }
-/* epic-band icon slot (item rows carry the icon inside the .r-epic chip) */
+/* epic-band icon slot (item rows carry no epic tag; the Epic column does) */
 .r-ico {
   display: inline-flex; align-items: center; justify-content: center;
   width: 16px; flex: 0 0 16px;

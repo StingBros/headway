@@ -295,11 +295,7 @@ ok(doc.querySelector('#leftRzLine') !== null, 'full-height left-pane resize line
   click(doc.querySelector('#modalHost [data-m=cancel], #modalHost [data-m=x]'));
 }
 ok(!doc.querySelector('#rows .row.item .r-ico'), 'item rows carry no standalone epic-icon slot');
-{
-  const chip = doc.querySelector('#rows .row.item .r-epic');
-  ok(!!chip && (chip.querySelector('svg') || chip.querySelector('i')) !== null,
-    'epic chip combines icon + label');
-}
+ok(!doc.querySelector('#rows .row.item .r-epic'), 'item rows carry no epic tag beside the title (the Epic column does)');
 
 // ---------------------------------------------------------------- menus
 click(doc.querySelector('[data-menu="file"]'));
@@ -4306,6 +4302,15 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok(menuBtns().length > 0 && !menuBtns().some((b) => /general/.test(b.textContent)),
       'the feature capacity picker offers the types only, with no “general” entry');
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    // the chip renders the whole type name; a narrow column clips it in CSS,
+    // so widening the column reveals the rest instead of a baked-in ellipsis
+    window.HeadwayApp.ai.commit('long type', (s) => {
+      s.capTypes.push('Quality engineering');
+      s.items.forEach((i) => { if (i.id === itRow.dataset.id) i.capType = 'Quality engineering'; });
+    });
+    ok(doc.querySelector('#rows .row.item[data-id="' + itRow.dataset.id + '"] .r-cap[data-act="cap"]').textContent === 'Quality engineering',
+      'the capacity chip carries the full type name (no JS truncation)');
+    undo();
     // a feature whose stories all agree shows the type as inherited
     const inhId = [...doc.querySelectorAll('#rows .row.item[data-id]')]
       .map((r) => state().items.find((i) => i.id === r.dataset.id))
