@@ -403,6 +403,48 @@
     };
   };
 
+  // ------------------------------------------------------------ project folders
+  // A project on disk:
+  //   <Project>/<Project>.headway   marker the user opens (markerText)
+  //   <Project>/.headway/           everything else (headway.json, plans/, …)
+  // The folder is named after the title; these are the pure naming rules.
+  var RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+  RMBundle.projectName = function (title) {
+    var s = String(title == null ? '' : title)
+      .replace(/[\u0000-\u001f\u007f]+/g, '')
+      .replace(/[\\/:*?"<>|]+/g, '')
+      .trim()
+      .replace(/^[.\s]+/, '')      // never a hidden folder
+      .replace(/[.\s]+$/, '');     // Windows refuses trailing dots / spaces
+    if (s.length > 120) s = s.slice(0, 120).replace(/[.\s]+$/, '');
+    if (!s) return 'Roadmap';
+    if (RESERVED.test(s)) s += ' project';
+    return s;
+  };
+  // the first of base, "base (2)", "base (3)", … not in taken (compared
+  // case-insensitively: macOS and Windows file systems are)
+  RMBundle.uniqueName = function (base, taken) {
+    var low = {};
+    (taken || []).forEach(function (t) { low[String(t).toLowerCase()] = true; });
+    if (!low[String(base).toLowerCase()]) return base;
+    for (var n = 2; ; n++) {
+      var cand = base + ' (' + n + ')';
+      if (!low[cand.toLowerCase()]) return cand;
+    }
+  };
+  RMBundle.MARKER_EXT = '.headway';
+  RMBundle.DATA_DIR = '.headway';
+  RMBundle.markerText = function (id, title) {
+    return JSON.stringify({ headway: 1, id: String(id), title: title == null ? '' : String(title) }, null, 2) + '\n';
+  };
+  // null unless the text is a project marker
+  RMBundle.parseMarker = function (text) {
+    var o;
+    try { o = JSON.parse(text); } catch (e) { return null; }
+    if (!isObj(o) || o.headway == null || !(+o.headway >= 1) || o.id == null || o.id === '') return null;
+    return { headway: +o.headway, id: String(o.id), title: o.title == null ? '' : String(o.title) };
+  };
+
   if (typeof module !== 'undefined' && module.exports) module.exports = RMBundle;
   root.RMBundle = RMBundle;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -3056,6 +3056,28 @@ section('sprint moves');
     'unscheduling a story clears its timeline and moves it last');
 }
 
+section('project folders (RMBundle.projectName / markerText / parseMarker / uniqueName)');
+eq(RB.projectName('Q1 Platform Roadmap'), 'Q1 Platform Roadmap', 'a plain title is the folder name');
+eq(RB.projectName('  a/b\\c:d*e?f"g<h>i|j  '), 'abcdefghij', 'path-hostile characters go');
+eq(RB.projectName('Plan.. '), 'Plan', 'trailing dots and spaces go (Windows refuses them)');
+eq(RB.projectName(''), 'Roadmap', 'an empty title falls back');
+eq(RB.projectName('..'), 'Roadmap', 'a dots-only title falls back');
+eq(RB.projectName('.headway'), 'headway', 'no leading dot: the folder must not be hidden');
+eq(RB.projectName('CON'), 'CON project', 'a Windows reserved device name is made safe');
+eq(RB.projectName('a\u0001b'), 'ab', 'control characters go');
+ok(RB.projectName(new Array(300).join('x')).length <= 120, 'long titles are capped');
+eq(RB.uniqueName('Plan', []), 'Plan', 'a free name is kept');
+eq(RB.uniqueName('Plan', ['plan']), 'Plan (2)', 'a taken name gets " (2)" (case-insensitive: macOS/Windows)');
+eq(RB.uniqueName('Plan', ['Plan', 'Plan (2)', 'Plan (3)']), 'Plan (4)', 'the first free suffix wins');
+var mk = RB.markerText('doc-abc', 'My Plan');
+eq(JSON.parse(mk), { headway: 1, id: 'doc-abc', title: 'My Plan' }, 'marker JSON shape');
+ok(/\n$/.test(mk), 'marker ends with a newline');
+eq(RB.parseMarker(mk), { headway: 1, id: 'doc-abc', title: 'My Plan' }, 'marker round-trips');
+eq(RB.parseMarker('not json'), null, 'garbage is not a marker');
+eq(RB.parseMarker('{"headway":1}'), null, 'a marker needs an id');
+eq(RB.parseMarker('{"id":"x"}'), null, 'a marker needs the headway key');
+eq(RB.parseMarker('{"headway":"1","id":7}'), { headway: 1, id: '7', title: '' }, 'loose types are coerced');
+
 var RMJira = require('../js/export-jira.js');
 var sJc = mkState([
   { num: 1, feature: 'Login page', epic: 'Login', workstream: 'Product', size: 'M',
