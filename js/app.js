@@ -1151,8 +1151,27 @@
   }
   window.addEventListener('pointerup', drainDeferred);
   window.addEventListener('pointercancel', drainDeferred);
+  // A drag whose pointer-up never reaches us (released outside the window,
+  // the app lost focus, the tab hid) would hold every peer change forever:
+  // losing focus or visibility ends it like a cancelled pointer, and a
+  // pointermove with no button down after DRAG_STALE_MS of silence does too.
+  var DRAG_STALE_MS = 5000;
+  function abandonDrag() {
+    if (drag) window.dispatchEvent(new Event('pointercancel'));
+  }
+  window.addEventListener('blur', abandonDrag);
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') abandonDrag();
+  });
+  window.addEventListener('pointermove', function (e) {
+    if (!drag) return;
+    var now = Date.now();
+    if (e.buttons === 0 && drag.seenAt != null && now - drag.seenAt > DRAG_STALE_MS) { abandonDrag(); return; }
+    drag.seenAt = now;
+  }, true);
   // a drag start does not render: check after every pointerdown handler ran
   window.addEventListener('pointerdown', function () {
+    if (drag && drag.seenAt == null) drag.seenAt = Date.now(); // the stale-drag watchdog's clock
     if (!presenceOn) return;
     setTimeout(function () { if (drag && drag.itemId) presenceTouch(); }, 0);
   });

@@ -937,6 +937,35 @@ async function fixes() {
     ok(await until(() => S.item().notes === 'held while another row drags'), 'applied after pointerup');
   }
 
+  section('R2b: a drag whose pointer-up never arrives ends on window blur / tab hide, and the held peer changes land');
+  {
+    const S = await openFresh('R2b');
+    const bar = () => S.b.doc.querySelector('#rows .bar[data-bar="' + S.vId + '"]');
+    const down = () => bar().dispatchEvent(new S.b.window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, clientX: 50, clientY: 50 }));
+    down();
+    await S.emitPeer(S.vId, 'notes', 'held until blur', isoIn(60000));
+    eq(S.b.info().deferred, 1, 'held while the drag is live');
+    S.b.window.dispatchEvent(new S.b.window.Event('blur'));
+    ok(await until(() => S.item().notes === 'held until blur'), 'the window losing focus ends the drag and applies the held change');
+    eq(S.b.HA.editingIds().indexOf(S.vId), -1, 'the drag is over');
+    down();
+    await S.emitPeer(S.vId, 'notes', 'held until hidden', isoIn(120000));
+    eq(S.b.info().deferred, 1, 'held again');
+    Object.defineProperty(S.b.doc, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    S.b.doc.dispatchEvent(new S.b.window.Event('visibilitychange'));
+    ok(await until(() => S.item().notes === 'held until hidden'), 'the tab going hidden ends the drag too');
+    Object.defineProperty(S.b.doc, 'visibilityState', { configurable: true, get: () => 'visible' });
+    // watchdog: no pointer event for over 5 s, then a move with no button down
+    down();
+    await S.emitPeer(S.vId, 'notes', 'held until stale', isoIn(180000));
+    eq(S.b.info().deferred, 1, 'held by a third drag');
+    const realNow = S.b.window.Date.now;
+    S.b.window.Date.now = () => realNow() + 6000;
+    S.b.window.dispatchEvent(new S.b.window.MouseEvent('pointermove', { bubbles: true, clientX: 60, clientY: 60, buttons: 0 }));
+    S.b.window.Date.now = realNow;
+    ok(await until(() => S.item().notes === 'held until stale'), 'a stale drag ends on the next buttonless move and the held change lands');
+  }
+
   section('R3: a peer story numbered like one of our features is renumbered on arrival');
   {
     const S = await openFresh('R3');
