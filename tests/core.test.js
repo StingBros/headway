@@ -552,6 +552,49 @@ var rBig = RM.autoTimeline(sBig, { today: 0 });
 var Big = byNum(rBig.state);
 ok(Big[1].startDay === 0 && !rBig.notes.some(function (n) { return /never fits/.test(n); }), '8 points in one week fits a 10-point sprint');
 eq(Big[2].startDay, 0, 'and 2 more fill the sprint exactly');
+// never fits, story points: a 30-point, 15-day feature against 10 points a
+// sprint puts at least 8 of its days (16 points) in one sprint wherever it
+// starts — left where it is, with the note, and the timeline not stretched
+{
+  var nfTeam = [{ name: 'X', capType: 'Development', points: 10 }];
+  var sNf = autoState([{ num: 1, feature: 'huge', phaseId: 'p1', durDays: 15, size: 30, capType: 'Development' }],
+    nfTeam, { capMode: 'points', sizeScheme: 'points' });
+  var rNf = RM.autoTimeline(sNf, { today: 0 });
+  ok(rNf.state.items[0].startDay == null, 'the never-fitting feature is not moved');
+  ok(rNf.notes.some(function (n) { return /never fits/.test(n) && /in a sprint/.test(n); }), 'the never-fits note says "in a sprint" (' + rNf.notes.join(' | ') + ')');
+  eq(rNf.state.meta.numWeeks, sNf.meta.numWeeks, 'and the timeline is not stretched to a far horizon');
+  var pNf = RM.placeUnit(sNf, sNf.items[0].id, null, { today: 0 });
+  ok(pNf.state.items[0].startDay == null && /never fits/.test(pNf.note || '') && /in a sprint/.test(pNf.note || ''),
+    'Place at earliest slot leaves it too, with the note (' + pNf.note + ')');
+  eq(pNf.state.meta.numWeeks, sNf.meta.numWeeks, 'Place does not stretch the timeline either');
+  // 18 points over 15 days fits once it straddles two sprints 8 / 7 days (9.6 + 8.4 points)
+  var sNf18 = autoState([{ num: 1, feature: 'long', phaseId: 'p1', durDays: 15, size: 18, capType: 'Development' }],
+    nfTeam, { capMode: 'points', sizeScheme: 'points' });
+  var rNf18 = RM.autoTimeline(sNf18, { today: 0 });
+  eq(rNf18.state.items[0].startDay, 2, 'an 18-point 3-week feature fits from day 2 (8 days in sprint 1, 7 in sprint 2)');
+  ok(!rNf18.notes.some(function (n) { return /never fits/.test(n); }), 'with no never-fits note');
+  // the search itself gives up at the horizon: supply only in week 5 (5
+  // points in sprint 3) — a 12-day unit always touches an empty sprint
+  var onlyWk4 = {};
+  for (var hw = 0; hw < 200; hw++) onlyWk4[RM.fmtISO(RM.weekStartDate(sNf.meta, hw))] = hw === 4 ? 40 : 0;
+  var hzTeam = [{ name: 'X', capType: 'Development', points: 10, weekHours: onlyWk4 }];
+  var sHzn = autoState([{ num: 1, feature: 'twelve', phaseId: 'p1', durDays: 12, size: 4, capType: 'Development' }],
+    hzTeam, { capMode: 'points', sizeScheme: 'points' });
+  var rHzn = RM.autoTimeline(sHzn, { today: 0 });
+  ok(rHzn.state.items[0].startDay == null && rHzn.notes.some(function (n) { return /never fits/.test(n); }),
+    'a search that reaches the horizon without a fit is never-fits, not a slot at the horizon');
+  eq(rHzn.state.meta.numWeeks, sHzn.meta.numWeeks, 'and the timeline stays put');
+  ok(RM.placeUnit(sHzn, sHzn.items[0].id, null, { today: 0 }).state.items[0].startDay == null, 'Place at earliest slot gives up the same way');
+  var sHz5 = autoState([{ num: 1, feature: 'five', phaseId: 'p1', durDays: 5, size: 4, capType: 'Development' }],
+    hzTeam, { capMode: 'points', sizeScheme: 'points' });
+  eq(RM.autoTimeline(sHz5, { today: 0 }).state.items[0].startDay, 20, 'while a 5-day unit fits the one supplied week');
+}
+// per person the note still says "in a week"
+{
+  var sNfP = autoState([{ num: 1, feature: 'crowd', phaseId: 'p1', durDays: 5, capType: 'Development', capMult: 3 }],
+    [{ name: 'X', capType: 'Development' }]);
+  ok(RM.autoTimeline(sNfP, { today: 0 }).notes.some(function (n) { return /in a week/.test(n); }), 'per person the note says "in a week"');
+}
 // points follow working days, not weeks touched: a 5-day, 10-point story
 // starting on the Wednesday of week 2 puts 3 days (6 points) in sprint 1 and
 // 2 days (4 points) in sprint 2 — not 5 / 5 by weeks touched

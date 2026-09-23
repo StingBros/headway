@@ -3060,9 +3060,51 @@
       });
       return pSup[t];
     }
+    // working days per period: the longest, and the shortest a unit can
+    // cover whole (the first and last periods may be clipped, so skipped)
+    var pDays = null;
+    function periodDays() {
+      if (pDays) return pDays;
+      var list = periods.map(function (p) {
+        var n = 0;
+        for (var d = p.w0 * S; d < p.w1 * S; d++) if (!RM.offDay(meta, d, set)) n += 1;
+        return n;
+      });
+      var inner = list.slice(1, -1);
+      pDays = { max: Math.max.apply(null, list.concat([0])), min: inner.length ? Math.min.apply(null, inner) : 0 };
+      return pDays;
+    }
     return {
       types: sup.types,
       constrained: constrained,
+      // what a period is called in the never-fits note
+      periodWord: meta.capMode !== 'points' ? 'a week' : (RM.sprintsEnabled(meta) ? 'a sprint' : 'two weeks'),
+      // true when the unit can never fit wherever it starts: the smallest
+      // share of it one period must take still exceeds the most any period
+      // ever supplies. Per person that share is its heads. In story points a
+      // unit of D working days puts at least ceil(D / 2) of them in one
+      // period if D fits two periods; touching three or more it covers a
+      // whole period in between (at least lMin working days). Sound, not
+      // exact: the search's horizon catches the rest.
+      neverFits: function (u, startDay, durDays) {
+        if (!constrained(u)) return false;
+        var t = u.capType;
+        if (meta.capMode !== 'points') {
+          var dem = RM.unitDemandByWeek(state, u, startDay, durDays, set);
+          return Math.max.apply(null, dem.byWeek.concat([0])) > this.peak(t) + 1e-9;
+        }
+        var D = RM.workInSpan(meta, startDay, Math.max(1, durDays), set);
+        if (!(u.points > 0) || !D) return false;
+        var pd = periodDays();
+        var days;
+        if (D <= 1) days = D;
+        else {
+          var two = D <= 2 * pd.max ? Math.ceil(D / 2) : Infinity;
+          var three = pd.min > 0 ? Math.max(pd.min, Math.ceil(D / (Math.floor((D - 2) / pd.min) + 2))) : 1;
+          days = Math.min(two, three);
+        }
+        return u.points * days / D > this.peak(t) + 1e-9;
+      },
       // the most one period ever supplies: an ask above it never fits
       peak: function (t) {
         if (peaks[t] != null) return peaks[t];
@@ -3089,7 +3131,8 @@
         var t = u.capType, ps = periodSupply(t), ut = used[t];
         var w = Math.max(0, ww[0]);
         while (w <= ww[1]) {
-          if (w >= horizonWeeks) return true;
+          // past the horizon is never a fit: the search gives up instead
+          if (w >= horizonWeeks) return false;
           var p = periods[pOf[w]];
           var ask = 0;
           for (var x = w; x <= ww[1] && x < p.w1; x++) if (!black[x]) ask += dem.byWeek[x - dem.w0];
@@ -3249,9 +3292,19 @@
       var work = RM.snapUpDays(meta, RM.unitWorkDays(state, u, ledger.set), snapMode);
       var s = RM.snapUpDay(meta, est, snapMode);
       var dur = RM.stretchSpan(meta, s, work, ledger.set);
-      if (ledger.constrained(u) && RM.unitWeekDemand(state, u, s, dur, ledger.set) > ledger.peak(u.capType) + 1e-9) {
+      // search for the first slot that fits; none (the ask can never fit, or
+      // the search reaches the horizon) leaves the unit where it is
+      var fitAt = null;
+      if (!ledger.neverFits(u, s, dur)) {
+        var guard = 0;
+        while (guard < HORIZON * S) {
+          if (!RM.offDay(meta, s, ledger.set) && ledger.fits(u, s, dur)) { fitAt = s; break; }
+          s = RM.snapUpDay(meta, s + 1, snapMode); dur = RM.stretchSpan(meta, s, work, ledger.set); guard += 1;
+        }
+      }
+      if (fitAt == null) {
         var it0 = RM.itemById(state, u.itemId);
-        notes.push('#' + it0.num + ' (' + it0.feature + ') asks more ' + u.capType + ' in a week than the roster can ever give, so it never fits — left where it is.');
+        notes.push('#' + it0.num + ' (' + it0.feature + ') asks more ' + u.capType + ' in ' + ledger.periodWord + ' than the roster can ever give, so it never fits — left where it is.');
         // it stays where it is, so it still consumes what it consumes —
         // everything placed after it has to work around its weeks
         if (u.startDay != null && u.durDays != null) {
@@ -3260,11 +3313,6 @@
         }
         release(u);
         return;
-      }
-      var guard = 0;
-      while (guard < HORIZON * S) {
-        if (!RM.offDay(meta, s, ledger.set) && ledger.fits(u, s, dur)) break;
-        s = RM.snapUpDay(meta, s + 1, snapMode); dur = RM.stretchSpan(meta, s, work, ledger.set); guard += 1;
       }
       if (RM.applyUnitPlacement(state, u, s, dur, ledger.set)) out.changed += 1;
       touchedItems[u.itemId] = true;
@@ -3368,18 +3416,21 @@
       var work = RM.snapUpDays(meta, RM.unitWorkDays(state, u, ledger.set), snapMode);
       var s = RM.snapUpDay(meta, Math.max(today, after, pFloor != null ? pFloor : 0), snapMode);
       var dur = RM.stretchSpan(meta, s, work, ledger.set);
-      if (ledger.constrained(u) && RM.unitWeekDemand(state, u, s, dur, ledger.set) > ledger.peak(u.capType) + 1e-9) {
-        res.note = 'Asks more ' + u.capType + ' in a week than the roster can ever give, so it never fits — left unchanged.';
+      var fitAt = null;
+      if (!ledger.neverFits(u, s, dur)) {
+        var guard = 0;
+        while (guard < HORIZON * S) {
+          if (!RM.offDay(meta, s, ledger.set) && ledger.fits(u, s, dur)) { fitAt = s; break; }
+          s = RM.snapUpDay(meta, s + 1, snapMode); dur = RM.stretchSpan(meta, s, work, ledger.set); guard += 1;
+        }
+      }
+      if (fitAt == null) {
+        res.note = 'Asks more ' + u.capType + ' in ' + ledger.periodWord + ' than the roster can ever give, so it never fits — left unchanged.';
         if (u.startDay != null && u.durDays != null) {
           endOf[u.id] = u.startDay + u.durDays + (u.riskDays || 0);
           ledger.book(u, u.startDay, u.durDays, 1);
         }
         return;
-      }
-      var guard = 0;
-      while (guard < HORIZON * S) {
-        if (!RM.offDay(meta, s, ledger.set) && ledger.fits(u, s, dur)) break;
-        s = RM.snapUpDay(meta, s + 1, snapMode); dur = RM.stretchSpan(meta, s, work, ledger.set); guard += 1;
       }
       if (RM.applyUnitPlacement(state, u, s, dur, ledger.set)) res.changed += 1;
       ledger.book(u, s, dur, 1);
