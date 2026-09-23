@@ -2995,9 +2995,25 @@
     });
     return any ? sum : null;
   }
+  // story-points capacity: each sprint's total reads planned / available
+  function sprCapXY() { return !!state.meta.capacityEnabled && state.meta.capMode === 'points'; }
+  // the points a sprint supplies across the tracked capacity types (the
+  // capacity summary's sprint period); null when the sprint is off the timeline
+  function sprSupply(num) {
+    var cap = validation && validation.capacity;
+    if (!cap || !cap.periods) return null;
+    var y = null;
+    cap.periods.forEach(function (p, i) {
+      if (p.num !== num) return;
+      y = 0;
+      cap.types.forEach(function (t) { y += cap.rows[t][i].supply; });
+    });
+    return y;
+  }
   function sprSections() {
     var meta = state.meta;
     var pointsOn = sprPointsOn();
+    var capXY = sprCapXY();
     var nums = sprintNums().concat([null]); // Unscheduled trails the timeline
     var secs = nums.map(function (n) {
       var items = n == null
@@ -3007,7 +3023,7 @@
       items.forEach(function (it) { inIds[it.id] = true; });
       var feats = [];
       // the sprint's stories: what story level lists, and what points totals add
-      var ptFeats = sprLevel === 'story' || pointsOn ? [] : null;
+      var ptFeats = sprLevel === 'story' || pointsOn || capXY ? [] : null;
       if (ptFeats) {
         state.items.forEach(function (it) {
           if (!sprMatches(it)) return;
@@ -3020,8 +3036,11 @@
       var d0 = n == null ? 0 : RM.sprintStartDay(meta, n);
       var wps = RM.sprintInfo(meta).wps;
       var points = pointsOn ? sprPointsTotal(ptFeats) : null;
+      // points capacity: X is 0 until a story is sized, never the row count
+      if (capXY) points = sprPointsTotal(ptFeats) || 0;
       return {
         num: n, key: sprSecKey(n), points: points,
+        supply: capXY && n != null ? sprSupply(n) : null,
         title: n == null ? 'Unscheduled' : (RM.sprintsEnabled(meta) ? 'Sprint ' + n : 'Week of ' + RM.fmtShort(RM.weekStartDate(meta, w0))),
         dates: n == null ? '' : RM.fmtShort(RM.weekStartDate(meta, w0)) + ' – ' +
           RM.fmtShort(RM.spanEndDate(meta, d0, Math.min(wps * SPW(), meta.numWeeks * SPW() - d0))),
@@ -3092,6 +3111,22 @@
       '<span class="spv-est">' + ['size', 'pri', 'risk'].map(function (k) { return storyChipHtml(k, st, 'data-spact'); }).join('') + sprAsgChip(st, 'st-asg') + '</span>' +
       '</div>';
   }
+  // a sprint's total at the right edge: planned / available points under
+  // points capacity, else the points total or the plain row count
+  function sprCtHtml(sec) {
+    var cls = 'pr-lanect spv-ct', txt, title;
+    if (sec.supply != null) {
+      var over = sec.points > sec.supply + 1e-9;
+      if (over) cls += ' over';
+      txt = fmtPts(sec.points) + ' / ' + fmtPts(sec.supply);
+      title = fmtPts(sec.points) + ' story points planned · ' + fmtPts(sec.supply) + ' available this sprint' + (over ? ' — over' : '');
+    } else if (sec.points != null) {
+      txt = fmtPts(sec.points) + ' pt'; title = 'Story points';
+    } else {
+      txt = String(sec.count); title = null;
+    }
+    return '<span class="' + cls + '"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(txt) + '</span>';
+  }
   function sprSectionHtml(sec) {
     var body;
     if (sprLevel === 'story') {
@@ -3108,8 +3143,7 @@
     return '<section class="spv-sec" data-spsec="' + sec.key + '">' +
       '<div class="spv-sechd"><h3>' + esc(sec.title) + '</h3>' +
       (sec.dates ? '<span class="spv-secdates">' + esc(sec.dates) + '</span>' : '') +
-      '<span class="pr-lanect"' + (sec.points != null ? ' title="Story points"' : '') + '>' +
-      (sec.points != null ? fmtPts(sec.points) + ' pt' : sec.count) + '</span></div>' +
+      sprCtHtml(sec) + '</div>' +
       '<div class="spv-rows">' + (body || '<div class="spv-empty">Nothing here' + (sprFilterOn() ? ' matches' : '') + '. Drop a row to move it into this sprint.</div>') + '</div>' +
       (sprLevel === 'feature' && !sec.items.length ? '<button class="spv-add" data-spadd="' + sec.key + '"><i data-lucide="plus"></i>' + esc('Add ' + lvl('feature')) + '</button>' : '') +
       '</section>';
@@ -3144,8 +3178,7 @@
         '<i data-lucide="' + (sec.num == null ? 'inbox' : 'calendar-range') + '"></i>' +
         '<span class="spv-sbtxt"><span class="spv-sbname">' + esc(sec.title) + '</span>' +
         (sec.dates ? '<small>' + esc(sec.dates) + '</small>' : '') + '</span>' +
-        '<span class="pr-lanect"' + (sec.points != null ? ' title="Story points"' : '') + '>' +
-        (sec.points != null ? fmtPts(sec.points) + ' pt' : sec.count) + '</span></button>';
+        sprCtHtml(sec) + '</button>';
     }).join('');
     host.innerHTML = '<div class="spv">' +
       '<aside class="spv-side"><div class="spv-sidehd">Sprints</div>' + side + '</aside>' +

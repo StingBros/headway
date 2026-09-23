@@ -5032,6 +5032,34 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     window.HeadwayApp.ai.commit('tshirt stories', (s) => { window.RM.setSizeScheme(s, 'tshirt', 'story'); });
     ok(hd().textContent.trim() === String(doc.querySelectorAll('#sprintView .spv-sec[data-spsec="' + secKey + '"] .spv-row').length),
       'a non-numeric story scheme keeps the plain item count');
+    ok(side().classList.contains('spv-ct') && side().parentNode.lastElementChild === side() &&
+      hd().classList.contains('spv-ct') && hd().parentNode.lastElementChild === hd(),
+      'the total sits last in the side entry and the section heading (right edge)');
+    // story-points capacity: planned points against the sprint's supply
+    const capPrev = { on: state().meta.capacityEnabled, mode: state().meta.capMode };
+    window.HeadwayApp.ai.commit('points capacity', (s) => {
+      window.RM.setSizeScheme(s, 'fibonacci', 'story');
+      const f = window.RM.itemById(s, fid);
+      f.stories[0].size = '3'; f.stories[1].size = '5';
+      s.meta.capacityEnabled = true; s.meta.capMode = 'points';
+    });
+    const capX = window.RM.capacity(state());
+    const perX = capX.periods.findIndex((p) => p.num === Number(secKey));
+    const yExp = perX === -1 ? NaN : capX.types.reduce((a, t) => a + capX.rows[t][perX].supply, 0);
+    const xy = /^(\d+(?:\.\d)?) \/ (\d+(?:\.\d)?)$/.exec(hd().textContent.trim());
+    ok(!!xy && Number(xy[1]) === 8 && Math.abs(Number(xy[2]) - yExp) < 0.06,
+      'points capacity: the heading reads planned / available points for the sprint (' + hd().textContent.trim() + ' vs ' + yExp + ')');
+    ok(side().textContent.trim() === hd().textContent.trim(), 'the side entry reads the same X / Y');
+    ok(side().parentNode.lastElementChild === side(), 'and the X / Y stays last in the side entry');
+    ok(!hd().classList.contains('over') === !(8 > yExp + 1e-9), 'over only when the sprint asks more than it has');
+    const uSide = doc.querySelector('#sprintView .spv-sbtn[data-spside="u"] .spv-ct');
+    ok(!!uSide && uSide.textContent.indexOf('/') === -1, 'Unscheduled shows its points alone (' + (uSide && uSide.textContent) + ')');
+    window.HeadwayApp.ai.commit('overbook', (s) => { window.RM.itemById(s, fid).stories[0].size = '9999'; });
+    ok(hd().classList.contains('over') && side().classList.contains('over'), 'a sprint asking more points than it has reads over');
+    window.HeadwayApp.ai.commit('person mode', (s) => { s.meta.capMode = 'person'; });
+    ok(/^\d+(\.\d)? pt$/.test(hd().textContent.trim()) && !hd().classList.contains('over'),
+      'per-person mode: the heading shows just the points total');
+    window.HeadwayApp.ai.commit('restore capacity', (s) => { s.meta.capacityEnabled = capPrev.on; s.meta.capMode = capPrev.mode; });
     window.HeadwayApp.ai.commit('restore sizing', (s) => {
       window.RM.setSizeScheme(s, scheme0, 'story');
       const f = window.RM.itemById(s, fid);
