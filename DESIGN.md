@@ -17,7 +17,7 @@ state = {
   phases: [ { id, name, description, bucket, collapsed,          // bucket = backlog shelf (Next/Future)
               startDay, endDay } ]                               // optional pinned window (null = auto from items)
   items:  [ { id, num, order, phaseId, feature, description, workstream, epic, enables, outOfScope, notes,
-              deps: [itemId…], depsText: [str…], extDeps,       // explicit deps only, by item id (legacy nums migrate on load)
+              deps: [itemId…], depsText: [str…], extDeps,       // explicit deps only, by item id (the xlsx embeds #nums; they migrate on load)
                                                                  // order = base-62 fractional key; normalize sorts by it
               custom: { colKey: text },                          // custom scoping-column values
               size,                                              // t-shirt size
