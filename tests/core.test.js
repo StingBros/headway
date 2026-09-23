@@ -938,14 +938,16 @@ eq(RM.capSupply(sCf).byType.Development[0], 0.5, 'capacity 0.5 at 40h = half a h
 eq(sCf.team[0].capacity, 0.5, 'capacity survives normalize');
 eq(mkState([], { team: [{ name: 'X', type: 'Development' }] }).team[0].capacity, 1, 'capacity defaults to 1');
 eq(mkState([], { team: [{ name: 'Z', type: 'Development', capacity: 0 }] }).team[0].capacity, 0, 'capacity 0 is allowed');
-eq(RM.capSupply(mkState([], { team: [{ name: 'Z', capType: 'Development', capacity: 0 }] })).byType.Development[0], 0,
-  'a zero-capacity person contributes nothing');
+eq(RM.capSupply(mkState([], { team: [{ name: 'Z', capType: 'Development', capacity: 0 }] })).types, [],
+  'a zero-capacity person supplies nothing — like an untyped one');
 // story-points mode: the seat multiplier is a per-person concept and does not
 // scale points (the Resources panel shows one or the other); fewer hours still do
 {
   var mP = JSON.parse(JSON.stringify(META)); mP.capMode = 'points'; mP.defaultPoints = 10; mP.weeksPerSprint = 2;
   var sP = mkState([], { meta: mP, team: [{ name: 'Half', capType: 'Development', capacity: 0.5 }] });
   eq(RM.capSupply(sP).byType.Development[0], 5, 'points mode: 10 pt / 2 weeks = 5 pt a week, ignoring the 0.5 seat');
+  var sP0 = mkState([], { meta: mP, team: [{ name: 'Off', capType: 'Development', capacity: 0 }, { name: 'On', capType: 'Development' }] });
+  eq(RM.capSupply(sP0).byType.Development[0], 5, 'points mode: a seat of 0 still means "supplies nothing" (only On\'s 5 a week)');
   var sPh = mkState([], { meta: mP, team: [{ name: 'PT', capType: 'Development', weekHours: { '2026-07-27': 20 } }] });
   eq(RM.capSupply(sPh).byType.Development[0], 2.5, 'points mode: 20 of 40 hours halves the points supply');
 }

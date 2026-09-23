@@ -2407,8 +2407,9 @@
   // supply per capacity type per week. Person mode: heads (hours × the seat
   // multiplier). Points mode: points per sprint ÷ sprint weeks, scaled by the
   // person's hours only — the seat multiplier is the per-person model's
-  // knob and the Resources panel shows one or the other, never both. Both
-  // cut by the holiday factor.
+  // knob and the Resources panel shows one or the other, never both (a
+  // seat of 0 still means "supplies nothing" in both). Both cut by the
+  // holiday factor.
   RM.capSupply = function (state, horizonWeeks) {
     var meta = state.meta;
     var weeks = horizonWeeks || meta.numWeeks;
@@ -2420,6 +2421,9 @@
     state.team.forEach(function (m) {
       var t = m.capType || '';
       if (!t) return; // untyped people supply nothing in the typed model
+      // a seat of 0 is the usual way to say "not on this plan": nothing in
+      // either mode (points ignore the seat otherwise)
+      if (m.capacity === 0) return;
       if (!byType[t]) { byType[t] = new Array(weeks); for (var i = 0; i < weeks; i++) byType[t][i] = 0; types.push(t); }
       for (var w = 0; w < weeks; w++) {
         var unit;
