@@ -4300,6 +4300,8 @@
         '<span class="band-name">' + esc(p.name) + '</span>' +
         '<span class="band-count">' + items.length + '</span>' +
         (p.bucket ? '<span class="band-bucket-tag">backlog</span>' : '') +
+        // the phase's actions sit at the right edge of the band, always visible
+        '<span class="band-acts">' +
         '<button class="band-add" data-act="phase-additem" title="' + esc('Add a ' + lvl('feature').toLowerCase() + ' to this phase') + '">+ ' + esc(lvl('feature').toLowerCase()) + '</button>' +
         '<button class="band-edit" data-act="phase-edit" title="Edit phase">edit</button>' +
         (p.bucket ? '' : (function () {
@@ -4307,6 +4309,7 @@
           return '<button class="band-zap" data-act="phase-auto" title="' + esc(as.tip) + '"' + (as.disabled ? ' disabled' : '') +
             '><i data-lucide="zap"></i></button>';
         })()) +
+        '</span>' +
         '</div>' +
         '<div class="row-lane">' + bandLane + '</div>' +
         '</div>');
