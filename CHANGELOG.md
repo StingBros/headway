@@ -9,6 +9,8 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- **Sprint-based story points**: in story-points mode capacity is a per-sprint budget. Each capacity row shows one cell per sprint (planned / available points), validation flags over-capacity once per sprint, and Auto timeline / Place at earliest slot fit work against the sprint's points rather than a week's share of them. Per-person mode stays weekly.
+- Sprinting: each sprint's total sits at the right edge of its side entry and heading as a larger number; with story-points capacity on it reads planned / available points (e.g. `18 / 20`), in red when the sprint is over.
 - Sprinting: clicking a sprint in the side list lands on the sprint heading instead of just under it.
 - Resources shows either the × seat multiplier (per-person demand) or points per sprint (story-points demand), never both; in story-points mode a person's points are scaled by their hours only.
 - The capacity type chip in the Planning left pane shows the whole type name once its column is wide enough (it was cut to eight characters regardless).
