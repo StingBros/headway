@@ -339,3 +339,25 @@ style computed.
 One "Unreleased" entry per user-visible change: Auto timeline, Place at
 earliest slot, Setup → Capacity tab, demand modes, capacity row change,
 weekly limit removed, story chips, sticky group bands.
+
+## Amendment — 2026-09-23
+
+- **No tracked types.** `meta.capRowTypes`, `RM.trackedCapTypes` and the
+  Setup → Capacity "Tracked capacity types" checkboxes are gone; every
+  capacity type counts. Normalize drops a saved `capRowTypes`. The ledger
+  constrains every type the roster supplies; untyped work and work of a type
+  nobody supplies are still placed by dependencies alone, and
+  `CAP_TYPE_UNSUPPLIED` stays.
+- **One capacity row.** The header shows a single row, "Capacity (people)" /
+  "Capacity (points)", summing demand and supply over every type. It reads
+  over when any single type is over (`weeks[i].overAny`, which includes work
+  of a type nobody supplies; `weeks[i].over` keeps meaning a *supplied* type
+  is over, which is what `OVER_CAP` reports per type). The cell tooltip lists
+  each type's demand / supply. `RM.capacity` keeps `rows[t]` per type.
+- **Capacity periods.** Capacity is weighed per `RM.capPeriods` period: a
+  week per person; a sprint in story-points mode (two-week blocks with
+  sprints off). Header cells, validation and the scheduler's `fits()` all
+  work per period.
+- **Untyped people** supply nothing (as before) and show a "set type" prompt
+  in the Resources panel instead of the × seat / points chip; their stored
+  seat and points are kept.

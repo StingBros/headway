@@ -9,7 +9,7 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
-- **Sprint-based story points**: in story-points mode capacity is a per-sprint budget. Each capacity row shows one cell per sprint (planned / available points), validation flags over-capacity once per sprint, and Auto timeline / Place at earliest slot fit work against the sprint's points rather than a week's share of them. Per-person mode stays weekly.
+- **Sprint-based story points**: in story-points mode capacity is a per-sprint budget. The capacity row shows one cell per sprint (planned / available points), validation flags over-capacity once per sprint, and Auto timeline / Place at earliest slot fit work against the sprint's points rather than a week's share of them. Per-person mode stays weekly.
 - Sprinting: each sprint's total sits at the right edge of its side entry and heading as a larger number; with story-points capacity on it reads planned / available points (e.g. `18 / 20`), in red when the sprint is over.
 - Sprinting: clicking a sprint in the side list lands on the sprint heading instead of just under it.
 - Resources shows either the × seat multiplier (per-person demand) or points per sprint (story-points demand), never both; in story-points mode a person's points are scaled by their hours only.
@@ -22,10 +22,10 @@ Format: short sections, bullets, one bold title per notable change —
 - **Planning columns**: the left pane's chip columns have headers, resize by dragging the header edge, reorder by dragging the label, and show/hide from the header's right-click menu or the + at its end — now including Workstream, Epic, Start and Deadline.
 - Phase bands are light in light mode, and rows step down phase → workstream → epic → feature → story to white, across both the left pane and the timeline.
 - Row titles no longer show an outline on hover; the box appears only while renaming.
-- **Setup → Capacity**: capacity planning, the planning level, the demand model, capacity types and the capacity row's types now live on their own Setup tab (Team keeps roles and the work week).
+- **Setup → Capacity**: capacity planning, the planning level, the demand model and capacity types now live on their own Setup tab (Team keeps roles and the work week).
 - **Demand models**: Per person (a unit in flight uses one person of its type × its multiplier) or Story points (points spread over the unit's weeks against each person's points per sprint, default 10).
-- **Capacity row** reads demand / supply per week for the chosen capacity types; the hand-typed weekly limit and the count/points basis are gone — the limit is the roster.
-- **Tracked capacity types**: pick one or more capacity types under Setup → Capacity. Each gets its own capacity row in the header, labelled e.g. "Development capacity", and Auto timeline / Place at earliest slot constrain only those types. The column legend now sits below the capacity rows.
+- **Capacity row**: one header row, "Capacity (people)" or "Capacity (points)", reads total demand / supply across every capacity type per week (per sprint in story points). It turns red when any single type is over, even if the total fits, and its tooltip lists each type's numbers. The hand-typed weekly limit and the count/points basis are gone — the limit is the roster. Every capacity type counts: Auto timeline / Place at earliest slot constrain every type the roster supplies. The column legend now sits below the capacity row.
+- **Untyped people supply nothing**: in the Resources panel a person without a capacity type shows a "set type" prompt instead of the × seat / points chip; click it to pick a type (their seat and points come back).
 - Features always carry a capacity type now (blank ones default to the first type, Development). A capacity-enabled document whose roster supplies no type will show a "nobody supplies" warning on open — give the people a capacity type in the Resources panel.
 - **Auto timeline**: flag a phase as Auto (phase dialog or right-click its band) and its items follow their dependencies under the roster's capacity — on open, when the flag goes on, and after every change. Needs capacity planning.
 - **Place at earliest slot**: right-click any feature or story → Place at earliest slot moves just that one to the first slot its dependencies and the roster's capacity allow (any phase, capacity planning on).
