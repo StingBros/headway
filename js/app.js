@@ -2997,17 +2997,13 @@
   }
   // story-points capacity: each sprint's total reads planned / available
   function sprCapXY() { return !!state.meta.capacityEnabled && state.meta.capMode === 'points'; }
-  // the points a sprint supplies across the tracked capacity types (the
-  // capacity summary's sprint period); null when the sprint is off the timeline
+  // the points a sprint supplies across every capacity type (the capacity
+  // summary's sprint period); null when the sprint is off the timeline
   function sprSupply(num) {
     var cap = validation && validation.capacity;
     if (!cap || !cap.periods) return null;
     var y = null;
-    cap.periods.forEach(function (p, i) {
-      if (p.num !== num) return;
-      y = 0;
-      cap.types.forEach(function (t) { y += cap.rows[t][i].supply; });
-    });
+    cap.periods.forEach(function (p, i) { if (p.num === num) y = cap.weeks[i].supply; });
     return y;
   }
   function sprSections() {
@@ -3559,54 +3555,60 @@
         '<span class="sp-date">' + dateTxt + '</span>' + numTag + '</div>');
     }
 
-    // capacity rows: one per TRACKED capacity type (Setup → Capacity), each
-    // period's demand vs supply for that type — a week each in people, a
-    // sprint each in story points (cells span the sprint cells above)
+    // the capacity row: ONE row summing every capacity type — each period's
+    // total demand vs total supply (a week each in people, a sprint each in
+    // story points; sprint cells span the sprint cells above). A sum can hide
+    // one type overflowing, so a cell reads over when ANY type is over
+    // (overAny, incl. work of a type nobody supplies); the tooltip lists
+    // each type's numbers.
     var cap = validation.capacity;
     var unitWord = meta.capMode === 'points' ? 'points' : 'people';
     var bySprint = cap.period === 'sprint';
     var capRowsHtml = [];
-    cap.types.forEach(function (ct) {
-      var rowCells = cap.rows[ct];
-      var hcc = [];
-      cap.periods.forEach(function (per, pi) {
-        var w = per.w0, nW = per.w1 - per.w0, cellPx = nW * weekPx;
-        var cell = rowCells[pi];
-        var hn = 0;
-        for (var hw2 = per.w0; hw2 < per.w1; hw2++) hn += RM.holidaysInWeek(meta, hw2, hset);
-        var cls, txt2 = '', title;
-        if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = bySprint ? 'Holiday weeks' : 'Holiday week'; }
-        else {
-          var ratio = cell.supply > 0 ? cell.demand / cell.supply : (cell.demand > 0 ? Infinity : 0);
-          // work asked of a type nobody supplies can never be done: that reads
-          // over, not ok
-          cls = cell.over ? 'over' : (cell.demand === 0 ? 'idle' : (ratio > 0.85 ? 'mid' : 'ok'));
-          // the widest form that actually fits THIS cell's numbers: spaced
-          // demand / supply, then tight, then the ask alone, then nothing.
-          // Measured off the string, not the zoom — a clipped “4 / 0.” reads
-          // as a different number. The tooltip always carries both.
-          var dTxt = fmtPe(cell.demand), sTxt = fmtPe(cell.supply);
-          txt2 = capCellText([dTxt + ' / ' + sTxt, dTxt + '/' + sTxt, dTxt], cellPx);
-          title = ct + ': ' + fmtPe(cell.demand) + ' ' + unitWord + ' asked · ' + fmtPe(cell.supply) + ' available' +
-            (cell.supply === 0 ? ' (no supply — nobody on the roster supplies ' + ct + ')' : '');
-        }
-        var when = !bySprint ? 'Week of ' + RM.fmtShort(RM.weekStartDate(meta, w))
-          : (per.num != null ? 'Sprint ' + per.num + ', ' : '') + RM.fmtShort(RM.weekStartDate(meta, w)) + ' – ' +
-            RM.fmtShort(RM.spanEndDate(meta, w * SPW(), nW * SPW()));
-        // a sprint cell spans its weeks; a click toggles the week under the
-        // pointer (data-w1 marks the span)
-        hcc.push('<div class="cap-cell ' + cls + (hn && !cell.blackout ? ' part' : '') + '" tabindex="0" data-w="' + w +
-          (bySprint ? '" data-w1="' + per.w1 : '') +
-          '" style="left:' + (w * weekPx + 1) + 'px;width:' + (cellPx - 2) + 'px" title="' +
-          esc(when + ': ' + title +
-            (hn ? ' · ' + hn + ' holiday day(s)' : '') + ' · click to toggle holiday week') + '">' + txt2 + '</div>');
-      });
-      capRowsHtml.push('<div class="hdr-line hdr-cap" data-captype="' + esc(ct) + '">' +
-        '<div class="hdr-left"><span class="cap-row-lab" title="' +
-        esc((bySprint ? 'Each sprint: ' : 'Each week: ') + unitWord + ' asked / available for ' + ct + ' — Setup → Capacity') + '">' +
-        esc(ct) + ' capacity</span></div>' +
-        '<div class="hdr-lane">' + hcc.join('') + '</div></div>');
+    var hcc = [];
+    cap.periods.forEach(function (per, pi) {
+      var w = per.w0, nW = per.w1 - per.w0, cellPx = nW * weekPx;
+      var cell = cap.weeks[pi];
+      var hn = 0;
+      for (var hw2 = per.w0; hw2 < per.w1; hw2++) hn += RM.holidaysInWeek(meta, hw2, hset);
+      var cls, txt2 = '', title;
+      if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = bySprint ? 'Holiday weeks' : 'Holiday week'; }
+      else {
+        var ratio = cell.supply > 0 ? cell.demand / cell.supply : (cell.demand > 0 ? Infinity : 0);
+        cls = cell.overAny ? 'over' : (cell.demand === 0 ? 'idle' : (ratio > 0.85 ? 'mid' : 'ok'));
+        // the widest form that actually fits THIS cell's numbers: spaced
+        // demand / supply, then tight, then the ask alone, then nothing.
+        // Measured off the string, not the zoom — a clipped “4 / 0.” reads
+        // as a different number. The tooltip always carries both.
+        var dTxt = fmtPe(cell.demand), sTxt = fmtPe(cell.supply);
+        txt2 = capCellText([dTxt + ' / ' + sTxt, dTxt + '/' + sTxt, dTxt], cellPx);
+        // per type: every type with something asked or supplied this period
+        var parts = [];
+        cap.types.forEach(function (ct) {
+          var tc = cap.rows[ct][pi];
+          if (tc.demand <= 1e-9 && tc.supply <= 1e-9) return;
+          parts.push(ct + ' ' + fmtPe(tc.demand) + ' / ' + fmtPe(tc.supply) +
+            (tc.over ? (tc.supply <= 1e-9 ? ' — no supply, nobody on the roster supplies ' + ct : ' — over') : ''));
+        });
+        title = fmtPe(cell.demand) + ' ' + unitWord + ' asked · ' + fmtPe(cell.supply) + ' available' +
+          (parts.length ? ' · ' + parts.join(' · ') : '');
+      }
+      var when = !bySprint ? 'Week of ' + RM.fmtShort(RM.weekStartDate(meta, w))
+        : (per.num != null ? 'Sprint ' + per.num + ', ' : '') + RM.fmtShort(RM.weekStartDate(meta, w)) + ' – ' +
+          RM.fmtShort(RM.spanEndDate(meta, w * SPW(), nW * SPW()));
+      // a sprint cell spans its weeks; a click toggles the week under the
+      // pointer (data-w1 marks the span)
+      hcc.push('<div class="cap-cell ' + cls + (hn && !cell.blackout ? ' part' : '') + '" tabindex="0" data-w="' + w +
+        (bySprint ? '" data-w1="' + per.w1 : '') +
+        '" style="left:' + (w * weekPx + 1) + 'px;width:' + (cellPx - 2) + 'px" title="' +
+        esc(when + ': ' + title +
+          (hn ? ' · ' + hn + ' holiday day(s)' : '') + ' · click to toggle holiday week') + '">' + txt2 + '</div>');
     });
+    capRowsHtml.push('<div class="hdr-line hdr-cap">' +
+      '<div class="hdr-left"><span class="cap-row-lab" title="' +
+      esc((bySprint ? 'Each sprint: ' : 'Each week: ') + unitWord + ' asked / available across every capacity type — Setup → Capacity') + '">' +
+      'Capacity (' + unitWord + ')</span></div>' +
+      '<div class="hdr-lane">' + hcc.join('') + '</div></div>');
     // phase lane above the dates: user-pinned dates win, otherwise the span
     // auto-derives from the phase's scheduled items; overlapping phases stack
     var PH_H = 20;
@@ -10424,19 +10426,6 @@
         '<div class="su-rows" data-sulist="captype">' + capTypeRows + '</div>' +
         '<div class="p-row" style="margin-top:8px"><input id="suCapTypeAdd" placeholder="New capacity type, e.g. Data"><button id="suCapTypeAddBtn" class="fixed">Add</button></div>' +
         '<div class="m-hint">A ' + esc(lvl('story').toLowerCase()) + '\u2019s capacity type says what it drains and who can take it; a person\u2019s says what they supply. Drag the grips to reorder.</div>' +
-        '</section>' +
-        '<section class="su-card"><h2>Tracked capacity types</h2>' +
-        '<div>' + (function () {
-          var tracked = RM.trackedCapTypes(state);
-          return RM.capTypesOf(state).map(function (t) {
-            var on = tracked.indexOf(t) !== -1;
-            // at least one type is always tracked: the last one cannot come off
-            var last = on && tracked.length === 1;
-            return '<label class="p-check"><input type="checkbox" data-sucaprow="' + esc(t) + '"' +
-              (on ? ' checked' : '') + (last ? ' disabled' : '') + '> ' + esc(t) + '</label>';
-          }).join('');
-        })() + '</div>' +
-        '<div class="m-hint">One header row per tracked type; Auto timeline and Place only constrain these.</div>' +
         '</section>',
       columns: (function () {
         var offNotes = [];
@@ -10669,18 +10658,6 @@
       var dp = parseFloat(t.value);
       if (!isFinite(dp) || dp < 0) { render(); return; }
       commit('default points', function (s2) { s2.meta.defaultPoints = dp; });
-      return;
-    }
-    if (t.dataset.sucaprow != null) {
-      var rt = t.dataset.sucaprow, rtOn = t.checked;
-      commit('tracked capacity types', function (s2) {
-        // under 'all' the boxes show what is effectively tracked, so the first
-        // change materialises that list rather than starting from nothing
-        var list = RM.trackedCapTypes(s2).filter(function (x) { return x !== rt; });
-        if (rtOn) list.push(rt);
-        // at least one tracked type: an empty list is the 'all' sentinel again
-        s2.meta.capRowTypes = list.length ? list : 'all';
-      });
       return;
     }
     if (t.dataset.rcname != null) {

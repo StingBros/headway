@@ -181,36 +181,51 @@ eq(RM.holidayFactor(METAF, 1), 0.8, 'one holiday in a 5-day week = 0.8');
 eq(RM.capSupply(mkState([], { meta: METAF, team: [{ name: 'X', capType: 'Development' }] })).byType.Development[1], 0.8, 'supply scales by the holiday factor');
 var cap = RM.capacity(sCap);
 eq(cap.weeks[0].demand, 1, 'week 0: one Development unit');
-eq(cap.weeks[1].demand, 3, 'week 1: 1 + 2 (multiplier) Development');
+eq(cap.weeks[1].demand, 4, 'week 1: 1 + 2 (multiplier) Development + 1 Design — every type counts');
 eq(cap.weeks[0].supply, 1.5, 'row supply aggregates all supplied types');
 ok(cap.weeks[1].over, 'week 1 over: 3 asked, 1.5 available');
 ok(!cap.weeks[0].over, 'week 0 fits');
 ok(cap.weeks[1].byType.Design.demand === 1 && cap.weeks[1].byType.Design.supply === 0, 'a type nobody supplies is listed with zero supply but never marks over');
 ok(cap.weeks[1].items.indexOf(sCap.items[2].id) !== -1, 'items in flight listed');
-// row type filter
-sCap.meta.capRowTypes = ['Design'];
-var capD = RM.capacity(sCap);
-eq(capD.weeks[1].demand, 1, 'filtered row shows only the selected type');
-ok(!capD.weeks[1].over, 'and only the selected types decide over');
-// tracked capacity types: one row each
-eq(RM.trackedCapTypes(sCap), ['Design'], 'a set list is what is tracked');
-sCap.meta.capRowTypes = ['Design', 'Development'];
-eq(RM.trackedCapTypes(sCap), ['Development', 'Design'], 'tracked types come back in capacity-type order');
+// every capacity type counts: one row per type, the aggregate sums them all
 var capTwo = RM.capacity(sCap);
-eq(capTwo.types, ['Development', 'Design'], 'one row per tracked type');
+eq(capTwo.types, RM.capTypesOf(sCap), 'one row per capacity type, in capacity-type order');
 eq(capTwo.rows.Development[1].demand, 3, 'the Development row carries only Development demand');
 eq(capTwo.rows.Development[1].supply, 1.5, 'and only Development supply');
 eq(capTwo.rows.Design[1].demand, 1, 'the Design row carries only Design demand');
 eq(capTwo.rows.Design[1].supply, 0, 'nobody supplies Design');
-ok(capTwo.rows.Design[1].over, 'a tracked type nobody supplies is over as soon as anything asks for it');
+ok(capTwo.rows.Design[1].over, 'a type nobody supplies is over as soon as anything asks for it');
 ok(capTwo.rows.Development[1].over && !capTwo.rows.Development[0].over, 'a supplied row is over only in the week that over-asks');
 ok(capTwo.rows.Design[1].items.indexOf(sCap.items[2].id) !== -1, 'each row lists its own items');
-eq(capTwo.weeks[1].demand, 4, 'the aggregate week sums every tracked type');
+eq(capTwo.weeks[1].demand, 4, 'the aggregate week sums every type');
 ok(capTwo.rows.Development[16].blackout, 'rows carry the blackout weeks too');
-sCap.meta.capRowTypes = 'all';
-eq(RM.trackedCapTypes(sCap), ['Development'], 'under "all" the tracked types are the ones the roster supplies');
-eq(RM.trackedCapTypes(mkState([], { team: [] })), RM.capTypesOf(sCap),
-  'with nobody supplying anything, every capacity type is tracked');
+ok(capTwo.weeks[1].overAny && !capTwo.weeks[0].overAny, 'overAny: some type is over that week');
+eq(RM.trackedCapTypes, undefined, 'there is no tracked-type filter any more');
+// the sum can hide one type overflowing: over / overAny read per type
+{
+  var sHide = mkState([
+    { num: 1, feature: 'dev a', startDay: 0, durDays: 5, capType: 'Development' },
+    { num: 2, feature: 'dev b', startDay: 0, durDays: 5, capType: 'Development' }
+  ], { team: [{ name: 'D', capType: 'Development' }, { name: 'S1', capType: 'Design' }, { name: 'S2', capType: 'Design' }] });
+  var cHide = RM.capacity(sHide);
+  ok(cHide.weeks[0].demand === 2 && cHide.weeks[0].supply === 3, 'the week sums 2 asked of 3');
+  ok(cHide.weeks[0].over && cHide.weeks[0].overAny, 'yet it is over: Development asks 2 of its 1');
+  // work of a type nobody supplies: overAny (the header shows it), not over
+  // (validation says CAP_TYPE_UNSUPPLIED instead, the scheduler ignores it)
+  var sDry = mkState([{ num: 1, feature: 'qa', startDay: 0, durDays: 5, capType: 'QA' }],
+    { team: [{ name: 'D', capType: 'Development' }] });
+  var cDry = RM.capacity(sDry);
+  ok(cDry.weeks[0].overAny && !cDry.weeks[0].over, 'unsupplied work: overAny but not over');
+}
+// untyped people supply nothing, whatever their seat or points
+{
+  var sUt = mkState([], { team: [{ name: 'U', capType: '', capacity: 2, points: 50 }, { name: 'D', capType: 'Development' }] });
+  eq(RM.capSupply(sUt).types, ['Development'], 'an untyped person supplies no type');
+  eq(RM.capSupply(sUt).byType.Development[0], 1, 'and adds nothing to anyone else\'s supply');
+  sUt.meta.capMode = 'points';
+  eq(RM.capacity(sUt).weeks[0].supply, 10, 'points mode: only the typed person\'s 10 per sprint');
+  ok(sUt.team[0].capacity === 2 && sUt.team[0].points === 50, 'normalize keeps an untyped person\'s seat and points for later');
+}
 // story level: stories carry the demand; the feature bar is ignored
 var sCapS = mkState([
   { num: 1, feature: 'f', startDay: 0, durDays: 20, capType: 'Development', stories: [
@@ -298,7 +313,7 @@ section('capacity periods');
 
 section('capacity fields');
 var sF = RM.normalizeState({
-  meta: { timelineStart: '2026-07-27', numWeeks: 8, capLimit: 3, capBasis: 'stories', capUnit: 'points', capacityEnabled: true, capMode: 'points', defaultPoints: 8, capRowTypes: ['Design'] },
+  meta: { timelineStart: '2026-07-27', numWeeks: 8, capLimit: 3, capBasis: 'stories', capUnit: 'points', capacityEnabled: true, capMode: 'points', defaultPoints: 8, capRowTypes: ['Design'] }, // an old doc's row selection
   phases: [{ id: 'p1', auto: true }, { id: 'p2', bucket: true, auto: true }],
   items: [{ num: 1, feature: 'f', capType: 'Design', capMult: 2, stories: [{ title: 's', capMult: 0 }] }],
   team: [{ name: 'A', points: 12 }, { name: 'B' }]
@@ -306,10 +321,10 @@ var sF = RM.normalizeState({
 ok(sF.meta.capLimit === undefined && sF.meta.capBasis === undefined && sF.meta.capUnit === undefined, 'weekly limit and row basis/unit fields are gone');
 eq(sF.meta.capMode, 'points', 'capMode kept');
 eq(sF.meta.defaultPoints, 8, 'defaultPoints kept');
-eq(sF.meta.capRowTypes, ['Design'], 'capRowTypes list kept');
+eq(sF.meta.capRowTypes, undefined, 'an old document\'s capRowTypes is dropped: every type counts');
 eq(RM.normalizeState({ meta: {}, phases: [{ id: 'p' }], items: [] }).meta.capMode, 'person', 'capMode defaults to person');
 eq(RM.normalizeState({ meta: {}, phases: [{ id: 'p' }], items: [] }).meta.defaultPoints, 10, 'defaultPoints defaults to 10');
-eq(RM.normalizeState({ meta: {}, phases: [{ id: 'p' }], items: [] }).meta.capRowTypes, 'all', 'capRowTypes defaults to all');
+eq(RM.normalizeState({ meta: {}, phases: [{ id: 'p' }], items: [] }).meta.capRowTypes, undefined, 'no capRowTypes on a new document');
 eq(sF.items[0].capType, 'Design', 'feature capType kept');
 eq(sF.items[0].capMult, 2, 'feature capMult kept');
 eq(sF.items[0].stories[0].capMult, 1, 'story capMult below or at 0 falls back to 1');
@@ -329,21 +344,6 @@ eq(RM.normalizeState(sCT).capTypes.indexOf('Design'), -1, 'renormalizing does no
 ok(RM.removeCapType(sCT, 'UX'), 'removeCapType reports the removal');
 eq(sCT.items[0].capType, '', 'a feature capType is cleared on removal');
 eq(RM.normalizeState(sCT).capTypes.indexOf('UX'), -1, 'renormalizing does not resurrect the removed type');
-// the capacity row's selection follows a rename and drops a removal
-var sCR = RM.normalizeState({ meta: { capRowTypes: ['Design', 'QA'] }, phases: [{ id: 'p' }], items: [] });
-ok(RM.renameCapType(sCR, 'Design', 'UX'), 'renameCapType reports the rename (row types)');
-eq(sCR.meta.capRowTypes, ['UX', 'QA'], 'the capacity row selection follows the rename');
-ok(RM.removeCapType(sCR, 'QA'), 'removeCapType reports the removal (row types)');
-eq(sCR.meta.capRowTypes, ['UX'], 'and a removed type leaves the selection');
-var sCR1 = RM.normalizeState({ meta: { capRowTypes: ['Design'] }, phases: [{ id: 'p' }], items: [] });
-ok(RM.removeCapType(sCR1, 'Design'), 'removeCapType reports the removal (the last selected type)');
-eq(sCR1.meta.capRowTypes, 'all', 'removing the last selected type reverts the row to all types there and then');
-eq(RM.normalizeState({ meta: { capRowTypes: ['Design', 'Ghost'] }, phases: [{ id: 'p' }], items: [] }).meta.capRowTypes,
-  ['Design'], 'normalize prunes row types the document no longer has');
-eq(RM.normalizeState({ meta: { capRowTypes: 'all' }, phases: [{ id: 'p' }], items: [] }).meta.capRowTypes,
-  'all', "and leaves the 'all' sentinel alone");
-eq(RM.normalizeState({ meta: { capRowTypes: ['Ghost'] }, phases: [{ id: 'p' }], items: [] }).meta.capRowTypes,
-  'all', 'a selection pruned down to nothing goes back to all types rather than a silent empty row');
 // documents written before capacity types: a blank feature type takes the
 // document's first type so it is never invisible to the capacity row
 var sDefCT = RM.normalizeState({ meta: {}, capTypes: ['Development', 'Design'], phases: [{ id: 'p' }], items: [
@@ -393,17 +393,17 @@ ok(!RM.capacity(rT.state).weeks.some(function (c) { return c.over; }), 'never ov
 eq(RM.autoTimeline(sT, { today: 0, phaseIds: [] }).changed, 0, 'no target phases → nothing changes');
 var sOff = autoState([{ num: 1, feature: 'a', phaseId: 'p1', durDays: 5 }], [], { capacityEnabled: false });
 eq(RM.autoTimeline(sOff, { today: 0 }).changed, 0, 'capacity off → nothing changes');
-// only TRACKED types are constrained; other work is dependency-only
-function trackState(rowTypes) {
+// every supplied type is constrained; a type nobody supplies is dependency-only
+function trackState(team) {
   return autoState([
     { num: 1, feature: 'dsn a', phaseId: 'p1', durDays: 5, capType: 'Design' },
     { num: 2, feature: 'dsn b', phaseId: 'p1', durDays: 5, capType: 'Design' }
-  ], [{ name: 'D', capType: 'Development' }, { name: 'S', capType: 'Design' }], { capRowTypes: rowTypes });
+  ], team, { capRowTypes: ['Development'] }); // a stale old-doc selection is ignored
 }
-eq(byNum(RM.autoTimeline(trackState(['Development']), { today: 0 }).state)[2].startDay, 0,
-  'an untracked type is dependency-only: both Design units start in the same week');
-eq(byNum(RM.autoTimeline(trackState(['Development', 'Design']), { today: 0 }).state)[2].startDay, 5,
-  'tracking Design makes the second Design unit wait for the week to free up');
+eq(byNum(RM.autoTimeline(trackState([{ name: 'D', capType: 'Development' }]), { today: 0 }).state)[2].startDay, 0,
+  'a type nobody supplies is dependency-only: both Design units start in the same week');
+eq(byNum(RM.autoTimeline(trackState([{ name: 'D', capType: 'Development' }, { name: 'S', capType: 'Design' }]), { today: 0 }).state)[2].startDay, 5,
+  'once someone supplies Design the second Design unit waits for the week to free up');
 // cap 2: two run together, third waits
 var s2 = autoState([
   { num: 1, feature: 'a', phaseId: 'p1', durDays: 5, capType: 'Development' },
@@ -476,13 +476,13 @@ var Proto = byNum(rProto.state);
 eq(Proto[1].startDay, 10, 'an infeasible unit of a type named "constructor" is left where it is');
 ok(rProto.notes.length === 1 && /never/.test(rProto.notes[0]), 'and the never note still fires for it');
 eq(Proto[2].startDay, 15, 'while a feasible unit of that type is placed around it');
-// ... and the capacity row can select that type without writing onto Object
+// ... and the capacity summary carries that type without writing onto Object
 var sProtoRow = autoState([
   { num: 1, feature: 'crowd', phaseId: 'p1', startDay: 10, durDays: 5, capType: 'constructor', capMult: 3 }
-], [{ name: 'X', capType: 'Development' }], { capRowTypes: ['constructor'] });
+], [{ name: 'X', capType: 'Development' }]);
 var protoCell = RM.capacity(sProtoRow).weeks[2];
 ok(Object.prototype.hasOwnProperty.call(protoCell.byType, 'constructor') && protoCell.byType.constructor.demand === 3,
-  'a selected but unsupplied type named "constructor" carries its own demand in byType');
+  'an unsupplied type named "constructor" carries its own demand in byType');
 eq(Object.demand, undefined, 'and nothing was written onto Object itself');
 // story level: stories move, feature bar becomes their hull
 var sSt = autoState([

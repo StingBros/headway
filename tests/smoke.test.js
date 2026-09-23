@@ -259,12 +259,13 @@ const visibleSched = state().items.filter(i => i.startDay != null &&
   !state().phases.find(p => p.id === i.phaseId).collapsed).length;
 ok(doc.querySelectorAll('#rows .bar').length === visibleSched,
   'bars rendered for every visible scheduled item (' + doc.querySelectorAll('#rows .bar').length + ')');
-ok(doc.querySelectorAll('#hdrCapRows .hdr-cap').length >= 1, 'one header capacity row per tracked type');
+ok(doc.querySelectorAll('#hdrCapRows .hdr-cap').length === 1, 'one summed header capacity row');
 ok(doc.querySelectorAll('#hdrCapRows .hdr-cap:first-child .cap-cell').length === 48, 'capacity strip has 48 week cells');
 ok(state() && state().items.length > 100, 'debug state handle live (' + state().items.length + ' items)');
 ok(doc.querySelector('#resPanel') !== null && doc.querySelector('#resGrid') !== null, 'resources panel present');
-ok(/ capacity$/.test(doc.querySelector('#hdrCapRows .hdr-cap .cap-row-lab').textContent),
-  'each capacity row is labelled with its type');
+ok(/^Capacity \((people|points)\)$/.test(doc.querySelector('#hdrCapRows .hdr-cap .cap-row-lab').textContent),
+  'the capacity row is labelled Capacity, with its unit');
+ok(!doc.querySelector('#hdrCapRows [data-captype]'), 'the row belongs to no single type');
 ok(doc.querySelector('#hdrCapRows .dd-btn') === null, 'capacity is role-agnostic: no role filter dropdown');
 ok(doc.querySelectorAll('#hdrCapRows .hdr-cap:first-child .cap-cell').length === 48, 'capacity row spans all weeks');
 ok(doc.querySelector('.hdr-legend .hdr-left.corner #hlCols') !== null,
@@ -813,6 +814,7 @@ ok(doc.querySelectorAll('#resGrid .rh').length === 48, 'hour cells for every wee
   ok(state().team[0].capacity === 0.5, 'capacity commits (0.5)');
   const heads = window.RM.memberHeads(state(), state().team[0], 0);
   ok(Math.abs(heads - 0.5) < 1e-9, 'availability scales by the capacity factor (' + heads + ')');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
 }
 
@@ -4106,25 +4108,11 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   ok(state().meta.capMode === 'points' && !!doc.querySelector('#suDefPoints'), 'picking story points switches the demand model and reveals the default points');
   click(doc.querySelector('#setupView [data-sucapmode="person"]'));
   ok(state().meta.capMode === 'person', 'and back to per person');
-  // tracked capacity types: one checkbox each, at least one always tracked
-  ok(doc.querySelector('#suCapRowAll') === null && doc.querySelector('#suCapRowSome') === null,
-    'the All / Only these radios are gone — every type is simply tracked or not');
-  ok(/One header row per tracked type/.test(doc.querySelector('#setupView').textContent),
-    'the Capacity tab says what tracking a type does');
-  const rowChk = doc.querySelector('#setupView [data-sucaprow="Design"]');
-  rowChk.checked = true;
-  rowChk.dispatchEvent(new window.Event('change', { bubbles: true }));
-  ok(Array.isArray(state().meta.capRowTypes) && state().meta.capRowTypes.indexOf('Design') !== -1,
-    'ticking a capacity type materialises the tracked list and stores it in capRowTypes');
-  // the last tracked type can never be unticked
-  window.HeadwayApp.ai.commit('one row type', (s) => { s.meta.capRowTypes = ['Design']; });
-  const lastChk = doc.querySelector('#setupView [data-sucaprow="Design"]');
-  ok(lastChk.checked && lastChk.disabled, 'the last tracked type reads checked and cannot be unticked');
-  ok(!doc.querySelector('#setupView [data-sucaprow="Development"]').disabled,
-    'while the untracked ones stay tickable');
-  undo();
-  undo(); undo();
-  undo(); undo(); undo(); undo();
+  // every capacity type counts: there is nothing to track or untrack
+  ok(!doc.querySelector('#setupView [data-sucaprow]') && !/Tracked capacity types/.test(doc.querySelector('#setupView').textContent),
+    'the Capacity tab has no tracked-type checkboxes');
+  undo(); undo(); // the demand-model clicks
+  undo(); undo(); undo();
   // people and stories carry a capacity type; assignability follows it
   const person = state().team[0], person2 = state().team[1];
   window.HeadwayApp.ai.commit('cap types', (s) => {
@@ -4157,31 +4145,32 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   // capacity: story level plans on the stories and drains per type
   {
     const s = window.RM.clone(window.HeadwayApp.ai.state());
-    s.meta.capacityEnabled = true; s.meta.planLevel = 'story'; s.meta.capMode = 'person'; s.meta.capRowTypes = 'all';
+    s.meta.capacityEnabled = true; s.meta.planLevel = 'story'; s.meta.capMode = 'person';
     s.team = [{ id: 'p1', name: 'A', capType: 'Design', weekHours: {}, capacity: 1 }];
     const it = s.items.find((i) => i.startDay != null && !i.milestone);
     it.stories = [{ title: 'design it', startDay: it.startDay, durDays: 5, capType: 'Design' }, { title: 'later', capType: 'Design' }];
     const capS = window.RM.capacity(window.RM.normalizeState(s));
     const wk = Math.floor(it.startDay / 5);
-    ok(capS.weeks[wk].demand === 1 && capS.weeks[wk].supply === 1, 'story level: one Design story vs one Design person');
+    ok(capS.rows.Design[wk].demand === 1 && capS.rows.Design[wk].supply === 1, 'story level: one Design story vs one Design person');
     s.items.find((i) => i.id === it.id).stories[0].capMult = 2;
     ok(window.RM.capacity(window.RM.normalizeState(s)).weeks[wk].over, 'a ×2 story over-asks a one-person pool');
-    s.meta.capRowTypes = ['Development'];
-    ok(!window.RM.capacity(window.RM.normalizeState(s)).weeks[wk].over, 'the row only judges the selected types');
+    s.meta.capRowTypes = ['Development']; // an old document's selection
+    ok(window.RM.capacity(window.RM.normalizeState(s)).weeks[wk].over, 'an old tracked-type selection is ignored: every type counts');
   }
-  // the header row shows demand / supply for the selected types
+  // the header's single row sums demand / supply over every type
   window.HeadwayApp.ai.commit('cap row', (s) => {
-    s.meta.capacityEnabled = true; s.meta.planLevel = 'feature'; s.meta.capMode = 'person'; s.meta.capRowTypes = 'all';
+    s.meta.capacityEnabled = true; s.meta.planLevel = 'feature'; s.meta.capMode = 'person';
     s.team = [{ id: 'p1', name: 'A', capType: 'Development', weekHours: {}, capacity: 1 }];
     s.items.forEach((i) => { if (!i.milestone) { i.capType = 'Development'; i.capMult = 1; } });
     s.phases.forEach((p) => { p.auto = false; });
   });
-  const devRow = doc.querySelector('#hdrCapRows .hdr-cap[data-captype="Development"]');
-  ok(!!devRow && devRow.querySelector('.cap-row-lab').textContent === 'Development capacity',
-    'the tracked Development type gets its own labelled header row');
-  const cells = [...devRow.querySelectorAll('.cap-cell')];
+  const capRow = () => doc.querySelectorAll('#hdrCapRows .hdr-cap');
+  ok(capRow().length === 1 && capRow()[0].querySelector('.cap-row-lab').textContent === 'Capacity (people)',
+    'one capacity row, labelled Capacity (people)');
+  const cells = [...capRow()[0].querySelectorAll('.cap-cell')];
+  ok(cells.length === 48, 'per person: 48 week cells');
   const busy = cells.find((c) => c.classList.contains('over'));
-  ok(!!busy && /Development/.test(busy.getAttribute('title')), 'an over-asked week reads over and names the type in its tooltip');
+  ok(!!busy && /Development \d+(\.\d)? \/ \d+(\.\d)? — over/.test(busy.getAttribute('title')), 'an over-asked week reads over and lists the type in its tooltip');
   ok(/\d+(\.\d)? ?\/ ?\d+(\.\d)?/.test(busy.textContent), 'the cell reads demand / supply');
   ok(/people|points/.test(busy.getAttribute('title')), 'the tooltip says the unit');
   ok([...doc.querySelectorAll('#hdrCapRows .cap-cell')].every((c) => {
@@ -4191,18 +4180,31 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   // a two-digit ask against a fractional supply cannot fit "14 / 0.9" in a
   // 28px week: the cell drops to the ask alone rather than clipping it
   window.HeadwayApp.ai.commit('fractional supply', (s) => { s.team[0].capacity = 0.9; });
-  const frac = [...doc.querySelectorAll('#hdrCapRows .hdr-cap[data-captype="Development"] .cap-cell')]
+  const frac = [...doc.querySelectorAll('#hdrCapRows .hdr-cap .cap-cell')]
     .find((c) => /^\d\d/.test(c.textContent.trim()));
   ok(!!frac && /^\d+$/.test(frac.textContent.trim()) && /0\.9 available/.test(frac.getAttribute('title')),
     'a two-digit ask against 0.9 available shows the ask alone, with both numbers in the tooltip');
   undo();
-  // a picked type nobody supplies can never be done: that reads over, not ok
+  // the sum can hide one type overflowing: the cell still reads over
+  window.HeadwayApp.ai.commit('design bench', (s) => {
+    s.team.push({ id: 'p2', name: 'B', capType: 'Design', weekHours: {}, capacity: 20 });
+  });
+  {
+    const capH = window.RM.capacity(window.HeadwayApp.ai.state());
+    const hi = capH.weeks.findIndex((c) => !c.blackout && c.demand > 1 && c.demand <= c.supply);
+    const hc = [...doc.querySelectorAll('#hdrCapRows .hdr-cap .cap-cell')][hi];
+    ok(hi !== -1 && capH.rows.Development[hi].over && hc.classList.contains('over'),
+      'a week under its summed supply still reads over when Development alone is over');
+    ok(hi !== -1 && /Development \d+(\.\d)? \/ \d+(\.\d)? — over/.test(hc.getAttribute('title')) && /Design 0 \/ \d+/.test(hc.getAttribute('title')),
+      'and its tooltip lists each type\'s demand / supply (' + (hc && hc.getAttribute('title')) + ')');
+  }
+  undo();
+  // a type nobody supplies can never be done: that reads over, not ok
   window.HeadwayApp.ai.commit('no supply', (s) => {
-    s.meta.capRowTypes = ['Design'];
     s.items.forEach((i) => { if (!i.milestone) i.capType = 'Design'; });
   });
-  const dry = [...doc.querySelectorAll('#hdrCapRows .hdr-cap[data-captype="Design"] .cap-cell')].find((c) => c.classList.contains('over'));
-  ok(!!dry && / ?\/ ?0/.test(dry.textContent) && /no supply/.test(dry.getAttribute('title')),
+  const dry = [...doc.querySelectorAll('#hdrCapRows .hdr-cap .cap-cell')].find((c) => c.classList.contains('over'));
+  ok(!!dry && / ?\/ ?1/.test(dry.textContent) && /no supply/.test(dry.getAttribute('title')),
     'a week asking a type nobody supplies reads over and says “no supply”');
   undo();
   // story-points mode: one header cell per sprint, lined up under the sprint cells
@@ -4214,20 +4216,20 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
       f.size = '5';
     });
     const sprCells = [...doc.querySelectorAll('#hdrSprints .sprint-cell')];
-    const pCells = [...doc.querySelectorAll('#hdrCapRows .hdr-cap[data-captype="Development"] .cap-cell')];
+    const pCells = [...doc.querySelectorAll('#hdrCapRows .hdr-cap .cap-cell')];
     const px = (el, k) => parseFloat(el.style[k]);
     ok(pCells.length === sprCells.length && pCells.length < 48, 'points mode: one capacity cell per sprint (' + pCells.length + ' vs ' + sprCells.length + ' sprints)');
     ok(pCells.every((c, i) => Math.abs(px(c, 'left') - 1 - px(sprCells[i], 'left')) < 0.01 &&
       Math.abs(px(c, 'width') + 2 - px(sprCells[i], 'width')) < 0.01), 'each sprint cell spans its sprint\'s weeks');
     const capP = window.RM.capacity(window.HeadwayApp.ai.state());
-    const i0 = capP.rows.Development.findIndex((c) => c.demand > 0 && !c.blackout);
-    ok(i0 !== -1 && pCells[i0].textContent.trim().indexOf(String(Math.round(capP.rows.Development[i0].supply))) !== -1 &&
+    const i0 = capP.weeks.findIndex((c) => c.demand > 0 && !c.blackout);
+    ok(i0 !== -1 && pCells[i0].textContent.trim().indexOf(String(Math.round(capP.weeks[i0].supply))) !== -1 &&
       /points/.test(pCells[i0].getAttribute('title')) && /Sprint \d+/.test(pCells[i0].getAttribute('title')),
       'a sprint cell reads demand / supply for the sprint and names it in the tooltip (' + (i0 !== -1 ? pCells[i0].textContent : '') + ')');
-    ok(pCells.every((c, i) => c.classList.contains('over') === capP.rows.Development[i].over || capP.rows.Development[i].blackout),
+    ok(pCells.every((c, i) => c.classList.contains('over') === capP.weeks[i].overAny || capP.weeks[i].blackout),
       'sprint cells read over exactly when the sprint is over');
     undo();
-    ok(doc.querySelectorAll('#hdrCapRows .hdr-cap[data-captype="Development"] .cap-cell').length === 48, 'back per person: 48 week cells');
+    ok(doc.querySelectorAll('#hdrCapRows .hdr-cap .cap-cell').length === 48, 'back per person: 48 week cells');
   }
   undo();
   // auto timeline: a phase flagged Auto re-lays its items on every commit
@@ -5576,7 +5578,8 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
   const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   window.HeadwayApp.ai.setPref('autoOrder', true);
   const doc0 = window.RM.clone(state());
-  doc0.meta.capacityEnabled = true; doc0.meta.planLevel = 'feature'; doc0.meta.capMode = 'person'; doc0.meta.capRowTypes = 'all';
+  doc0.meta.capacityEnabled = true; doc0.meta.planLevel = 'feature'; doc0.meta.capMode = 'person';
+  doc0.meta.capRowTypes = ['Design']; // an old document's tracked-type selection
   doc0.team = [{ id: 'solo', name: 'Solo', capType: 'Development', weekHours: {}, capacity: 1 }];
   const autoPh = doc0.phases.find((p) => !p.bucket);
   autoPh.auto = true;
@@ -5597,6 +5600,7 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
     .then(() => {
       const opened = state();
       ok(opened.phases.find((p) => p.id === autoPh.id).auto === true, 'on open: the Auto flag survived the file');
+      ok(opened.meta.capRowTypes === undefined, 'on open: an old capRowTypes selection is dropped');
       ok(!window.RM.capacity(opened).weeks.some((c) => c.over), 'on open: the Auto phase is laid out, no week over capacity');
       const sorted = window.RM.clone(opened);
       window.RM.sortItemsByStart(sorted);
