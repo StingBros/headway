@@ -21,6 +21,9 @@
   var bundleDir = null;      // absolute path of the open project's hidden <Project>/.headway data folder
   var markerFile = null;     // absolute path of <Project>/<Project>.headway — what the user opened
   var projectTitle = null;   // the marker's title (the folder is named after it)
+  var projectId = null;      // the marker's id (= headway.json docId): finds the project again after a move
+  var goneDirs = {};         // data folders we know are gone (renamed away): never written again
+  var locating = null;       // the in-flight checkBundleLocation()
   var activePlanId = null;   // sub-bundle whose entity events are applied live
   var lastShardJson = {};    // rel path → canonical envelope JSON we last read or wrote (echo test)
   var bundleWarnings = [];   // {path, err} — shards skipped on read, never fatal
@@ -461,8 +464,8 @@
     watchGen++;
     if (unwatch) { try { unwatch(); } catch (e) { /* already gone */ } unwatch = null; }
     bundleDir = null; activePlanId = null; lastShardJson = {}; bundleWarnings = [];
-    markerFile = null; projectTitle = null;
-    if (!dir || !uid) return Promise.resolve();
+    markerFile = null; projectTitle = null; projectId = null;
+    if (!dir || !uid || goneDirs[dir]) return Promise.resolve();
     return removePresence(dir, uid).catch(function () { /* best effort */ });
   }
   function removePresence(dir, userId) {
@@ -478,6 +481,13 @@
     if (!dir) return Promise.resolve();
     var kind = evKind(ev), a = app(), pending = [], seen = {};
     var chain = Promise.resolve();
+    // the watched folder itself moved or went (or headway.json did): find
+    // out where the project is now
+    var d0 = norm(dir).toLowerCase();
+    if (((ev && ev.paths) || []).some(function (p) {
+      var q = norm(p).toLowerCase();
+      return q === d0 || q.indexOf(d0 + '/') !== 0 || (kind === 'remove' && rel(dir, p) === 'headway.json');
+    })) checkBundleLocation().catch(function () { /* checked again on the next write */ });
     ((ev && ev.paths) || []).forEach(function (p) {
       var r = rel(dir, p);
       if (seen[r]) return;
@@ -543,6 +553,89 @@
     var marker = norm(projectDir).replace(/\/+$/, '') + '/' + basename(projectDir) + RB().MARKER_EXT;
     return atomicWriteText(marker, RB().markerText(id, title)).then(function () { return marker; });
   }
+  // Writes go only into a data folder that is still there: atomicWriteText
+  // and the history/presence mkdirs would otherwise quietly re-create a
+  // project folder a peer just renamed (their sync client moved ours). A gone
+  // folder rejects and starts the search for where the project went.
+  var GONE_MSG = 'The project folder is gone — it was moved, renamed or removed';
+  function liveRoot(dir) {
+    dir = norm(dir).replace(/\/+$/, '');
+    if (goneDirs[dir]) return Promise.reject(new Error(GONE_MSG));
+    return fs.exists(dir + '/headway.json').catch(function () { return true; }).then(function (there) {
+      if (there) return;
+      if (bundleDir && norm(bundleDir) === dir) checkBundleLocation();
+      throw new Error(GONE_MSG);
+    });
+  }
+
+  // The open project's folder vanished (a peer renamed it — their sync
+  // client moved ours — or it was moved / removed). Look beside where it
+  // was for a marker with the same id: found → follow it (watcher, paths,
+  // title) and tell the app bundleMoved({marker, dir, from}); not found →
+  // bundleGone({marker, title}) and the session is left. Resolves 'ok' |
+  // 'moved' | 'gone' | 'none' (no project open).
+  function checkBundleLocation() {
+    if (locating) return locating;
+    if (!bundleDir || !markerFile) return Promise.resolve('none');
+    var dir = bundleDir, marker = markerFile, id = projectId, title = projectTitle;
+    var parent = dirname(dirname(marker));
+    function done(v) { locating = null; return v; }
+    locating = fs.exists(dir + '/headway.json').catch(function () { return true; }).then(function (there) {
+      if (there) return 'ok';
+      return findMarker(parent, id).then(function (found) {
+        if (bundleDir !== dir) return 'ok'; // the document changed meanwhile
+        var a = app();
+        goneDirs[dir] = true;
+        if (found) {
+          var ndir = dataDirOf(found.marker);
+          watchGen++;
+          if (unwatch) { try { unwatch(); } catch (e) { /* already gone */ } unwatch = null; }
+          bundleDir = ndir; markerFile = found.marker; projectTitle = found.title || title;
+          delete goneDirs[ndir];
+          markTitle();
+          rewatch();
+          if (a && typeof a.bundleMoved === 'function') a.bundleMoved({ marker: found.marker, dir: ndir, from: marker, title: projectTitle });
+          return 'moved';
+        }
+        leaveBundle();
+        markTitle();
+        if (a && typeof a.bundleGone === 'function') a.bundleGone({ marker: marker, title: title });
+        return 'gone';
+      });
+    }).then(done, function (err) { done(null); throw err; });
+    return locating;
+  }
+  // a <X>/<Y>.headway marker with this id (and its .headway/ beside it)
+  // among parent's sub-folders; null when none
+  function findMarker(parent, id) {
+    if (!id) return Promise.resolve(null);
+    return fs.readDir(parent).catch(function () { return []; }).then(function (entries) {
+      var subs = (entries || []).filter(function (e) { return e && e.isDirectory; }).map(function (e) { return e.name; }).sort();
+      return subs.reduce(function (chain, sub) {
+        return chain.then(function (hit) {
+          if (hit) return hit;
+          var d = parent + '/' + sub;
+          return fs.readDir(d).catch(function () { return []; }).then(function (inner) {
+            var marks = (inner || []).filter(function (e) { return e && e.isFile && /^.+\.headway$/i.test(e.name); });
+            return marks.reduce(function (c2, e) {
+              return c2.then(function (h) {
+                if (h) return h;
+                var mp = d + '/' + e.name;
+                return fs.readTextFile(mp).then(function (text) {
+                  var m = RB().parseMarker(text);
+                  if (!m || m.id !== id) return null;
+                  return fs.exists(dataDirOf(mp) + '/headway.json').then(function (ok) {
+                    return ok ? { marker: mp, title: m.title } : null;
+                  });
+                }, function () { return null; });
+              });
+            }, Promise.resolve(null));
+          });
+        });
+      }, Promise.resolve(null));
+    });
+  }
+
   // names already in a folder (so a new project folder never lands on one)
   function namesIn(dir) {
     return fs.exists(dir).then(function (there) { return there ? fs.readDir(dir) : []; })
@@ -579,6 +672,8 @@
           bundleDir = dir;
           markerFile = marker;
           projectTitle = mk.title || hw.title || basename(marker).replace(/\.headway$/i, '');
+          projectId = mk.id;
+          delete goneDirs[dir];
           activePlanId = pid;
           // keeps every xlsx path inert: autosave, renameTo, reload all gate on currentPath
           currentPath = null; lastSig = null; lastStateJson = null;
@@ -620,13 +715,15 @@
             });
           });
         });
-      }, Promise.resolve()).then(function () { return { written: written, merged: merged }; });
+      }, liveRoot(dir)).then(function () { return { written: written, merged: merged }; });
     },
 
     // history/<userId>.jsonl — we are its only writer, so no temp file
     appendHistory: function (dir, userId, line) {
       var p = dir + '/history/' + userId + '.jsonl';
-      return fs.mkdir(dir + '/history', { recursive: true }).then(function () {
+      return liveRoot(dir).then(function () {
+        return fs.mkdir(dir + '/history', { recursive: true });
+      }).then(function () {
         return readTextOr(p, '');
       }).then(function (text) {
         text = String(text || '');
@@ -636,7 +733,9 @@
     },
     rewriteHistory: function (dir, userId, lines) {
       var p = dir + '/history/' + userId + '.jsonl';
-      return fs.mkdir(dir + '/history', { recursive: true }).then(function () {
+      return liveRoot(dir).then(function () {
+        return fs.mkdir(dir + '/history', { recursive: true });
+      }).then(function () {
         return fs.writeTextFile(p, RB().encodeHistory(lines));
       }).catch(rejectFriendly);
     },
@@ -657,9 +756,14 @@
     },
 
     // presence is advisory: plain writes, unreadable files are skipped
+    // a heartbeat into a folder that has gone is skipped (never re-created):
+    // it resolves false and starts the search for where the project went
     writePresence: function (dir, userId, obj) {
-      return fs.mkdir(dir + '/presence', { recursive: true }).then(function () {
-        return fs.writeTextFile(dir + '/presence/' + userId + '.json', JSON.stringify(obj));
+      return liveRoot(dir).then(function () { return true; }, function () { return false; }).then(function (live) {
+        if (!live) return false;
+        return fs.mkdir(dir + '/presence', { recursive: true }).then(function () {
+          return fs.writeTextFile(dir + '/presence/' + userId + '.json', JSON.stringify(obj));
+        }).then(function () { return true; });
       }).catch(rejectFriendly);
     },
     readPresence: function (dir) {
@@ -789,6 +893,69 @@
         return p ? window.HeadwayDesktop.openBundle(p) : null;
       });
     },
+    // the project's title changed: <Old>/<Old>.headway → <New>/<New>.headway.
+    // The caller has landed its pending shards. Watcher off, marker renamed,
+    // folder renamed (marker put back if that fails), marker title rewritten,
+    // watcher on again. Rejects — the old names kept — when the target exists
+    // or the file system refuses (a sync client holding the folder, …).
+    // Resolves {marker, dir, renamed}.
+    renameProject: function (title) {
+      if (!markerFile || !bundleDir) return Promise.reject(new Error('No project is open'));
+      var oldMarker = markerFile, oldProj = dirname(oldMarker), oldDir = bundleDir;
+      var name = RB().projectName(title);
+      var parent = dirname(oldProj);
+      var newProj = parent + '/' + name;
+      var sameName = basename(oldProj) === name;
+      var caseOnly = !sameName && basename(oldProj).toLowerCase() === name.toLowerCase();
+      if (sameName) {
+        // the folder name does not change (e.g. only characters the name
+        // drops were edited): just the marker's title
+        return atomicWriteText(oldMarker, RB().markerText(projectId, title)).then(function () {
+          projectTitle = title; markTitle();
+          return { marker: oldMarker, dir: oldDir, renamed: false };
+        }).catch(rejectFriendly);
+      }
+      var tmpMarker = oldProj + '/' + name + RB().MARKER_EXT;
+      var stopped = false;
+      function restart() {
+        if (stopped) { stopped = false; delete goneDirs[oldDir]; rewatch(); }
+      }
+      return (caseOnly ? Promise.resolve(false) : fs.exists(newProj)).then(function (there) {
+        if (there) throw new Error('a folder named “' + name + '” already exists beside it');
+        // no watcher event, heartbeat or flush into the folder while it moves
+        watchGen++;
+        if (unwatch) { try { unwatch(); } catch (e) { /* already gone */ } unwatch = null; }
+        stopped = true;
+        goneDirs[oldDir] = true;
+        return basename(oldMarker) === basename(tmpMarker) ? null : fs.rename(oldMarker, tmpMarker);
+      }).then(function () {
+        return fs.rename(oldProj, newProj).catch(function (err) {
+          // put the marker back so the project opens as before
+          var back = basename(oldMarker) === basename(tmpMarker) ? Promise.resolve() : fs.rename(tmpMarker, oldMarker);
+          return back.catch(function () { /* best effort */ }).then(function () { throw err; });
+        });
+      }).then(function () {
+        var nm = newProj + '/' + name + RB().MARKER_EXT;
+        bundleDir = newProj + '/' + RB().DATA_DIR;
+        markerFile = nm;
+        projectTitle = title;
+        delete goneDirs[bundleDir];
+        stopped = false;
+        markTitle();
+        rewatch();
+        return atomicWriteText(nm, RB().markerText(projectId, title)).catch(function (err) {
+          warn(nm, err); // the rename stands; the marker's title catches up on the next rename
+        }).then(function () {
+          var a = app();
+          if (a && typeof a.noteRecent === 'function') a.noteRecent(nm, 'bundle');
+          return { marker: nm, dir: bundleDir, renamed: true };
+        });
+      }).catch(function (err) {
+        restart();
+        throw new Error(friendlyFsError(err));
+      });
+    },
+    checkBundleLocation: checkBundleLocation,
     markerPath: function () { return markerFile; },
     projectDir: function () { return markerFile ? dirname(markerFile) : null; },
     projectTitle: function () { return projectTitle; },
@@ -810,7 +977,7 @@
     writeHeadway: function (dir, hw) {
       dir = norm(dir).replace(/\/+$/, '');
       var p = dir + '/headway.json';
-      return readJsonRetry(p).then(function (disk) {
+      return liveRoot(dir).then(function () { return readJsonRetry(p); }).then(function (disk) {
         var base = isObj(disk) ? disk : {};
         var out = {};
         Object.keys(base).forEach(function (k) { out[k] = base[k]; });
@@ -1000,6 +1167,12 @@
     })(),
     appVersion: '' // filled asynchronously below
   };
+
+  // back to the window: the project folder may have been renamed or moved
+  // while we were away (a peer's rename arrives through the sync client)
+  window.addEventListener('focus', function () {
+    if (bundleDir) checkBundleLocation().catch(function () { /* checked again on the next write */ });
+  });
 
   // the app booted before this file loaded: let it re-link the shared folder
   // its ui snapshot names (a reload mid-session). Optional, like the rest of

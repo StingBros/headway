@@ -605,6 +605,95 @@ async function main() {
     ok(err && /already exists/.test(err.message), 'an existing target folder is refused: ' + (err && err.message));
   }
 
+  section('renameProject: marker + folder follow the title');
+  {
+    const tr = makeFakeTauri();
+    const br = boot(tr, ['bundleMoved', 'bundleGone']);
+    br.HD.setUserId(USER);
+    const fx = br.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    const cr = br.RB.migrateFromState(fx, USER, T0);
+    const m0 = await br.HD.createBundle('C:/w/Alpha', cr);
+    const o = await br.HD.openBundle(m0);
+    const nFiles = [...tr.files.keys()].filter((k) => k.indexOf('C:/w/Alpha/') === 0).length;
+    const res = await br.HD.renameProject('Beta: v2');
+    eq(res, { marker: 'C:/w/Beta v2/Beta v2.headway', dir: 'C:/w/Beta v2/.headway', renamed: true }, 'resolves the new marker + data folder');
+    eq([...tr.files.keys()].filter((k) => k.indexOf('C:/w/Alpha') === 0), [], 'nothing left under the old name');
+    eq([...tr.files.keys()].filter((k) => k.indexOf('C:/w/Beta v2/') === 0).length, nFiles, 'every file moved with the folder');
+    eq(JSON.parse(tr.files.get(res.marker)), { headway: 1, id: cr.headway.docId, title: 'Beta: v2' }, 'marker renamed, same id, title rewritten');
+    eq([br.HD.bundleDir(), br.HD.markerPath(), br.HD.projectTitle()], [res.dir, res.marker, 'Beta: v2'], 'the open project is re-pointed');
+    const ws = tr.log.filter((l) => l.op === 'watch');
+    eq(ws.slice(-1)[0].path, res.dir, 'the watcher restarted on the new folder');
+    ok(tr.watching(), '…and is live');
+    eq(br.named('noteRecent').slice(-1)[0].args, [res.marker, 'bundle'], 'recents told about the new marker');
+    eq(br.window.document.title, 'Beta: v2 — Headway', 'window title follows');
+    // writes land in the new folder, never re-create the old one
+    const env0 = o.envs.items[0];
+    const upd = br.RB.wrap(Object.assign(br.RB.unwrap(env0), { notes: 'after rename' }), env0, USER, T1);
+    await br.HD.flushShards(br.HD.bundleDir(), o.planId, [{ kind: 'items', id: env0.id, env: upd, baseRev: env0.rev }]);
+    ok(tr.files.has(res.dir + '/plans/' + o.planId + '/items/' + env0.id + '.json'), 'a flush after the rename writes into the new folder');
+    await br.HD.writePresence('C:/w/Alpha/.headway', USER, { ts: 1 });
+    ok(![...tr.files.keys()].some((k) => k.indexOf('C:/w/Alpha') === 0) && ![...tr.dirs].some((d) => d.indexOf('C:/w/Alpha') === 0), 'a late heartbeat for the old folder does not re-create it');
+
+    section('renameProject: only the marker title when the folder name does not change');
+    const r2 = await br.HD.renameProject('Beta v2');
+    eq(r2.renamed, false, 'no folder rename');
+    eq(JSON.parse(tr.files.get(res.marker)).title, 'Beta v2', 'the marker title is rewritten');
+
+    section('renameProject failures keep the old names');
+    tr.dirs.add('C:/w/Taken');
+    let err = null;
+    await br.HD.renameProject('Taken').catch((e) => { err = e; });
+    ok(err && /already exists/.test(err.message), 'an existing target folder is refused: ' + (err && err.message));
+    ok(tr.files.has(res.marker) && br.HD.markerPath() === res.marker, 'marker and path unchanged');
+    tr.renameFails = (a, b) => (b === 'C:/w/Gamma' ? 'The process cannot access the file because it is being used by another process. (os error 32)' : null);
+    err = null;
+    await br.HD.renameProject('Gamma').catch((e) => { err = e; });
+    ok(err && /used by another process/.test(err.message), 'a folder held by a sync client: the error says why: ' + (err && err.message));
+    ok(tr.files.has(res.marker), 'the marker was put back under its old name');
+    ok(!tr.files.has('C:/w/Beta v2/Gamma.headway'), '…and the renamed marker is gone');
+    eq([br.HD.bundleDir(), br.HD.markerPath()], [res.dir, res.marker], 'still the old folder');
+    eq(tr.log.filter((l) => l.op === 'watch').slice(-1)[0].path, res.dir, 'the watcher is back on the old folder');
+    ok(tr.watching(), '…and live');
+    tr.renameFails = null;
+    const r3 = await br.HD.renameProject('Gamma');
+    eq(r3.marker, 'C:/w/Gamma/Gamma.headway', 'the same rename succeeds once the folder is free');
+
+    section('a peer renamed the folder: followed by bundle id');
+    tr.moveDir('C:/w/Gamma', 'C:/w/Delta');
+    tr.files.delete('C:/w/Delta/Gamma.headway');
+    tr.files.set('C:/w/Delta/Delta.headway', br.RB.markerText(cr.headway.docId, 'Delta'));
+    tr.dirs.add('C:/w/Other');
+    tr.files.set('C:/w/Other/Other.headway', br.RB.markerText('someone-else', 'Other'));
+    const presBefore = [...tr.files.keys()].length;
+    const hb = await br.HD.writePresence(r3.dir, USER, { ts: 2 });
+    eq(hb, false, 'the heartbeat into the vanished folder is skipped');
+    ok(![...tr.dirs].some((d) => d.indexOf('C:/w/Gamma') === 0) && ![...tr.files.keys()].some((k) => k.indexOf('C:/w/Gamma') === 0), '…and does not re-create it');
+    ok(await (async () => { for (let i = 0; i < 50 && br.named('bundleMoved').length === 0; i++) await tick(); return br.named('bundleMoved').length === 1; })(), 'the app is told the project moved');
+    eq(br.named('bundleMoved')[0].args[0], { marker: 'C:/w/Delta/Delta.headway', dir: 'C:/w/Delta/.headway', from: r3.marker, title: 'Delta' }, '…where to (the marker with the same id, not the other project)');
+    eq([br.HD.bundleDir(), br.HD.markerPath(), br.HD.projectTitle()], ['C:/w/Delta/.headway', 'C:/w/Delta/Delta.headway', 'Delta'], 're-pointed');
+    eq(tr.log.filter((l) => l.op === 'watch').slice(-1)[0].path, 'C:/w/Delta/.headway', 'watching the new folder');
+    eq(await br.HD.checkBundleLocation(), 'ok', 'a check now finds it in place');
+    ok([...tr.files.keys()].length >= presBefore, 'nothing was removed');
+
+    section('a watch event on the vanished root starts the search too');
+    tr.moveDir('C:/w/Delta', 'C:/w/Epsilon');
+    tr.files.delete('C:/w/Epsilon/Delta.headway');
+    tr.files.set('C:/w/Epsilon/Epsilon.headway', br.RB.markerText(cr.headway.docId, 'Epsilon'));
+    await tr.emitPaths('C:/w/Delta/.headway', 'remove');
+    ok(await (async () => { for (let i = 0; i < 50 && br.named('bundleMoved').length < 2; i++) await tick(); return br.named('bundleMoved').length === 2; })(), 'followed after the event');
+    eq(br.HD.markerPath(), 'C:/w/Epsilon/Epsilon.headway', 'on the new marker');
+
+    section('moved away or removed: the app is told, the session closes');
+    tr.removeDir('C:/w/Epsilon');
+    eq(await br.HD.checkBundleLocation(), 'gone', 'resolves gone');
+    eq(br.named('bundleGone').length, 1, 'bundleGone called once');
+    eq(br.named('bundleGone')[0].args[0], { marker: 'C:/w/Epsilon/Epsilon.headway', title: 'Epsilon' }, '…with what was open');
+    eq([br.HD.bundleDir(), br.HD.markerPath()], [null, null], 'the session is left');
+    ok(!tr.watching(), 'no watcher');
+    ok(![...tr.dirs].some((d) => d.indexOf('C:/w/Epsilon') === 0), 'the vanished folder is not re-created');
+    eq(await br.HD.checkBundleLocation(), 'none', 'nothing open → none');
+  }
+
   section('resumeBundle is called once desktop.js has loaded');
   const b9 = boot(makeFakeTauri(), ['resumeBundle']);
   eq(b9.named('resumeBundle').length, 1, 'HeadwayApp.resumeBundle() called at load');

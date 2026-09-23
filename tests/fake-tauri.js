@@ -90,6 +90,22 @@ module.exports = function makeFakeTauri(opts) {
     }),
     rename: guard('rename', (a, b) => {
       a = norm(a); b = norm(b);
+      // a sync client holding the path, a locked folder, …: tests set this
+      if (typeof api.renameFails === 'function') {
+        const why = api.renameFails(a, b);
+        if (why) return Promise.reject(why);
+      }
+      if (!files.has(a) && hasDir(a)) {
+        // a directory moves with everything below it (std::fs::rename)
+        if (!hasDir(parent(b))) return missing(b);
+        if (files.has(b) || (hasDir(b) && a.toLowerCase() !== b.toLowerCase())) return Promise.reject('rename: target exists: ' + b);
+        const pre = a + '/';
+        for (const f of [...files.keys()]) if (f.indexOf(pre) === 0) { files.set(b + f.slice(a.length), files.get(f)); files.delete(f); }
+        for (const d of [...dirs]) if (d === a || d.indexOf(pre) === 0) { dirs.delete(d); dirs.add(b + d.slice(a.length)); }
+        dirs.add(b);
+        log.push({ op: 'rename', from: a, to: b, path: b, dir: true });
+        return;
+      }
       if (!files.has(a)) return missing(a);
       if (!hasDir(parent(b))) return missing(b);
       files.set(b, files.get(a));
@@ -137,11 +153,23 @@ module.exports = function makeFakeTauri(opts) {
     setTitle: () => Promise.resolve(),
   };
 
-  return {
+  const api = {
     fs, dialog, files, dirs, log, deny,
+    renameFails: null, // (from, to) → error string to refuse that rename
     window: { getCurrentWindow: () => win },
     watching: () => !!watchCb,
     watchOpts: () => watchOpts,
+    // move a folder as a sync client would (no watcher event of its own)
+    moveDir(a, b) {
+      a = norm(a); b = norm(b);
+      for (const f of [...files.keys()]) if (f.indexOf(a + '/') === 0) { files.set(b + f.slice(a.length), files.get(f)); files.delete(f); }
+      for (const d of [...dirs]) if (d === a || d.indexOf(a + '/') === 0) { dirs.delete(d); dirs.add(b + d.slice(a.length)); }
+    },
+    removeDir(a) {
+      a = norm(a);
+      for (const f of [...files.keys()]) if (f.indexOf(a + '/') === 0) files.delete(f);
+      for (const d of [...dirs]) if (d === a || d.indexOf(a + '/') === 0) dirs.delete(d);
+    },
     // plugin-shaped event: type is an object union, paths absolute
     emit(ev) {
       if (!watchCb) throw new Error('fake-tauri: no watcher registered');
@@ -159,4 +187,5 @@ module.exports = function makeFakeTauri(opts) {
       return new Promise((res) => setTimeout(() => res(ev.prevented), 20));
     },
   };
+  return api;
 };

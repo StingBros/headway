@@ -42,9 +42,10 @@ async function until(fn, ms) {
 const T0 = '2026-09-01T10:00:00.000Z';
 const T2 = '2026-09-01T10:10:00.000Z';
 // a project: <Project>/<Project>.headway marker + <Project>/.headway/ data
-const PROJ = 'C:/Users/me/OneDrive/Roadmap';
-const DIR = PROJ + '/.headway';            // bundleDir: every shard lives below here
-const MARKER = PROJ + '/Roadmap.headway';  // what the user opens
+// (named like the title the suite gives it, so that edit renames nothing)
+const PROJ = 'C:/Users/me/OneDrive/Shared Title';
+const DIR = PROJ + '/.headway';                 // bundleDir: every shard lives below here
+const MARKER = PROJ + '/Shared Title.headway';  // what the user opens
 const SEED_USER = 'seed-user-00000';
 const SCRIPTS = ['js/core.js', 'js/bundle.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/app.js'];
 
@@ -304,7 +305,8 @@ async function main() {
   writes = shardWrites(tauri, mark);
   eq(writes.map((w) => w.path), [DIR + '/plans/' + pid + '/meta.json.tmp'], 'only meta.json written');
   eq(JSON.parse(tauri.files.get(DIR + '/plans/' + pid + '/meta.json')).fields.meta.title, 'Shared Title', 'meta shard carries the title');
-  eq(b.HD.bundleDir(), DIR, 'the folder is not renamed');
+  eq(b.HD.bundleDir(), DIR, 'the folder already carries that name: not renamed');
+  ok(await until(() => JSON.parse(tauri.files.get(MARKER)).title === 'Shared Title'), '…only the marker\'s title is rewritten');
   eq(b.HD.currentPath(), null, 'no xlsx path adopted');
 
   section('presence + editingIds');
@@ -743,6 +745,83 @@ async function fixes() {
     const ops = S.tauri.log.map((l) => l.op);
     ok(ops.lastIndexOf('unwatch') < ops.lastIndexOf('watch'), 'no unwatch after the new watch (leave ran first)');
     eq(S.b.state().meta.title, 'Solo', 'the converted workbook is the document');
+  }
+
+  section('renaming the project renames marker + folder');
+  {
+    const S = await openFresh('Ren');
+    const { b, tauri } = S;
+    const seen = [];
+    new b.window.MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach((n) => { if (n.textContent) seen.push(n.textContent); })))
+      .observe(b.doc.querySelector('#toasts'), { childList: true });
+    const setTitle = (v) => {
+      const t = b.doc.querySelector('#docTitle');
+      b.click(t);
+      t.value = v;
+      t.dispatchEvent(new b.window.Event('change', { bubbles: true }));
+    };
+    const NP = 'C:/Users/me/OneDrive/Q3 Plan', NM = NP + '/Q3 Plan.headway';
+    setTitle('Q3 Plan');
+    ok(await until(() => b.info().bundleMarker === NM), 'the open project is the renamed marker — toasts: ' + seen.join(' | '));
+    eq(b.info().bundleDir, NP + '/.headway', 'bundleDir re-pointed');
+    eq(b.HD.bundleDir(), NP + '/.headway', 'desktop re-pointed');
+    ok(![...tauri.files.keys()].some((k) => k.indexOf(S.proj + '/') === 0), 'nothing left under the old folder');
+    eq(b.RB.unwrap(JSON.parse(tauri.files.get(NP + '/.headway/plans/' + S.pid + '/meta.json'))).meta.title, 'Q3 Plan', 'the title landed before the move');
+    eq(JSON.parse(tauri.files.get(NM)).title, 'Q3 Plan', 'marker title rewritten');
+    const rec = JSON.parse(b.window.localStorage.getItem('headway-recents-v1'));
+    eq(rec[0].path, NM, 'recents: the new marker on top');
+    ok(!rec.some((r) => r.path === S.marker), '…the old one dropped');
+    eq(JSON.parse(b.window.localStorage.getItem('headway-ui-v1')).bundleMarker, NM, 'a reload re-links the new marker');
+    ok(seen.some((t) => /Renamed the project folder to “Q3 Plan”/.test(t)), 'toast says so');
+    eq(tauri.log.filter((l) => l.op === 'watch').pop().path, NP + '/.headway', 'watching the new folder');
+    S.select();
+    S.set('notes', 'after the rename');
+    ok(await until(() => { const f = tauri.files.get(NP + '/.headway/plans/' + S.pid + '/items/' + S.vId + '.json'); return f && JSON.parse(f).fields.notes === 'after the rename'; }), 'the next edit flushes into the new folder');
+
+    section('a refused rename keeps the old names; the title stays changed');
+    tauri.dirs.add('C:/Users/me/OneDrive/Taken');
+    seen.length = 0;
+    setTitle('Taken');
+    ok(await until(() => seen.some((t) => /Could not rename the project folder/.test(t))), 'toast says why: ' + seen.join(' | '));
+    ok(seen.some((t) => /already exists/.test(t)), '…the target exists');
+    eq(b.info().bundleMarker, NM, 'still the old marker');
+    eq(b.state().meta.title, 'Taken', 'the title stays changed in the document');
+    eq(b.RB.unwrap(JSON.parse(tauri.files.get(NP + '/.headway/plans/' + S.pid + '/meta.json'))).meta.title, 'Taken', '…and on disk');
+    tauri.renameFails = (a, c) => (/OneDrive\/Held$/.test(c) ? 'Access is denied. (os error 5)' : null);
+    seen.length = 0;
+    setTitle('Held');
+    ok(await until(() => seen.some((t) => /Could not rename the project folder.*Access is denied/.test(t))), 'a folder a sync client holds: toast says why — ' + seen.join(' | '));
+    eq(b.info().bundleMarker, NM, 'old names kept');
+    ok(tauri.files.has(NM), 'the marker is back under its old name');
+    tauri.renameFails = null;
+
+    section('a peer renamed the folder: followed');
+    const PP = 'C:/Users/me/OneDrive/Peer Name', PM = PP + '/Peer Name.headway';
+    const id = JSON.parse(tauri.files.get(NM)).id;
+    tauri.moveDir(NP, PP);
+    tauri.files.delete(PP + '/Q3 Plan.headway');
+    tauri.files.set(PM, b.RB.markerText(id, 'Peer Name'));
+    seen.length = 0;
+    await b.HD.checkBundleLocation();
+    ok(await until(() => b.info().bundleMarker === PM), 'the app follows the marker with the same id');
+    eq(b.info().bundleDir, PP + '/.headway', 'bundleDir re-pointed');
+    ok(seen.some((t) => /renamed to “Peer Name”.*following it/.test(t)), 'toast says which: renamed, followed — ' + seen.join(' | '));
+    eq(JSON.parse(b.window.localStorage.getItem('headway-recents-v1'))[0].path, PM, 'recents follow');
+    S.set('notes', 'after the peer rename');
+    ok(await until(() => { const f = tauri.files.get(PP + '/.headway/plans/' + S.pid + '/items/' + S.vId + '.json'); return f && JSON.parse(f).fields.notes === 'after the peer rename'; }), 'edits flush into the followed folder');
+    ok(![...tauri.dirs].some((d) => d.indexOf(NP) === 0) && ![...tauri.files.keys()].some((k) => k.indexOf(NP + '/') === 0), 'the old folder is never re-created');
+
+    section('the folder was moved away or removed: closed cleanly');
+    tauri.removeDir(PP);
+    seen.length = 0;
+    await b.HD.checkBundleLocation();
+    ok(await until(() => b.info().docKind !== 'bundle'), 'the session is closed');
+    ok(seen.some((t) => /was moved or removed/.test(t)), 'toast says which: moved or removed — ' + seen.join(' | '));
+    ok(b.doc.body.classList.contains('start'), 'back on the start page');
+    ok(!JSON.parse(b.window.localStorage.getItem('headway-recents-v1')).some((r) => r.path === PM), 'its recent is dropped');
+    await settle(6);
+    ok(![...tauri.dirs].some((d) => d.indexOf(PP) === 0) && ![...tauri.files.keys()].some((k) => k.indexOf(PP + '/') === 0), 'nothing re-created where it was');
+    eq(b.errors, [], 'no window errors');
   }
 
   section('F1/T2c: edit during an in-flight flush, then beforeClose → nothing dropped');

@@ -811,6 +811,8 @@
   function flushBundle() {
     if (docKind !== 'bundle' || !window.HeadwayDesktop || !bundleDir) return flushChain;
     clearTimeout(bundleFlushTimer);
+    // the project folder is being renamed: flush into it once it has moved
+    if (projectRename) return projectRename.then(function () { return flushBundle(); });
     if (flushing) {
       if (!flushQueued) {
         flushQueued = true;
@@ -902,6 +904,15 @@
     });
     var hist = pendingHistory;
     pendingHistory = [];
+    // our own edit of the title (Setup, the header, undo, the assistant …):
+    // once it is on disk the folder and marker follow it
+    var titleTo = null;
+    changes.forEach(function (c) {
+      if (c.kind !== 'meta') return;
+      var was = RMBundle.unwrap(prevOf['meta/meta']), now = RMBundle.unwrap(c.env);
+      var t0 = was && was.meta ? was.meta.title : null, t1 = now && now.meta ? now.meta.title : null;
+      if (t1 && t1 !== t0) titleTo = t1;
+    });
     if (!changes.length && !hist.length) {
       if (gen === flushGen) { docSaved = true; updateSaveBtn(); }
       return Promise.resolve();
@@ -939,6 +950,7 @@
       return writeHistory(dir, uid, hist);
     }).then(function () {
       if (bundleDir === dir && gen === flushGen && !again) docSaved = true;
+      if (titleTo && bundleDir === dir) setTimeout(function () { renameProjectFolder(titleTo); }, 0);
     }, function (err) {
       // keep everything dirty so the Sync button (or the next edit) retries
       pendingHistory = hist.concat(pendingHistory);
@@ -1302,6 +1314,71 @@
       return window.HeadwayDesktop && HeadwayDesktop.closeBundle ? HeadwayDesktop.closeBundle() : null;
     }).catch(function () { /* best effort */ }).then(function () { closing = null; });
     return closing;
+  }
+  // ---- the project folder follows the title. Pending shards land first,
+  // then the desktop renames <Old>.headway and <Old>/ (watcher off meanwhile;
+  // flushes wait). A refusal keeps the old names — the title stays changed
+  // in the document; the next title edit tries again.
+  var projectRename = null;
+  function renameProjectFolder(title) {
+    if (docKind !== 'bundle' || !window.HeadwayDesktop || typeof HeadwayDesktop.renameProject !== 'function') return Promise.resolve(null);
+    if (projectRename) return projectRename.then(function () { return renameProjectFolder(title); });
+    if (HeadwayDesktop.projectTitle && HeadwayDesktop.projectTitle() === title) return Promise.resolve(null);
+    var dir = bundleDir, oldMarker = bundleMarker;
+    var run = flushBundle().catch(function () { /* toasted */ }).then(function () {
+      if (bundleDir !== dir) return null; // the document changed meanwhile
+      return HeadwayDesktop.renameProject(title).then(function (res) {
+        bundleDir = res.dir;
+        bundleMarker = res.marker;
+        if (res.renamed) {
+          if (oldMarker && oldMarker !== res.marker) dropRecent(oldMarker);
+          noteRecent(res.marker, 'bundle');
+          saveLocal(); // the ui snapshot's marker (a reload re-links the new one)
+          toast('Renamed the project folder to “' + projectFolderOf(res.marker) + '”');
+        }
+        return res;
+      }, function (err) {
+        toast('Could not rename the project folder — it keeps its old name: ' + (err && err.message || err), 'err');
+        return null;
+      });
+    });
+    projectRename = run.then(function () { projectRename = null; }, function () { projectRename = null; });
+    return run;
+  }
+  // desktop.js lost the folder under us: a peer renamed it (their sync client
+  // moved ours) — follow it; it was moved away or removed — close cleanly
+  function bundleMoved(info) {
+    if (docKind !== 'bundle' || !info) return;
+    var from = bundleMarker;
+    bundleDir = info.dir;
+    bundleMarker = info.marker;
+    if (from && from !== info.marker) dropRecent(from);
+    noteRecent(info.marker, 'bundle');
+    saveLocal();
+    toast('The project folder was renamed to “' + projectFolderOf(info.marker) + '” (by someone else, or outside Headway) — following it');
+    if (!docSaved) scheduleBundleFlush(); // what failed to land meanwhile goes to the new place
+  }
+  function bundleGone(info) {
+    if (docKind !== 'bundle') return;
+    var name = (info && info.title) || (state && state.meta.title) || 'The project';
+    if (info && info.marker) dropRecent(info.marker);
+    toast('“' + name + '” was moved or removed — no project folder with it is beside where it was, so it was closed' +
+      (docSaved ? '' : '; edits not yet synced were not written'), 'err');
+    lostSession();
+    showStart();
+  }
+  // the folder is gone: forget the session without flushing into it
+  function lostSession() {
+    clearTimeout(bundleFlushTimer);
+    stopPresence(null, null);
+    docKind = 'xlsx'; bundleDir = null; bundleMarker = null; activePlanId = null; planList = [];
+    lastCanon = {}; lastEnv = {}; pendingHistory = []; ownLines = [];
+    localAt = {}; localVal = {}; planGone = false;
+    historyCache = null; historyMemo = null; historyLoad = null;
+    planDocCache = {}; planLoading = {}; deferredExternal = []; peers = {};
+    compareOptId = null; cmpCache = null; resumeInfo = null;
+    docSaved = true;
+    saveLocal();
   }
   // the window is closing: land pending writes, drop our presence file
   function beforeClose() {
@@ -13563,6 +13640,9 @@
     openBundleDoc: openBundleDoc,
     openFromPath: openFromPath,
     saveAsProject: saveAsProject,
+    bundleMoved: bundleMoved,
+    bundleGone: bundleGone,
+    renameProjectFolder: renameProjectFolder,
     applyExternalEntities: applyExternalEntities,
     presenceChanged: presenceChanged,
     plansChanged: plansChanged,
