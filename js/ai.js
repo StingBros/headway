@@ -818,8 +818,9 @@
   // ------------------------------------------------------------ system prompt
   AI.GUIDE = [
     '# Headway',
-    'Headway is a standalone roadmap planning tool (browser page or desktop app) that reads and writes one .xlsx document per project. Everything is local; the file is the source of truth. Version history (who changed what) travels inside the file.',
-    'The desktop app can also keep a roadmap as a shared roadmap: a <Title>.headway folder of small JSON files in a synced folder (OneDrive, SharePoint, Dropbox) that several people edit at once, merged field by field. A shared roadmap holds one or more plans (alternative versions, like the options of an .xlsx); the open plan is the document you see and edit, other people\'s edits arrive live, and your edits sync to them. Save becomes Export .xlsx there.',
+    'Headway is a standalone roadmap planning tool (a desktop app, or a browser page). Everything is local; there is no server.',
+    'In the desktop app every project is a folder named after its title: <Project>/<Project>.headway is the small file you open (File → Open…), and a hidden <Project>/.headway/ folder holds everything else as small JSON files. Put the folder somewhere synced (OneDrive, SharePoint, Dropbox) and several people edit it at once, merged field by field; other people\'s edits arrive live. A project holds one or more plans (alternative versions); the open plan is the document you see and edit. Renaming the project (its title) renames the folder and the .headway file. Save is Export .xlsx; Save as… copies the project into a new folder. Opening a legacy .xlsx (File → Open… or Open and Convert Legacy File…) converts it into a project folder beside the workbook, which is left untouched — the desktop never edits an .xlsx in place.',
+    'The browser page reads and writes one .xlsx per project instead; version history (who changed what) travels inside that file.',
     '',
     '## Views (top tab group)',
     '- Scoping: a spreadsheet of features and stories — fixed chip columns (Size, Risk, Workstream, Epic) then text columns (Enables, Out of scope, External dependencies, Notes, Description; custom columns can be added in Setup → Columns).',

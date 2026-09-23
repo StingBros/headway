@@ -313,3 +313,47 @@ What that means for the bundle format:
   arrows (`app.js`), Stories sheet column (`excel.js`), AI tools (`ai.js`), Jira "Blocked By"
   (`jira.js`, `export-jira.js`), `RM.resolveStoryDeps` / `RM.storyDepEdges` / validation codes
   in `core.js`. Until then the hazard is confined to same-window concurrent story creation.
+
+## Amendment (2026-09-23): bundle-first documents
+
+Supersedes *Bundle layout* and *Menus, recents, start page* for the desktop app. No
+backward compatibility with the PR 1 `<Title>.headway` folder layout — such a folder is
+simply not recognised.
+
+- **Layout.** A project is a folder named after its title (`RMBundle.projectName`:
+  path-hostile/control characters dropped, no leading or trailing dots, Windows device names
+  suffixed, 120 chars; `RMBundle.uniqueName` adds `" (2)"` on a case-insensitive collision):
+
+  ```
+  <Project>/
+    <Project>.headway      marker: {"headway":1,"id":<headway.json docId>,"title":<name>}
+    .headway/              everything above (headway.json, plans/, history/, presence/)
+  ```
+
+  `bundleDir` (desktop and app) is the hidden `.headway/` folder, so every shard path,
+  `classify`, echo suppression, conflict siblings and the watcher root are unchanged relative
+  to it. The marker is never watched and is rewritten only on rename. `openBundle(marker)`
+  refuses a non-marker, and a marker without `.headway/headway.json` beside it.
+  `createBundle(projectDir, contents)` writes the data, then the marker (last).
+- **One Open.** File → Open… / the start page's Open… take a marker or a legacy `.xlsx`; an
+  `.xlsx` is converted (`migrateFromState`) into a project folder beside it, titled after its
+  file name (the legacy desktop rule: the file name was the title), the workbook untouched;
+  File → Open and Convert Legacy File… is the same from an `.xlsx` picker. The desktop never
+  writes an `.xlsx` in place: Save is Export .xlsx; a session that is not a project yet saves
+  as a new project. Recents hold markers only (`kind:'bundle'`); legacy xlsx entries are
+  dropped on read. The UI snapshot carries `bundleMarker` instead of `bundleDir`.
+- **Rename.** A local flush that changes `meta.title` is followed by `renameProject`:
+  flushes wait, watcher off, marker then folder renamed (marker put back if the folder
+  refuses), marker title rewritten, watcher, recents and snapshot re-pointed. Failure keeps the
+  old names and toasts why; the title stays changed.
+- **Peer moved / removed.** Writes (shards, history, presence, headway.json) only go into a
+  data folder whose `headway.json` still exists, so a heartbeat never re-creates a renamed
+  folder. A missing folder (seen on a write, a watch event on the root, or window focus)
+  triggers `checkBundleLocation`: a sibling folder holding a marker with the same id is
+  followed (`bundleMoved`, toast "renamed … following it"); otherwise `bundleGone` closes the
+  session without flushing (toast "moved or removed").
+- **Save as.** `copyProject(srcDir, <Parent>/<Name>, title)`: refuses an existing folder;
+  copies every plan's shards and the history files verbatim, no presence, no `.tmp`; new
+  `docId` in `headway.json` and the marker; every plan's meta re-stamped with the new title
+  (`RMBundle.retitleMeta`). The app switches to the copy.
+- **File associations** are not declared in `tauri.conf.json`, so none were added.

@@ -1254,8 +1254,8 @@
       toast('This shared plan was deleted by someone else — your edits here are not synced', 'err');
     }
     if (res.warnings && res.warnings.length) {
-      toast(res.warnings.length + ' file(s) in the shared folder could not be read — see the console', 'err');
-      if (window.console && console.warn) console.warn('shared folder warnings', res.warnings);
+      toast(res.warnings.length + ' file(s) in the project folder could not be read — see the console', 'err');
+      if (window.console && console.warn) console.warn('project folder warnings', res.warnings);
     }
   }
   // pending writes of whatever is open land before the document changes
@@ -13504,7 +13504,8 @@
     if (sb.dataset.mode === mode) return;
     sb.dataset.mode = mode;
     sb.disabled = docSaved || flushing;
-    sb.title = bundle ? 'Write pending changes to the shared folder' : 'Save as .xlsx (styled, re-loadable)';
+    sb.title = bundle ? 'Write pending changes to the project folder'
+      : window.HeadwayDesktop ? 'Save as a project folder' : 'Save as .xlsx (styled, re-loadable)';
     if (flushing) sb.innerHTML = '<i data-lucide="refresh-cw"></i>Syncing…';
     else if (bundle) sb.innerHTML = docSaved ? 'Synced ✓' : '<i data-lucide="refresh-cw"></i>Sync';
     else sb.innerHTML = docSaved ? '<i data-lucide="check"></i>Saved' : '<i data-lucide="download"></i>Save';

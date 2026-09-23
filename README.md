@@ -40,13 +40,15 @@ bar (with the standard clipboard, window and quit items); the in-window menu
 buttons appear only on Windows and in the browser. The app header is the
 titlebar: on macOS the native bar is hidden with overlay traffic lights, on
 Windows the frame is custom with Windows-11-style caption buttons — empty
-header space drags the window, double-click zooms/maximizes. Save any workbook into a OneDrive (or Dropbox, iCloud, …)
-folder and it syncs like any other file; if the file changes on disk — another
-machine syncs an edit, or Excel saves over it — Headway reloads it
-automatically and shows a toast, only while Auto save is on.
+header space drags the window, double-click zooms/maximizes. In the desktop
+app every project is a folder: `<Project>/<Project>.headway` is the file you
+open, and a hidden `<Project>/.headway/` folder holds the rest. Keep it in a
+OneDrive (or SharePoint, Dropbox, …) folder and several people edit it at once;
+see *Shared projects* below. The browser build keeps one `.xlsx` per project.
 
-It boots **completely empty** — start from scratch, open a saved `.xlsx`, or
-File → Download template for a starter workbook with one worked example.
+It boots **completely empty** — start from scratch, open a project (desktop) or
+a saved `.xlsx` (converted to a project on the desktop), or File → Download
+template for a starter workbook with one worked example.
 
 ## Four views
 
@@ -107,7 +109,7 @@ rows have right-click context menus; dropdowns share one list UI.
 | Excel | **Save .xlsx** writes a styled workbook in the source template's layout at WEEK granularity (one column per week, sprint numbers merged above; solid work + pale risk cells, Next/Future markers) + Stories + Team (incl. off weeks) + a hidden `_RoadmapTool` sheet with lossless state. **Open** loads tool files losslessly and parses template-shaped workbooks — weekly or legacy sprint columns, inferred from the header dates; the pale run at either end of a bar is read as the risk area |
 | Jira | **Export → Jira CSV** writes a file for Jira Cloud's user-level CSV importer (work navigator → ⋯ → Import issues from CSV; needs only Create work items + Make bulk changes). Rows are features and/or stories with each item's type mapped to a Jira issue type in Setup → Hierarchy; Parent and Blocked By carry the Jira keys typed into Headway (panel "Jira key" on features and stories, Edit epic… for epics), so the first import creates issues, you paste the keys back, and later exports parent stories and re-map as updates. Dates are ISO — pick `yyyy-MM-dd` in the wizard |
 | AI assistant | The **AI** toolbar button (⌘J) opens a chat drawer that answers questions about Headway, the open plan and project-management practice, and edits the document, your preferences or (when Setup → Jira is connected) Jira itself on request — every document edit is undoable and shows in Version history as “you · AI”. Set it up in Setup → Personal → AI assistant: a **LiteLLM gateway** (URL, API key, model picked from the gateway, optional extra headers) or, in the desktop app, your **Claude subscription** (runs `claude -p` from Claude Code, no API key). The drawer loads the gateway's models when it opens and the effort levels a model supports when you pick one, falling back to Medium. Pick the model and effort level in the drawer's compose bar; replies show their thinking; attach images, PDFs or text files with the paperclip, drag-drop or paste. Settings stay on this machine |
-| Shared roadmaps | Desktop only. **File → New shared roadmap / Open shared roadmap / Convert to shared folder…** keeps a roadmap as a `<Title>.headway` folder of small per-entity JSON files in any synced folder (OneDrive, SharePoint, Dropbox), so several people edit it at once with no server. Edits merge field by field (the later edit of the same field wins; both stay in Version history); feature dependencies reference item ids and rows carry order keys, so concurrent adds and reorders never repoint a feature dependency or reshuffle rows (story dependencies are still by story number — a known gap). Plans replace Options (one sub-folder each), presence chips show who else is on a row, **Import from Excel…** adds a workbook's new rows and fills only empty fields, and Save becomes Export .xlsx. Format: `docs/superpowers/specs/2026-09-01-shared-bundle-format-design.md` |
+| Shared projects | Desktop only. A project is `<Project>/<Project>.headway` (a small marker — what **File → Open…** and the start page open) plus a hidden `<Project>/.headway/` folder of small per-entity JSON files; keep it in any synced folder (OneDrive, SharePoint, Dropbox) and several people edit it at once with no server. **New project…** creates the folder; **Open…** also takes a legacy `.xlsx` and converts it into a project folder beside the workbook (named after it, " (2)" on a collision; the workbook is left untouched), as does **Open and Convert Legacy File…** — the desktop never edits an .xlsx in place, and recents list projects only. Renaming the project (its title) renames the marker and the folder (a refusal — name taken, folder held by a sync client — keeps the old names and says why); when someone else renames it Headway follows the folder by its id, and when it is moved away or removed the project closes with a note. **Save as…** copies the whole project (plans, history; new id) into a new folder and switches to it. Edits merge field by field (the later edit of the same field wins; both stay in Version history); feature dependencies reference item ids and rows carry order keys, so concurrent adds and reorders never repoint a feature dependency or reshuffle rows (story dependencies are still by story number — a known gap). Plans replace Options (one sub-folder each), presence chips show who else is on a row, **Import from Excel…** adds a workbook's new rows and fills only empty fields, and Save becomes Export .xlsx. Format: `docs/superpowers/specs/2026-09-01-shared-bundle-format-design.md` |
 | Safety | Undo/redo (⌘Z / ⇧⌘Z), localStorage autosave (full state + UI prefs; a blocked/full storage now shows "local save unavailable" instead of failing silently), seed restore (File menu). Saved .xlsx files carry the UI prefs too — opening one on another machine restores the exact browser state |
 
 ## Files
@@ -147,19 +149,19 @@ to a GitHub release.
 NODE_PATH=./node_modules node tests/core.test.js
 # headless UI smoke (needs jsdom + exceljs; skips politely without them)
 NODE_PATH=./node_modules node tests/smoke.test.js
-# shared roadmaps: the desktop folder backend, and the app wired to it in jsdom
+# shared projects: the desktop folder backend, and the app wired to it in jsdom
 NODE_PATH=./node_modules node tests/desktop.test.js
 NODE_PATH=./node_modules node tests/wiring.test.js
 ```
 
 `make test` runs all six suites (core, jira, ai, smoke, desktop, wiring).
 
-1222 core assertions (calendar, deps/cycles, validation, capacity incl. time
+1246 core assertions (calendar, deps/cycles, validation, capacity incl. time
 off, autoTimeline/placeUnit, risk buffers, iterative ripple, scope columns, end date, workstream colors, capacity-safe scheduling, critical
-path, order keys, the shared-bundle format, import merge, full export→import round-trips) + 1437 UI smoke assertions (boot, menus,
+path, order keys, the shared-bundle format, import merge, full export→import round-trips) + 1458 UI smoke assertions (boot, menus,
 every view, chips, panel sections, dep search, holiday toggle, resources,
 grouping, context menus, column management, blank add rows, export) + 221 AI assistant,
-173 Jira, 184 desktop folder-backend and 429 shared-roadmap wiring assertions.
+173 Jira, 258 desktop folder-backend and 488 shared-project wiring assertions.
 
 ## Known limitations
 
