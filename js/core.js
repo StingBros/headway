@@ -2446,8 +2446,11 @@
     return meta.weeksPerSprint > 0 ? meta.weeksPerSprint : 2;
   };
 
-  // supply per capacity type per week. Person mode: heads. Points mode:
-  // points per sprint ÷ sprint weeks. Both cut by the holiday factor.
+  // supply per capacity type per week. Person mode: heads (hours × the seat
+  // multiplier). Points mode: points per sprint ÷ sprint weeks, scaled by the
+  // person's hours only — the seat multiplier is the per-person model's
+  // knob and the Resources panel shows one or the other, never both. Both
+  // cut by the holiday factor.
   RM.capSupply = function (state, horizonWeeks) {
     var meta = state.meta;
     var weeks = horizonWeeks || meta.numWeeks;
@@ -2461,9 +2464,10 @@
       if (!t) return; // untyped people supply nothing in the typed model
       if (!byType[t]) { byType[t] = new Array(weeks); for (var i = 0; i < weeks; i++) byType[t][i] = 0; types.push(t); }
       for (var w = 0; w < weeks; w++) {
-        var heads = RM.memberHeads(state, m, w);
-        if (heads <= 0) continue;
-        var unit = points ? heads * RM.memberPoints(state, m) / sw : heads;
+        var unit;
+        if (points) unit = (RM.memberHoursForWeek(meta, m, w) / RM.weekHoursOf(meta)) * RM.memberPoints(state, m) / sw;
+        else unit = RM.memberHeads(state, m, w);
+        if (unit <= 0) continue;
         byType[t][w] += unit * RM.holidayFactor(meta, w, set);
       }
     });

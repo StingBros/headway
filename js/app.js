@@ -3250,7 +3250,10 @@
       var sec = $('#spvMain .spv-sec[data-spsec="' + sb.dataset.spside + '"]');
       var main = $('#spvMain');
       if (sec && main) {
-        main.scrollTop = sec.offsetTop - main.offsetTop - 8;
+        // land with the sprint heading just under the sticky filter bar,
+        // not hidden behind it
+        var bar = main.querySelector('.pr-bar');
+        main.scrollTop = sec.offsetTop - main.offsetTop - (bar ? bar.offsetHeight : 0);
         sprScroll = main.scrollTop;
         sprSyncSide();
       }
@@ -11037,7 +11040,9 @@
         '<div class="rleft">' +
         '<span class="r-grip rr-grip"><i data-lucide="grip-vertical"></i></span>' +
         memberColsHtml(m) +
-        (state.meta.capacityEnabled
+        // one or the other: the × seat multiplier in per-person mode, points
+        // per sprint in story-points mode — never both
+        (state.meta.capacityEnabled && state.meta.capMode !== 'points'
           ? '<span class="res-cap" tabindex="0" role="button" data-rcap="' + m.id +
             '" title="Capacity at full-time hours">' + fmtPe(m.capacity != null ? m.capacity : 1) + '×</span>'
           : '') +

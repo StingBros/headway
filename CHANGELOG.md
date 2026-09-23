@@ -9,6 +9,8 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- Sprinting: clicking a sprint in the side list lands on the sprint heading instead of just under it.
+- Resources shows either the × seat multiplier (per-person demand) or points per sprint (story-points demand), never both; in story-points mode a person's points are scaled by their hours only.
 - The capacity type chip in the Planning left pane shows the whole type name once its column is wide enough (it was cut to eight characters regardless).
 - Planning rows no longer show the epic tag beside the feature title; add the Epic column when you want it.
 - The assistant's close button no longer sits under the right-panel toggle.

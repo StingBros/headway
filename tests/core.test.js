@@ -798,6 +798,15 @@ eq(mkState([], { team: [{ name: 'X', type: 'Development' }] }).team[0].capacity,
 eq(mkState([], { team: [{ name: 'Z', type: 'Development', capacity: 0 }] }).team[0].capacity, 0, 'capacity 0 is allowed');
 eq(RM.capSupply(mkState([], { team: [{ name: 'Z', capType: 'Development', capacity: 0 }] })).byType.Development[0], 0,
   'a zero-capacity person contributes nothing');
+// story-points mode: the seat multiplier is a per-person concept and does not
+// scale points (the Resources panel shows one or the other); fewer hours still do
+{
+  var mP = JSON.parse(JSON.stringify(META)); mP.capMode = 'points'; mP.defaultPoints = 10; mP.weeksPerSprint = 2;
+  var sP = mkState([], { meta: mP, team: [{ name: 'Half', capType: 'Development', capacity: 0.5 }] });
+  eq(RM.capSupply(sP).byType.Development[0], 5, 'points mode: 10 pt / 2 weeks = 5 pt a week, ignoring the 0.5 seat');
+  var sPh = mkState([], { meta: mP, team: [{ name: 'PT', capType: 'Development', weekHours: { '2026-07-27': 20 } }] });
+  eq(RM.capSupply(sPh).byType.Development[0], 2.5, 'points mode: 20 of 40 hours halves the points supply');
+}
 
 // ------------------------------------------------------------- renumbering
 section('renumber');

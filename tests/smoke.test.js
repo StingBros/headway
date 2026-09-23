@@ -2239,6 +2239,13 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(moved.startDay != null && moved.durDays != null, 'dropping on a sidebar sprint schedules the item');
   ok(doc.querySelector('#sprintView .spv-row[data-spid="' + uId + '"]').dataset.spsec === String(tnum),
     'and it now lists under that sprint');
+  // clicking a side entry jumps to the sprint heading (jsdom has no layout,
+  // so this only proves the jump code runs; the offset math is visual)
+  {
+    let threw = false;
+    try { click(doc.querySelector('#sprintView .spv-sbtn[data-spside="' + tnum + '"]')); } catch (e) { threw = true; }
+    ok(!threw, 'clicking a side-list sprint runs the jump without error');
+  }
   // drop the row before another row of the same section: document order
   // changes (the shared items array), which every view reads
   const secRows = doc.querySelectorAll('#sprintView .spv-sec[data-spsec="' + tnum + '"] .spv-row');
@@ -4325,6 +4332,11 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     // story points mode: the Resources rows gain a points column
     window.HeadwayApp.ai.commit('points mode', (s) => { s.meta.capMode = 'points'; });
     ok(!!doc.querySelector('#resGrid .rrow[data-mid] .res-pts[data-rpts]'), 'story-points mode gives each Resources row a points column');
+    ok(!doc.querySelector('#resGrid .rrow[data-mid] [data-rcap]'), 'and hides the × seat chip — it is points OR the multiplier, never both');
+    window.HeadwayApp.ai.commit('person mode', (s) => { s.meta.capMode = 'person'; });
+    ok(!!doc.querySelector('#resGrid .rrow[data-mid] [data-rcap]') && !doc.querySelector('#resGrid .res-pts'),
+      'per-person mode shows the × seat chip and no points column');
+    undo();
     window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
     ok(!doc.querySelector('#rows .r-cap'), 'no chips with capacity planning off');
     undo(); undo(); undo(); undo();
