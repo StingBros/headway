@@ -2374,6 +2374,9 @@
   RM.dedupeNums = function (state) {
     var byNum = {}, maxNum = 0, loose = [];
     state.items.forEach(function (it, i) {
+      // one pool: fresh feature numbers go past every story number too, so a
+      // renumbered feature never lands on a story (whose deps name numbers)
+      (it.stories || []).forEach(function (st) { if (st && isFinite(st.num) && st.num > maxNum) maxNum = st.num; });
       if (it.num == null || !isFinite(it.num)) { loose.push(it); return; }
       (byNum[it.num] = byNum[it.num] || []).push({ it: it, i: i });
       if (it.num > maxNum) maxNum = it.num;
@@ -2424,7 +2427,24 @@
       });
       group.slice(1).forEach(function (x) { x.loose = true; });
     });
-    all.forEach(function (rec) { if (rec.loose) { maxNum += 1; rec.st.num = maxNum; } });
+    all.forEach(function (rec) {
+      if (!rec.loose) return;
+      rec.old = rec.st.num;
+      maxNum += 1;
+      rec.st.num = maxNum;
+    });
+    // story deps name story numbers: a story bumped off a number no story
+    // keeps (a feature holds it) takes its dependents along. A story that
+    // lost a story-vs-story tie leaves the number — and its dependents —
+    // with the older story that kept it.
+    var storyHeld = {}, numMap = {};
+    all.forEach(function (rec) { if (!rec.loose) storyHeld[rec.st.num] = true; });
+    all.forEach(function (rec) {
+      if (rec.loose && rec.old != null && isFinite(rec.old) && !storyHeld[rec.old]) numMap[rec.old] = rec.st.num;
+    });
+    if (Object.keys(numMap).length) {
+      state.items.forEach(function (it) { RM.remapStoryDeps(it.stories, numMap); });
+    }
     state.items.forEach(function (it) {
       (it.stories || []).forEach(function (st) {
         st.deps = (st.deps || []).filter(function (n) { return n !== st.num; });

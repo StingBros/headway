@@ -955,6 +955,33 @@ async function fixes() {
     eq(S.item().num, clash, 'our feature keeps its number');
   }
 
+  section('R5: a peer feature numbered like one of ours is renumbered past the stories; story deps hold');
+  {
+    const S = await openFresh('R5');
+    const host = S.b.state().items.find((i) => !i.milestone && i.id !== S.vId);
+    S.b.HA.ai.commit('stories', (s) => {
+      const t = s.items.find((i) => i.id === host.id);
+      const n = S.b.RM.nextNum(s);
+      t.stories = [{ id: 'sR5a', title: 'a', num: n }, { id: 'sR5b', title: 'b', num: n + 1, deps: [n] }];
+    });
+    await settle();
+    const sa = () => S.b.state().items.find((i) => i.id === host.id).stories.find((x) => x.id === 'sR5a');
+    const sb = () => S.b.state().items.find((i) => i.id === host.id).stories.find((x) => x.id === 'sR5b');
+    const aNum = sa().num;
+    // a peer's brand-new feature (newer uid) minted the same number as ours
+    const peerIt = S.b.RM.clone(S.item());
+    peerIt.id = S.b.RM.uid('i'); peerIt.feature = 'peer twin'; peerIt.stories = []; peerIt.order = 'zzz';
+    const env = S.b.RB.wrap(peerIt, null, 'peer-zz999', isoIn(60000));
+    S.tauri.files.set(S.path(peerIt.id), JSON.stringify(env));
+    await S.tauri.emitPaths(S.path(peerIt.id));
+    ok(S.b.state().items.some((i) => i.id === peerIt.id), 'the peer feature arrived');
+    const all = [];
+    S.b.state().items.forEach((it) => { all.push(it.num); it.stories.forEach((x) => all.push(x.num)); });
+    eq(all.filter((n, i) => all.indexOf(n) !== i), [], 'no number held twice live');
+    eq(sa().num, aNum, 'our story keeps its number');
+    eq(sb().deps, [sa().num], 'and the story dependency still names it');
+  }
+
   section('R4: rolled-up feature sizes follow a peer\'s story sizes');
   {
     const S = await openFresh('R4');

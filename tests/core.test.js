@@ -2504,6 +2504,29 @@ var allNums = [];
 dA.items.forEach(function (it) { allNums.push(it.num); it.stories.forEach(function (st) { allNums.push(st.num); }); });
 eq(allNums.filter(function (n, i) { return allNums.indexOf(n) === i; }).length, allNums.length, 'features and stories share one pool without collisions');
 
+section('numbers: one pool for features and stories');
+(function () {
+  // item #1 with stories #4, #5 (#5 depends on #4); two items both #3
+  var sP = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1', name: 'P' }], items: [
+    { id: 'iPool0001-1-aaaaa', num: 1, phaseId: 'p1', feature: 'Host', stories: [
+      { id: 'sPool0001-1-aaaaa', num: 4, title: 's1' }, { id: 'sPool0002-1-aaaaa', num: 5, title: 's2', deps: [4] }] },
+    { id: 'iPool0002-1-aaaaa', num: 3, phaseId: 'p1', feature: 'Older three' },
+    { id: 'iPool0003-1-bbbbb', num: 3, phaseId: 'p1', feature: 'Newer three' }] });
+  var host = sP.items.filter(function (i) { return i.feature === 'Host'; })[0];
+  var nums = []; sP.items.forEach(function (it) { nums.push(it.num); it.stories.forEach(function (x) { nums.push(x.num); }); });
+  eq(nums.filter(function (n, i) { return nums.indexOf(n) !== i; }), [], 'load: no number held twice');
+  eq([host.stories[0].num, host.stories[1].num], [4, 5], 'load: a duplicate feature is renumbered past the stories, which keep theirs');
+  eq(host.stories[1].deps, [4], 'load: the story dependency still names its story');
+  // a story bumped off a number a feature holds takes its dependents along
+  var sQ = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1', name: 'P' }], items: [
+    { id: 'iPool0004-1-aaaaa', num: 7, phaseId: 'p1', feature: 'Seven' },
+    { id: 'iPool0005-1-aaaaa', num: 1, phaseId: 'p1', feature: 'Host', stories: [
+      { id: 'sPool0003-1-aaaaa', num: 7, title: 'clash' }, { id: 'sPool0004-1-aaaaa', num: 8, title: 'dependent', deps: [7] }] }] });
+  var qh = sQ.items.filter(function (i) { return i.feature === 'Host'; })[0];
+  ok(qh.stories[0].num !== 7, 'a story colliding with a feature number is bumped (' + qh.stories[0].num + ')');
+  eq(qh.stories[1].deps, [qh.stories[0].num], 'and a story dependency on it follows to the new number');
+})();
+
 section('estimate range');
 var sEr = mkState([{ id: 'iEr', num: 1, feature: 'ranged', phaseId: 'p1', startDay: 0, durDays: 10, estLow: 12, estHigh: 6,
   stories: [{ id: 'sEr', title: 's', estLow: '2', estHigh: 'x' }] }]);
