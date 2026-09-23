@@ -1872,6 +1872,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   // give an unscheduled item an explicit duration, then place it — the
   // preset must win over the size estimate
   const unsched = state().items.find(i => i.startDay == null && !i.milestone && doc.querySelector('#rows .row.item[data-id="' + i.id + '"] .r-num'));
+  ok(!!unsched, 'setup: an unscheduled feature is rendered for the duration-preset check');
   if (unsched) {
     click(doc.querySelector('#rows .row.item[data-id="' + unsched.id + '"] .r-num'));
     const durInp = doc.querySelector('#panel [data-f="durWeeks"]');
@@ -1886,7 +1887,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  } else ok(true, '(no unscheduled item in seed)');
+  }
 }
 
 // ---------------------------------------------------------------- milestones (UI)

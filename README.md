@@ -154,12 +154,12 @@ NODE_PATH=./node_modules node tests/wiring.test.js
 
 `make test` runs all six suites (core, jira, ai, smoke, desktop, wiring).
 
-1216 core assertions (calendar, deps/cycles, validation, capacity incl. time
+1222 core assertions (calendar, deps/cycles, validation, capacity incl. time
 off, autoTimeline/placeUnit, risk buffers, iterative ripple, scope columns, end date, workstream colors, capacity-safe scheduling, critical
-path, order keys, the shared-bundle format, import merge, full export→import round-trips) + 1436 UI smoke assertions (boot, menus,
+path, order keys, the shared-bundle format, import merge, full export→import round-trips) + 1437 UI smoke assertions (boot, menus,
 every view, chips, panel sections, dep search, holiday toggle, resources,
 grouping, context menus, column management, blank add rows, export) + 221 AI assistant,
-173 Jira, 184 desktop folder-backend and 418 shared-roadmap wiring assertions.
+173 Jira, 184 desktop folder-backend and 429 shared-roadmap wiring assertions.
 
 ## Known limitations
 
