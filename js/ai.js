@@ -319,7 +319,8 @@
         featureSize: m.sizeScheme, featureSizes: m.sizeOrder, featureSizeDays: m.sizeDays,
         storySize: m.storySizeScheme, storySizes: m.storySizeOrder,
         featurePriority: m.priorityScheme, storyPriority: m.storyPriorityScheme, risk: m.riskScheme,
-        capacityEnabled: !!m.capacityEnabled, workstreamsEnabled: m.workstreamsEnabled !== false
+        capacityEnabled: !!m.capacityEnabled, workstreamsEnabled: m.workstreamsEnabled !== false,
+        capMode: m.capMode, defaultPoints: m.defaultPoints, planLevel: m.planLevel
       },
       scopeColumns: (m.scopeCols || []).map(function (c) { return { key: c.key, label: RM.scopeColLabel(c), scope: c.scope || 'both' }; }),
       phases: state.phases.map(function (p) {
@@ -329,7 +330,7 @@
       workstreams: (state.wsOrder || []).map(function (w) { return { name: w, color: state.wsColors[w] || null }; }),
       epics: Object.keys(epics).map(function (e) { return { name: e, items: epics[e], icon: state.epicIcons[e] || null, jiraKey: state.epicJira[e] || null }; }),
       team: (state.team || []).map(function (t) {
-        return { id: t.id, name: t.name, role: t.role || '', type: t.type || '', workstreams: t.workstreams || [], capacity: t.capacity, rate: t.rate || 0, cost: t.cost || 0 };
+        return { id: t.id, name: t.name, role: t.role || '', type: t.type || '', capType: t.capType || '', points: t.points, workstreams: t.workstreams || [], capacity: t.capacity, rate: t.rate || 0, cost: t.cost || 0 };
       }),
       teamTypes: state.teamTypes,
       items: state.items.map(function (it) { return itemLine(state, it); }),
@@ -419,7 +420,7 @@
     },
     {
       name: 'update_project',
-      description: 'Edit any other part of the document with path operations, e.g. project settings (meta/title, meta/vision, meta/timelineStart, meta/endDate, meta/weeksPerSprint, meta/sprintAnchor, meta/sprintAnchorNum, meta/workDays, meta/sizeScheme, meta/sizeDays/M, meta/priorityScheme, meta/storyPriorityScheme, meta/riskScheme, meta/capacityEnabled, meta/holidayRanges (push {name,start,end}), meta/scopeCols (push {key:"c<slug>", label}), meta/jira, meta/itemTypes (array of {key,label,icon,jira}), meta/hierarchy/levels/<i>/types, meta/hierarchy/anyTypeAnyLevel, epicTypes/<name>), phases (phases/@id/name, phases/- to append {name, bucket}), team (team/@id/rate, team/- to append {name, role, type, workstreams, capacity, rate, cost}), teamTypes, wsColors/<name>, epicIcons/<name> (lucide icon), epicJira/<name>, wsOrder. Path segments: #num = feature by number, @id = element by id, digits = index, "-" = append. Ops: set (path, value), delete (path), push (path, value). Prefer add_items / update_items for features and stories.',
+      description: 'Edit any other part of the document with path operations, e.g. project settings (meta/title, meta/vision, meta/timelineStart, meta/endDate, meta/weeksPerSprint, meta/sprintAnchor, meta/sprintAnchorNum, meta/workDays, meta/sizeScheme, meta/sizeDays/M, meta/priorityScheme, meta/storyPriorityScheme, meta/riskScheme, meta/capacityEnabled, meta/capMode ("person"|"points"), meta/defaultPoints, meta/planLevel, meta/holidayRanges (push {name,start,end}), meta/scopeCols (push {key:"c<slug>", label}), meta/jira, meta/itemTypes (array of {key,label,icon,jira}), meta/hierarchy/levels/<i>/types, meta/hierarchy/anyTypeAnyLevel, epicTypes/<name>), phases (phases/@id/name, phases/- to append {name, bucket}), team (team/@id/rate, team/- to append {name, role, type, workstreams, capacity, rate, cost}), teamTypes, wsColors/<name>, epicIcons/<name> (lucide icon), epicJira/<name>, wsOrder. Path segments: #num = feature by number, @id = element by id, digits = index, "-" = append. Ops: set (path, value), delete (path), push (path, value). Prefer add_items / update_items for features and stories.',
       parameters: {
         type: 'object',
         properties: {
@@ -815,7 +816,7 @@
     '- Features (state.items) have num (the user-facing #id), feature (title), workstream, epic, size, risk, priority, deps (numbers of features that must finish first), startDay/durDays (null = unscheduled), deadline, milestone, locked, done, headcount, teamType, assignees (team ids), rich-text fields (description, enables, outOfScope, notes, extDeps — plain text is fine when writing), custom column values, jiraKey, tags (free-form labels shared with stories, exported as Jira labels), and stories, type (Feature / Bug / Task …; types and the per-level allowed list live in meta.itemTypes and meta.hierarchy, and each type\'s jira field is the Jira issue type used by sync).',
     '- Stories belong to a feature: id, num, title, done, size, priority, risk, description, ac (acceptance criteria — a built-in column shown on stories by default), optional own startDay/durDays, deadline, assignees, jiraKey, deps. A story number comes from the same pool as feature numbers, so every # in the document is either a feature or a story; refer to a story by its number (update_items takes it as num). Stories can depend on other stories: story deps hold story numbers, never feature numbers.',
     '- Sizing schemes: feature sizes (t-shirt XS–XL with working days per size in meta.sizeDays, or story points), story sizes, risk (none / L-M-H …), priority (none, MoSCoW M/S/C/W, levels C/H/M/L, RICE). Values are validated against the active scheme; read the summary before setting them.',
-    '- Team (state.team): people or seats with role, rate-card type, workstreams, capacity (heads at 40 h; 0.5 = half-time), hourly rate and cost, weekHours overrides. Capacity checks only run when meta.capacityEnabled.',
+    '- Team (state.team): people or seats with role, rate-card type, workstreams, capacity (per-person mode: heads at 40 h, 0.5 = half-time; ignored in points mode except that 0 means supplies nothing), hourly rate and cost, weekHours overrides, capType = what they supply (no capType = supplies nothing); points = story points per sprint (points mode, checked per sprint and scaled by hours). Capacity checks only run when meta.capacityEnabled; Auto timeline is a one-shot button on each phase band (it lays that phase out by dependencies and capacity when clicked), not a stored setting.',
     '- Workstreams carry colour (wsColors, order in wsOrder); epics carry a lucide icon (epicIcons) and optionally a Jira epic key (epicJira).',
     '',
     '## How to work',

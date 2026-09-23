@@ -313,3 +313,30 @@ What that means for the bundle format:
   arrows (`app.js`), Stories sheet column (`excel.js`), AI tools (`ai.js`), Jira "Blocked By"
   (`jira.js`, `export-jira.js`), `RM.resolveStoryDeps` / `RM.storyDepEdges` / validation codes
   in `core.js`. Until then the hazard is confined to same-window concurrent story creation.
+
+## Upstream merge notes (2026-09-23, main @ d8eafc0)
+
+Upstream added typed capacity (capacity types on people and units, per-person or story-points
+demand models, a planning level), a one-shot Auto timeline per phase (the Auto-schedule dialog is
+gone), Place at earliest slot, sizes rolled up from stories, Planning column headers, sticky
+group bands, the standalone HTML export and a start-of-document auto-order pass.
+
+- **`capTypes` joins `META_KEYS`.** The capacity-type list is a new top-level array on the state
+  (like `wsOrder`); it rides in `meta.json` under whole-key LWW. A core test now asserts that
+  every top-level key `normalizeState` produces is an entity list or a META_KEY, so the next
+  upstream array cannot slip past Convert silently.
+- **New per-entity fields flow through unchanged** — `capType`, `capMult`, `points` on items,
+  stories and people; `planLevel`, `capMode`, `defaultPoints` and the per-phase auto fields on
+  meta — all field-level LWW like everything else.
+- **Auto timeline is a plain commit** (`'auto timeline'`), so it lands in the history file and
+  rebases like any other edit. Nothing in the one-shot layout reads or writes bundle state.
+- Merge shape: 4 files conflicted (CHANGELOG, app.js ×5 hunks, core.js ×1, core.test ×1); all
+  additive except the `uiSnapshot` key union and the 'Capacity rows' relabel next to our
+  Estimate ranges toggle.
+- **Auto-order stays a view sort.** Upstream now re-sorts `state.items` by start on toggle (a
+  commit) and on open (an unsaved edit + toast). Here the array order IS the order keys and the
+  render sorts through `RM.viewItems`, so both re-sorts were dropped in the merge: toggling and
+  opening never touch the document. `RM.autoPhase` / `RM.placeUnit` still re-sort their working
+  copy when auto-order is on (that is what decides which unit gets capacity first); the committed
+  result is put back in key order.
+

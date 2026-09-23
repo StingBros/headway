@@ -279,7 +279,7 @@
   };
 
   // ------------------------------------------------------------ painting
-  var INK = '#182430', INK3 = '#6E7883', LINE = '#E5E0D5', BAND = '#1A1F26';
+  var INK = '#182430', INK3 = '#6E7883', LINE = '#E5E0D5', BAND = '#E3DFD5';
   var FONT = '"Helvetica Neue", Arial, sans-serif';
 
   EX.render = function (state, opts) {
@@ -338,7 +338,7 @@
       if (r.kind === 'band') {
         ctx.fillStyle = BAND;
         ctx.fillRect(0, r.y, lay.width, r.h);
-        ctx.fillStyle = '#F4F6F8';
+        ctx.fillStyle = INK;
         ctx.font = '700 11px ' + FONT;
         ctx.fillText(r.name, 10, cy);
         return;
@@ -432,7 +432,8 @@
     (lay.legend || []).forEach(function (e) {
       var cy = e.y + e.h / 2;
       ctx.fillStyle = '#' + e.color;
-      roundRect(ctx, e.x, cy - 5, 10, 10, 3);
+      ctx.beginPath();
+      ctx.arc(e.x + 5, cy, 5, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = INK;
       ctx.font = '10.5px ' + FONT;

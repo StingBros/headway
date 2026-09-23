@@ -279,12 +279,18 @@ const visibleSched = state().items.filter(i => i.startDay != null &&
   !state().phases.find(p => p.id === i.phaseId).collapsed).length;
 ok(doc.querySelectorAll('#rows .bar').length === visibleSched,
   'bars rendered for every visible scheduled item (' + doc.querySelectorAll('#rows .bar').length + ')');
-ok(doc.querySelectorAll('#hdrCap .cap-cell').length === 48, 'capacity strip has 48 week cells');
+ok(doc.querySelectorAll('#hdrCapRows .hdr-cap').length === 1, 'one summed header capacity row');
+ok(doc.querySelectorAll('#hdrCapRows .hdr-cap:first-child .cap-cell').length === 48, 'capacity strip has 48 week cells');
 ok(state() && state().items.length > 100, 'debug state handle live (' + state().items.length + ' items)');
 ok(doc.querySelector('#resPanel') !== null && doc.querySelector('#resGrid') !== null, 'resources panel present');
-ok(doc.querySelector('#capTypeCell .cap-lab') !== null, 'capacity header shows a plain availability label');
-ok(doc.querySelector('#capTypeCell .dd-btn') === null, 'capacity is role-agnostic: no role filter dropdown');
-ok(doc.querySelectorAll('#hdrCap .cap-cell').length === 48, 'capacity row spans all weeks');
+ok(/^Capacity \((people|points)\)$/.test(doc.querySelector('#hdrCapRows .hdr-cap .cap-row-lab').textContent),
+  'the capacity row is labelled Capacity, with its unit');
+ok(!doc.querySelector('#hdrCapRows [data-captype]'), 'the row belongs to no single type');
+ok(doc.querySelector('#hdrCapRows .dd-btn') === null, 'capacity is role-agnostic: no role filter dropdown');
+ok(doc.querySelectorAll('#hdrCapRows .hdr-cap:first-child .cap-cell').length === 48, 'capacity row spans all weeks');
+ok(doc.querySelector('.hdr-legend .hdr-left.corner #hlCols') !== null,
+  'the column legend sits on its own header line below the capacity rows');
+ok(doc.querySelector('.hdr-legend #leftRz') !== null, 'and keeps the left-pane resize handle');
 ok(doc.querySelectorAll('#rows .bar .port').length === visibleSched * 2, 'link ports rendered on bars');
 ok(doc.querySelectorAll('#rows .bar .b-label').length === visibleSched,
   'every bar carries a label (inside or spilled right)');
@@ -310,11 +316,7 @@ ok(doc.querySelector('#leftRzLine') !== null, 'full-height left-pane resize line
   click(doc.querySelector('#modalHost [data-m=cancel], #modalHost [data-m=x]'));
 }
 ok(!doc.querySelector('#rows .row.item .r-ico'), 'item rows carry no standalone epic-icon slot');
-{
-  const chip = doc.querySelector('#rows .row.item .r-epic');
-  ok(!!chip && (chip.querySelector('svg') || chip.querySelector('i')) !== null,
-    'epic chip combines icon + label');
-}
+ok(!doc.querySelector('#rows .row.item .r-epic'), 'item rows carry no epic tag beside the title (the Epic column does)');
 
 // ---------------------------------------------------------------- menus
 click(doc.querySelector('[data-menu="file"]'));
@@ -436,14 +438,28 @@ ok(doc.querySelector('#panel [data-f=allabove]') === null, '"all items above" ch
     const m = css.match(new RegExp(sel.replace(/[.\\]/g, '\\$&') + '\\s*{([^}]*)}', 'g')) || [];
     return m.join(' ');
   };
+  ok(/body\[data-view="scoping"\] \.hdr-legend,/.test(css),
+    'scoping hides the column-legend line (it draws its own column header)');
   ok(/position:\s*sticky/.test(decl('.row.band')) && /top:\s*var\(--hdr-h\)/.test(decl('.row.band')),
     'phase bands are sticky below the header');
-  // workstream/epic group rows are transparent (grid lines show through)
-  // and scroll with the rows instead of sticking
-  ok(!/position:\s*sticky/.test(decl('.row.eband')),
-    'epic/workstream bands scroll with the rows (not sticky)');
-  ok(/\.row\.eband \.row-lane\s*{[^}]*background:\s*transparent/.test(css),
-    'epic/workstream band lanes are transparent');
+  // second-level group bands pin under the phase band; nested epics one lower
+  ok(/position:\s*sticky/.test(decl('.row.eband')) &&
+     /top:\s*calc\(var\(--hdr-h\)\s*\+\s*var\(--band-real-h/.test(decl('.row.eband')),
+    'epic/workstream bands are sticky under the phase band');
+  ok(/\.row\.eband\.sub\s*{[^}]*var\(--eband-real-h/.test(css),
+    'nested epic bands stack one band lower');
+  ok(/\.row\.eband \.row-lane\s*{[^}]*background-color:\s*var\(--lvl-epic\)/.test(css) &&
+     /\.row\.eband \.row-left\s*{[^}]*background:\s*var\(--lvl-epic\)/.test(css),
+    'group band cells are opaque so rows do not show through when pinned');
+  ok(/\.row\.eband \.row-lane\s*{[^}]*repeating-linear-gradient\([^)]*\)[^}]*var\(--sprint-px/.test(css),
+    'the pinned band lane redraws the sprint grid on the sprint pitch');
+  // one period per tile, or a non-zero --sprint-off leaves the last stripe off-lattice
+  ok(/\.row\.eband \.row-lane\s*{[^}]*background-size:\s*var\(--sprint-px[^}]*}/.test(css),
+    'the band lane tiles exactly one sprint period');
+  // Scoping has no time axis (#bgcols is empty there) — no grid on the band
+  ok(/body\[data-view="scoping"\] \.row\.eband \.row-lane\s*{[^}]*background-image:\s*none/.test(css) &&
+     /body\[data-view="scoping"\] \.row\.eband \.row-lane\s*{[^}]*background-color:\s*var\(--surface\)/.test(css),
+    'Scoping band lanes drop the sprint grid and match the Scoping item lanes');
 }
 
 // ---------------------------------------------------------------- chips
@@ -590,9 +606,9 @@ ok(Array.isArray(state().meta.holidays) && state().meta.blackoutWeeks === undefi
   'holidays are individual dates (' + state().meta.holidays.length + '); blackoutWeeks migrated away');
 ok(doc.querySelectorAll('#bgcols .bg-blackout').length >= 1, 'holiday segments drawn on the timeline');
 const boBefore = state().meta.holidays.length;
-click(doc.querySelector('#hdrCap [data-w="3"]'));
+click(doc.querySelector('#hdrCapRows [data-w="3"]'));
 ok(state().meta.holidays.length === boBefore + 5, 'clicking a capacity cell adds that week\'s five holiday days');
-click(doc.querySelector('#hdrCap [data-w="3"]'));
+click(doc.querySelector('#hdrCapRows [data-w="3"]'));
 ok(state().meta.holidays.length === boBefore, 'clicking again removes them');
 
 // ---------------------------------------------------------------- context menu
@@ -641,11 +657,11 @@ click(doc.querySelector('#resManage'));
 ok(doc.body.dataset.view === 'setup', 'resources "manage" jumps to the Setup view');
 ok(doc.querySelector('#setupView [data-sutab="team"]').classList.contains('on'),
   'resources "manage" lands on the Team tab');
-ok(doc.querySelectorAll('#setupView .su-tab').length === 11 &&
+ok(doc.querySelectorAll('#setupView .su-tab').length === 12 &&
   doc.querySelectorAll('#setupView .su-rail-hd').length === 2,
-  'settings rail: 10 vertical tabs under Project + Personal sections');
-ok(doc.querySelectorAll('#setupView .su-card').length === 3 && !!doc.querySelector('#suCapEnable'),
-  'Team tab shows roles + work week + capacity');
+  'settings rail: 11 vertical tabs under Project + Personal sections');
+ok(doc.querySelectorAll('#setupView .su-card').length === 2 && !doc.querySelector('#suCapEnable'),
+  'Team tab keeps roles and the work week only');
 ok(/Roles/.test(doc.querySelector('#setupView .su-card h2').textContent), 'team types renamed to Roles');
 ok(!!doc.querySelector('#setupView [data-rcrate]') && !!doc.querySelector('#setupView [data-rccost]'),
   'rate card inputs per role');
@@ -902,9 +918,11 @@ ok(doc.querySelectorAll('#resGrid .rh').length === 48, 'hour cells for every wee
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
 }
 
-// capacity factor: editable, feeds availability
+// capacity factor: editable, feeds availability (typed people only — an
+// untyped person supplies nothing and shows a "set type" prompt instead)
 {
-  const capChip = doc.querySelector('#resGrid [data-rcap]');
+  window.HeadwayApp.ai.commit('type first person', (s) => { s.team[0].capType = s.capTypes[0]; });
+  const capChip = doc.querySelector('#resGrid .rrow[data-mid="' + state().team[0].id + '"] [data-rcap]');
   ok(!!capChip, 'resource rows show a capacity column');
   click(capChip);
   const capInp = doc.querySelector('#resGrid [data-rcap] input');
@@ -912,8 +930,9 @@ ok(doc.querySelectorAll('#resGrid .rh').length === 48, 'hour cells for every wee
   capInp.value = '0.5';
   capInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   ok(state().team[0].capacity === 0.5, 'capacity commits (0.5)');
-  const avail = window.RM.availForWeek(state(), 0);
-  ok(Math.abs(avail.total - 0.5) < 1e-9, 'availability scales by the capacity factor (' + avail.total + ')');
+  const heads = window.RM.memberHeads(state(), state().team[0], 0);
+  ok(Math.abs(heads - 0.5) < 1e-9, 'availability scales by the capacity factor (' + heads + ')');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
 }
 
@@ -1054,6 +1073,20 @@ const groupBtn = Array.from(doc.querySelectorAll('#popover .menu-list button')).
 click(groupBtn);
 ok(doc.querySelectorAll('#rows .row.eband').length > 3, 'epic group bands rendered (' + doc.querySelectorAll('#rows .row.eband').length + ')');
 {
+  const eb = doc.querySelector('#rows .row.eband');
+  ok(!!eb, 'an epic band renders with group-by-epic on');
+  // the sprint pitch/phase the pinned band's gradient uses must match #bgcols
+  const rs = doc.documentElement.style;
+  const px = rs.getPropertyValue('--sprint-px'), off = rs.getPropertyValue('--sprint-off');
+  ok(/px$/.test(px) && parseFloat(px) > 0, 'render publishes --sprint-px (' + px + ')');
+  ok(/px$/.test(off), 'render publishes --sprint-off (' + off + ')');
+  const line = doc.querySelector('#bgcols .bg-week.sprint');
+  const at = line && parseFloat((line.getAttribute('style').match(/\+\s*(-?[\d.]+)px/) || [])[1]);
+  const pxN = parseFloat(px), r = (((at - parseFloat(off)) % pxN) + pxN) % pxN;
+  ok(typeof at === 'number' && !isNaN(at) && Math.min(r, pxN - r) < 0.01,
+    'the drawn sprint lines land on the --sprint-off/--sprint-px lattice (' + at + ')');
+}
+{
   // groups always hold at least one feature, so no group carries an
   // "Add feature" row: the context menu (Insert above/below) adds features
   ok(doc.querySelectorAll('#rows .row.addrow.sub').length === 0, 'non-empty epic groups have no Add feature row');
@@ -1129,7 +1162,7 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
     const inps = Array.from(doc.querySelectorAll('#rows .row.brole[data-mid] input[data-bud]')).filter(i => i.dataset.bud !== 'name' && i.dataset.bud !== 'role');
     ok(inps[0].dataset.bud === 'cost' && inps[1].dataset.bud === 'rate', 'Cost input comes before Rate');
     const labels = Array.from(doc.querySelectorAll('.hl-cols .bu-only')).map(i => i.textContent);
-    ok(labels.join(',') === 'Role,Rate card,Workstream,Cost,Rate,Margin,Total', 'header labels spelled out, cost before rate');
+    ok(labels.join(',') === 'Role,Rate card,Capacity,Workstream,Cost,Rate,Margin,Total', 'header labels spelled out, cost before rate');
   }
   // total = actual hours × RATE
   {
@@ -1402,7 +1435,7 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
 // ---------------------------------------------------------------- capacity feature switch (Setup)
 {
   window.eval("document.querySelector('#btnSetup').click()");
-  suTab('team'); // the capacity switch lives on the Team tab
+  suTab('capacity'); // the capacity switch lives on the Capacity tab
   const capChk = doc.querySelector('#suCapEnable');
   ok(capChk && capChk.checked, 'Setup capacity checkbox reflects the enabled fixture');
   capChk.checked = false;
@@ -2172,9 +2205,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const richEd = doc.querySelector('#prioView .pr-rich[data-prsc="description"]');
   ok(!!richEd && richEd.dataset.ph === 'No description',
     'checking Description adds a label-free field with a quiet "No description" hint');
-  richEd.focus();
-  ok(!doc.querySelector('#scFmtBar').hidden, 'focusing the field raises the B/I/list toolbar');
-  richEd.blur();
+  ok(!richEd.isContentEditable && richEd.getAttribute('contenteditable') == null, 'card fields are read-only (the panel edits them)');
   click(doc.querySelector('#prFieldsBtn'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Description/.test(b.textContent)));
   ok(!doc.querySelector('#prioView .pr-rich'), 'unchecking returns cards to compact');
@@ -2455,6 +2486,13 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(moved.startDay != null && moved.durDays != null, 'dropping on a sidebar sprint schedules the item');
   ok(doc.querySelector('#sprintView .spv-row[data-spid="' + uId + '"]').dataset.spsec === String(tnum),
     'and it now lists under that sprint');
+  // clicking a side entry jumps to the sprint heading (jsdom has no layout,
+  // so this only proves the jump code runs; the offset math is visual)
+  {
+    let threw = false;
+    try { click(doc.querySelector('#sprintView .spv-sbtn[data-spside="' + tnum + '"]')); } catch (e) { threw = true; }
+    ok(!threw, 'clicking a side-list sprint runs the jump without error');
+  }
   // drop the row before another row of the same section: document order
   // changes (the shared items array), which every view reads
   const secRows = doc.querySelectorAll('#sprintView .spv-sec[data-spsec="' + tnum + '"] .spv-row');
@@ -2954,7 +2992,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   // budget headers are rendered dynamically, aligned to the same visible set
   click(doc.querySelector('#viewTabs [data-view="budget"]'));
   const hdrKeys = Array.from(doc.querySelectorAll('#hlCols i[data-bucol]')).map(i => i.dataset.bucol);
-  ok(hdrKeys.join(',') === 'role,type,ws,cost,rate,margin,total', 'budget header renders all columns in order');
+  ok(hdrKeys.join(',') === 'role,type,cap,ws,cost,rate,margin,total', 'budget header renders all columns in order');
   ok(doc.querySelectorAll('#hlCols i[data-bucol][title]').length === hdrKeys.length,
     'every budget header carries an explanatory tooltip');
   const roleCell = doc.querySelector('#rows .row.brole[data-mid] input[data-bud="role"]');
@@ -2985,7 +3023,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }));
   click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Reset columns/.test(b.textContent)));
   ok(Array.from(doc.querySelectorAll('#hlCols i[data-bucol]')).map(i => i.dataset.bucol).join(',') ===
-    'role,type,ws,cost,rate,margin,total', 'Reset columns restores the default set');
+    'role,type,cap,ws,cost,rate,margin,total', 'Reset columns restores the default set');
 
   // planning columns hide too
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
@@ -3002,6 +3040,201 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }));
   click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Reset columns/.test(b.textContent)));
   ok(!!doc.querySelector('#rows .row.item .r-wk'), 'reset brings Duration back');
+}
+
+// ------------------------------------- planning columns: labels, resize, add/remove
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const plLeftW = () => parseInt(doc.documentElement.style.getPropertyValue('--left-w'), 10);
+  const plBaseLeftW = plLeftW();
+  const plOrder = () => Array.from(doc.querySelectorAll('#hlCols i[data-plcol]')).map(i => i.dataset.plcol).join(',');
+  const plMenu = (re) => {
+    click(doc.querySelector('#plColsAdd'));
+    click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => re.test(b.textContent.trim())));
+  };
+  const plDrag = (k, from, to) => {
+    doc.querySelector('#hlCols [data-plrz="' + k + '"]').dispatchEvent(
+      new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: from, button: 0 }));
+    window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: to }));
+    window.dispatchEvent(new window.MouseEvent('pointerup', { clientX: to }));
+  };
+  // every visible planning column now carries its short label + tooltip
+  const plHdrs = Array.from(doc.querySelectorAll('#hlCols i[data-plcol]'));
+  ok(plHdrs.length > 0 && plHdrs.every(i => i.textContent.replace(/\s/g, '').length > 0),
+    'planning headers show a label for every visible column');
+  ok(plHdrs.every(i => !!i.title), 'planning headers carry their tooltips');
+
+  // drag the header edge to resize
+  const plrz = doc.querySelector('#hlCols [data-plrz="size"]');
+  ok(!!plrz, 'planning header columns grow resize handles');
+  const plBefore = parseInt(doc.documentElement.style.getPropertyValue('--pl-w-size'), 10);
+  plrz.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 100, button: 0 }));
+  window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: 140 }));
+  window.dispatchEvent(new window.MouseEvent('pointerup', {}));
+  const plAfter = parseInt(doc.documentElement.style.getPropertyValue('--pl-w-size'), 10);
+  ok(plAfter === plBefore + 40, 'dragging a planning handle widens the column (' + plBefore + ' → ' + plAfter + ')');
+  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).plColW.size === plAfter,
+    'planning column widths persist');
+
+  // the handle resizes and nothing else: a long drag on it must not reorder
+  const plOrderBefore = plOrder();
+  plDrag('pri', 100, 400);
+  ok(plOrder() === plOrderBefore, 'dragging the resize handle never reorders the column');
+  ok(parseInt(doc.documentElement.style.getPropertyValue('--pl-w-pri'), 10) === 240,
+    'column widths clamp at the 240px maximum');
+  plDrag('pri', 400, 0);
+  ok(parseInt(doc.documentElement.style.getPropertyValue('--pl-w-pri'), 10) === 22,
+    'and never shrink past the column minimum');
+
+  // the + at the end of the strip opens the same columns menu
+  ok(!!doc.querySelector('#plColsAdd'), 'the header strip ends with a + columns button');
+  click(doc.querySelector('#plColsAdd'));
+  const plDl = Array.from(doc.querySelectorAll('#popover .menu-list button'))
+    .find(b => /^Deadline/.test(b.textContent.trim()));
+  ok(!!plDl, 'the + button opens a columns menu offering Deadline');
+  click(plDl);
+  ok(!!doc.querySelector('#rows .row.item .r-date-col.dl-chip'),
+    'turning Deadline on renders a deadline chip on feature rows');
+
+  // the new columns are hidden until asked for, and stories inherit ws/epic
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story detail
+  plMenu(/^Workstream/);
+  ok(!!doc.querySelector('#rows .row.item .r-ws-col'),
+    'turning Workstream on renders a workstream chip on feature rows');
+  ok(JSON.parse(window.localStorage.getItem('headway-ui-v1')).plColHide.ws === false,
+    'a column switched on is recorded explicitly, so it survives a prefs reload');
+  const plStWs = doc.querySelector('#rows .row.story .r-ws-col');
+  ok(plStWs && plStWs.classList.contains('roll'),
+    'story rows show the feature workstream rolled up, dimmed and non-clickable');
+
+  // the Workstream column follows the project-wide switch, like every other view
+  click(doc.querySelector('#btnSetup'));
+  click(doc.querySelector('#setupView [data-sutab="workstreams"]'));
+  const plWsSw = doc.querySelector('#suWsEnable');
+  plWsSw.checked = false;
+  plWsSw.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  ok(!doc.querySelector('#hlCols i[data-plcol="ws"]') && !doc.querySelector('#rows .row.item .r-ws-col'),
+    'Workstreams off hides the column even though it is switched on');
+  click(doc.querySelector('#btnSetup'));
+  click(doc.querySelector('#setupView [data-sutab="workstreams"]'));
+  const plWsSw2 = doc.querySelector('#suWsEnable');
+  plWsSw2.checked = true;
+  plWsSw2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  ok(!!doc.querySelector('#hlCols i[data-plcol="ws"]'), 'and it returns when workstreams are back on');
+
+  // feature and story date chips are separate fields on separate handlers
+  plMenu(/^Start/);
+  ok(!!doc.querySelector('#rows .row.item .r-date-col[data-act="startd"]') &&
+     !!doc.querySelector('#rows .row.story .r-date-col[data-act="st-startd"]'),
+    'feature and story date chips route to their own handlers');
+
+  // the pane grows so the title keeps its floor when every column is on
+  plMenu(/^Epic/);
+  ok(plLeftW() > plBaseLeftW,
+    'switching every column on widens the pane past the stored width (' + plBaseLeftW + ' → ' + plLeftW() + ')');
+
+  // reset puts the defaults (and the default-hidden new columns) back
+  plMenu(/Reset columns/);
+  ok(!doc.querySelector('#rows .row.item .r-ws-col') && !doc.querySelector('#rows .row.item .r-date-col'),
+    'Workstream, Epic, Start and Deadline are hidden by default');
+  ok(!JSON.parse(window.localStorage.getItem('headway-ui-v1')).plColW.size,
+    'Reset columns clears the planning widths too');
+  ok(plLeftW() === plBaseLeftW, 'hiding them again restores the stored pane width');
+
+  // dragging the pane must continue from the width actually on screen, and a
+  // drag narrower than the columns need must preview the floor it will keep
+  plMenu(/^Workstream/);
+  plMenu(/^Epic/);
+  const plDerived = plLeftW();
+  ok(plDerived > plBaseLeftW, 'two wide columns push the pane past the stored width');
+  const plRz = doc.querySelector('#leftRz');
+  const paneDrag = (from, to) => {
+    plRz.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: from }));
+    window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: to }));
+    return plLeftW();
+  };
+  const plWider = paneDrag(700, 710);
+  ok(plWider === plDerived + 10,
+    'a pane drag continues from the derived width (' + plDerived + ' + 10 → ' + plWider + ')');
+  window.dispatchEvent(new window.MouseEvent('pointerup', {}));
+  ok(plLeftW() === plDerived + 10, 'and the dragged width survives pointerup');
+  ok(paneDrag(700, 700 - (plDerived + 10 - plBaseLeftW)) === plDerived,
+    'dragging narrower than the columns need previews the floor, not a squeeze');
+  window.dispatchEvent(new window.MouseEvent('pointerup', {}));
+  plMenu(/Reset columns/);
+  ok(plLeftW() === plBaseLeftW, 'and the stored width returns once the columns are hidden');
+}
+
+
+// ------------------------------------- row depth ramp + quiet title hover (stylesheet)
+{
+  const cssRamp = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  const lightRoot = cssRamp.slice(cssRamp.indexOf(':root'), cssRamp.indexOf('html[data-theme="dark"]'));
+  const darkRoot = cssRamp.slice(cssRamp.indexOf('html[data-theme="dark"]'), cssRamp.indexOf('* { box-sizing'));
+  ['--lvl-phase', '--lvl-ws', '--lvl-epic', '--lvl-feature', '--lvl-story'].forEach((t) => {
+    ok(lightRoot.indexOf(t + ':') !== -1 && darkRoot.indexOf(t + ':') !== -1,
+      'both palettes define ' + t);
+  });
+  ok(/--band:\s*var\(--lvl-phase\)/.test(lightRoot) && !/--band:\s*#1A1F26/.test(lightRoot),
+    'the light phase band is no longer a dark literal');
+  ok(/--band-ink:\s*var\(--ink\)/.test(lightRoot), 'light bands carry dark ink');
+  ok(/\.row\.story \.row-left[^{}]*\{[^}]*var\(--lvl-story\)/.test(cssRamp),
+    'story rows paint from --lvl-story');
+  ok(/\.row\.item \.row-left[^{}]*\{[^}]*var\(--lvl-feature\)/.test(cssRamp),
+    'feature rows paint from --lvl-feature');
+  ok(/\.row\.eband\.wsband[^{}]*\{[^}]*var\(--lvl-ws\)/.test(cssRamp),
+    'workstream bands paint from --lvl-ws');
+
+  // hover still says "this row" on both row kinds, one clear step off the ramp
+  ['--lvl-feature-hover', '--lvl-story-hover', '--tip-bg', '--tip-ink'].forEach((t) => {
+    ok(lightRoot.indexOf(t + ':') !== -1 && darkRoot.indexOf(t + ':') !== -1, 'both palettes define ' + t);
+  });
+  ok(/\.row\.item:not\(\.selected\)[^{]*:hover \.row-left\s*{[^}]*var\(--lvl-feature-hover\)/.test(cssRamp) &&
+     /\.row\.story:not\(\.selected\)[^{]*:hover \.row-left\s*{[^}]*var\(--lvl-story-hover\)/.test(cssRamp),
+    'feature and story rows both light up on hover');
+  // overlays keep their own colours: a tooltip is a dark chip, the drag tip
+  // takes the band's ink rather than a hard-coded white
+  ok(/#uiTip\s*{[^}]*var\(--tip-bg\)[^}]*var\(--tip-ink\)/.test(cssRamp), 'tooltips stay dark chips');
+  ok(!/#dragTip\s*{[^}]*color:\s*#fff/.test(cssRamp) &&
+     /#dragTip\s*{[^}]*color:\s*var\(--band-ink\)/.test(cssRamp),
+    'the drag tip reads on a light band');
+  // things that now sit under the raised grid need a layer of their own
+  ['.st-ghost', '.bu-cell', '.bu-costmark'].forEach((sel) => {
+    ok(new RegExp(sel.replace('.', '\\.') + '\\s*{[^}]*z-index:\\s*2').test(cssRamp),
+      sel + ' rises above the grid layer');
+  });
+  // Scoping is a grid, not a timeline: its left pane keeps the old tones
+  ok(/body\[data-view="scoping"\] \.row\.item \.row-left\s*{[^}]*var\(--surface\)/.test(cssRamp) &&
+     /body\[data-view="scoping"\] \.row\.story \.row-left\s*{[^}]*var\(--paper-2\)/.test(cssRamp),
+    'Scoping keeps its own left-pane tones');
+  // the exported board follows the light band too
+  const pngSrc = fs.readFileSync(path.join(ROOT, 'js/export-png.js'), 'utf8');
+  const pptxSrc = fs.readFileSync(path.join(ROOT, 'js/export-pptx.js'), 'utf8');
+  ok(/BAND = '#E3DFD5'/.test(pngSrc) && !/#F4F6F8/.test(pngSrc), 'the PNG export paints a light phase band');
+  ok(/BAND = 'E3DFD5'/.test(pptxSrc) && !/'F4F6F8'/.test(pptxSrc), 'the PPTX export paints a light phase band');
+
+  // the title floor and the hover tints are Planning's, not Scoping's
+  ok(/body:not\(\[data-view="scoping"\]\) #rows \.r-main,\s*\n\s*body:not\(\[data-view="scoping"\]\) \.hl-title\.pl-title\s*{[^}]*min-width:\s*120px/.test(cssRamp),
+    'the title floor is scoped to Planning');
+  ok(!/\n\.row\.item:not\(\.selected\)/.test(cssRamp) &&
+     /body:not\(\[data-view="scoping"\]\) \.row\.item:not\(\.selected\)/.test(cssRamp) &&
+     /body:not\(\[data-view="scoping"\]\) \.row\.story:not\(\.selected\)/.test(cssRamp),
+    'the ramp hover tints skip Scoping');
+  // one definition of Planning's pane width, shared by render, the drag and resize
+  const appSrc = fs.readFileSync(path.join(ROOT, 'js/app.js'), 'utf8');
+  ok((appSrc.match(/planLeftW\(\)/g) || []).length >= 4, 'planLeftW is the single source of the pane width');
+  ok(/addEventListener\('resize'[^}]*planLeftW\(\)/.test(appSrc.replace(/\n/g, ' ')) ||
+     /setTimeout[\s\S]{0,240}planLeftW\(\)/.test(appSrc),
+    'a debounced resize listener re-derives the pane width');
+
+  // titles show no box until they are being renamed
+  ok(!/span\.r-name:hover\s*\{[^}]*border-color/.test(cssRamp),
+    'plain-text row titles draw no hover outline');
+  ok(!/\.st-title-txt:hover\s*\{[^}]*border-color/.test(cssRamp),
+    'story titles draw no hover outline either');
 }
 
 // ------------------------------------------------- batch 11: detail modes
@@ -3473,14 +3706,13 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#viewTabs [data-view="sprints"]'));
   click(doc.querySelector('#sprintView [data-spdd="level"]'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Story/.test(b.textContent)));
-  ok([...doc.querySelectorAll('#sprintView .spv-row.spv-st .r-num')].length > 0, 'Sprinting story rows show numbers');
+  ok(doc.querySelectorAll('#sprintView .spv-row.spv-st').length > 0 && !doc.querySelector('#sprintView .spv-row .r-num, #sprintView .spv-feat .r-num'), 'Sprinting rows show no numbers');
   click(doc.querySelector('#sprintView [data-spdd="level"]'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
   click(doc.querySelector('#viewTabs [data-view="prio"]'));
   click(doc.querySelector('#prioView [data-prdd="level"]'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Story/.test(b.textContent)));
-  const prNums = [...doc.querySelectorAll('#prioView .pr-stcard .pr-head .r-num, #prioView .pr-story .r-num')];
-  ok(prNums.length > 0 && prNums.every(n => /^#\d+$/.test(n.textContent.trim())), 'Prioritizing story rows/cards show numbers');
+  ok(doc.querySelectorAll('#prioView .pr-stcard, #prioView .pr-story').length > 0 && !doc.querySelector('#prioView .pr-card .r-num'), 'Prioritizing cards show no numbers');
   click(doc.querySelector('#prioView [data-prdd="level"]'));
   click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Feature/.test(b.textContent)));
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
@@ -3588,7 +3820,8 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
     'clicking a card opens the panel on that feature');
   ok(doc.querySelector('#prioView .pr-card[data-prcard="' + cid + '"]').classList.contains('selected'), 'the selected card is marked');
   click(doc.querySelector('#prioView .pr-card[data-prcard="' + cid + '"] .pr-head'));
-  ok(doc.querySelector('#panel').hidden, 'clicking the selected card again hides the panel');
+  ok(!doc.querySelector('#panel').hidden && doc.querySelector('#prioView .pr-card[data-prcard="' + cid + '"]').classList.contains('selected'),
+    'clicking the selected card again keeps it selected');
   // story level: a story card opens the story panel
   click(doc.querySelector('#prioView [data-prdd="level"]')); pick(/Stor/);
   const sc = doc.querySelector('#prioView .pr-stcard[data-prst]');
@@ -3598,7 +3831,8 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
       doc.querySelector('#panel input.p-num-edit[data-stf="num"]').value === String(window.RM.storyRef(state(), sc.dataset.prst).st.num),
       'clicking a story card opens the story panel');
     click(doc.querySelector('#prioView .pr-stcard[data-prst="' + sc.dataset.prst + '"] .pr-head'));
-    ok(doc.querySelector('#panel').hidden, 'clicking it again hides the panel');
+    ok(!doc.querySelector('#panel').hidden && doc.querySelector('#prioView .pr-stcard[data-prst="' + sc.dataset.prst + '"]').classList.contains('selected'),
+      'clicking it again keeps the story selected');
   }
   click(doc.querySelector('#prioView [data-prdd="level"]')); pick(/Feature/);
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
@@ -3658,6 +3892,13 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(flagged.flag && flagged.flag.reason === 'Waiting on security sign-off', 'confirming stores the flag and its reason');
   const badge = row().querySelector('.r-warn.flag');
   ok(!!badge && /Waiting on security/.test(badge.title) && !!badge.querySelector('[data-lucide="flag"]'), 'the row shows an orange flag in the alert slot with the reason as its tooltip');
+  ok(row().classList.contains('flagged'), 'a flagged row carries the flagged class (orange left pane)');
+  window.__headway.selectItem(host.id);
+  ok(row().classList.contains('flagged') && row().classList.contains('selected'), 'selected + flagged combine (darker orange)');
+  const cssF = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  ok(/#rows \.row\.item \.row-left \.r-num, #rows \.row\.story \.row-left \.r-num \{ display: none; \}/.test(cssF), 'the left pane hides item and story numbers');
+  ok(/\.row\.flagged \.row-left[^{]*\{[^}]*--flag-soft/.test(cssF) && /\.row\.flagged\.selected \.row-left[^{]*\{[^}]*--flag-sel/.test(cssF), 'flagged rows use the light orange at rest and the darker one when selected');
+  ok(/--flag-sel:/.test(cssF.split('html[data-theme="dark"]')[1] || ''), 'the dark theme defines its own flag tints');
   ctxOn(row());
   ok(!!menuBtn(/Edit flag/) && !!menuBtn(/Unflag/), 'a flagged row offers Edit flag… and Unflag');
   click(menuBtn(/Unflag/));
@@ -3672,6 +3913,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click([...doc.querySelectorAll('#modalHost button')].find(b => /^Flag$/.test(b.textContent.trim())));
   ok(window.RM.storyRef(state(), 'fl_st').st.flag && window.RM.storyRef(state(), 'fl_st').st.flag.reason === '', 'a story flags with an empty reason');
   ok(!!stRow().querySelector('.r-warn.flag') && stRow().querySelector('.r-warn.flag').title === 'Flagged', 'the story row shows the flag');
+  ok(stRow().classList.contains('flagged'), 'a flagged story row is tinted too');
   click(doc.querySelector('#detailBtn'));
   click(doc.querySelector('#popover .menu-list [data-mi="0"]'));
   // Prioritizing card and Sprinting row carry the flag too
@@ -3767,7 +4009,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 {
   window.eval("document.querySelector('#btnExport').click()");
   const fmts = Array.from(doc.querySelectorAll('#modalHost input[name="exFmt"]')).map(r => r.id);
-  ok(fmts.join(',') === 'exFmtPng,exFmtPptx,exFmtJira', 'Jira CSV is the third format, right of PowerPoint');
+  ok(fmts.join(',') === 'exFmtPng,exFmtPptx,exFmtJira,exFmtHtml', 'Jira CSV is the third format, right of PowerPoint; standalone HTML is last');
   ok(/Jira CSV/.test(doc.querySelector('#modalHost label[for="exFmtJira"], #modalHost #exFmtJira').closest('label').textContent),
     'the third format is labeled Jira CSV');
   ok(doc.querySelector('#modalHost #exJira').hidden && !doc.querySelector('#modalHost #exTimeline').hidden,
@@ -4001,6 +4243,572 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
+// ---------------------------------------------------------------- searchable menus, move to feature, rolled-up sizes
+{
+  const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  const menuBtns = () => [...doc.querySelectorAll('#popover .menu-list button')];
+  const typeIn = (inp, v) => { inp.value = v; inp.dispatchEvent(new window.Event('input', { bubbles: true })); };
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const hostF = state().items.find(i => !i.milestone && (i.stories || []).length >= 1);
+  // assignee picker: a search box and an avatar per person; typing narrows, Enter picks
+  window.__headway.selectItem(hostF.id);
+  click(doc.querySelector('#panel [data-dd="assign"]'));
+  const srch = doc.querySelector('#popover .menu-search');
+  ok(!!srch && doc.querySelectorAll('#popover .menu-list button .avatar').length === state().team.length,
+    'the assignee picker is searchable and shows an avatar per person');
+  const target = state().team[state().team.length - 1];
+  typeIn(srch, window.RM.memberLabel(target));
+  const vis = menuBtns().filter(b => !b.hidden);
+  ok(vis.length >= 1 && vis.every(b => b.textContent.includes(window.RM.memberLabel(target))), 'typing narrows the roster');
+  srch.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  ok((state().items.find(i => i.id === hostF.id).assignees || []).includes(target.id), 'Enter picks the first match');
+  undo();
+  // right-click a story row → Move to feature… → a searchable list of the other features
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="1"]')); // Story detail
+  const stRow = doc.querySelector('#rows .row.story[data-story]');
+  const fromId = stRow.dataset.id, stId = stRow.dataset.story;
+  stRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+  const mv = menuBtns().find(b => /^Move to feature/i.test(b.textContent.trim()));
+  ok(!!mv, 'story rows offer Move to feature…');
+  click(mv);
+  const fsrch = doc.querySelector('#popover .menu-search');
+  const dest = state().items.find(i => !i.milestone && i.id !== fromId && i.feature);
+  ok(!!fsrch && menuBtns().some(b => b.textContent.includes(dest.feature)) && !menuBtns().some(b => b.textContent.includes(state().items.find(i => i.id === fromId).feature)),
+    'the feature list is searchable, lists the other features and not the current one');
+  typeIn(fsrch, dest.feature);
+  click(menuBtns().find(b => !b.hidden));
+  ok(!state().items.find(i => i.id === fromId).stories.some(s => s.id === stId) &&
+    state().items.find(i => i.id === dest.id).stories.some(s => s.id === stId), 'the story moves to the chosen feature');
+  undo();
+  click(doc.querySelector('#detailBtn'));
+  click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
+  // Setup → Sizing: "Roll up from stories" leads the feature list, never the story list
+  click(doc.querySelector('#btnSetup'));
+  suTab('sizing');
+  const featSchemes = [...doc.querySelectorAll('#setupView [data-suscheme]:not([data-kind="story"])')].map(b => b.dataset.suscheme);
+  ok(featSchemes[0] === 'rollup' && !doc.querySelector('#setupView [data-suscheme="rollup"][data-kind="story"]'),
+    'Roll up from stories is the first feature option and absent for stories');
+  ok(state().meta.sizeScheme === 'tshirt', 'T-shirt sizes stay the default');
+  click(doc.querySelector('#setupView [data-suscheme="rollup"]'));
+  ok(state().meta.sizeScheme === 'rollup' && !!doc.querySelector('#setupView .m-hint') && !doc.querySelector('#setupView [data-susz]:not([data-kind="story"])'),
+    'picking it explains the rollup instead of a size-options table');
+  window.HeadwayApp.ai.commit('size stories', (s) => {
+    const t = s.items.find(i => i.id === hostF.id);
+    t.stories[0].size = '3';
+    if (t.stories[1]) t.stories[1].size = '5';
+  });
+  const hf = () => state().items.find(i => i.id === hostF.id);
+  const expectPts = String(hf().stories.reduce((a, st) => a + (isNaN(Number(st.size)) || !st.size ? 0 : Number(st.size)), 0));
+  const expectDays = hf().stories.reduce((a, st) => a + (window.RM.sizeDays(state(), st.size, 'story') || 0), 0);
+  ok(hf().size === expectPts, 'a feature size is the sum of its story points (' + expectPts + ')');
+  ok(window.RM.itemSizeDays(state(), hf()) === expectDays, 'its working days are the sized stories\' days added up (' + expectDays + ')');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const szChip = doc.querySelector('#rows .row.item[data-id="' + hostF.id + '"] [data-act="size"]');
+  ok(!!szChip && szChip.classList.contains('ro') && szChip.textContent.trim() === expectPts, 'the size chip shows the total and reads as read-only');
+  ok(szChip.getAttribute('title') === 'Size (sum of story points)', 'its tooltip explains the rollup');
+  click(szChip);
+  ok(!doc.querySelector('#popover .menu-list'), 'clicking it opens no size menu');
+  window.__headway.selectItem(hostF.id);
+  ok(!!doc.querySelector('#panel .p-rollup') && !doc.querySelector('#panel [data-f="size"]'), 'the panel shows the rolled-up total instead of size buttons');
+  click(doc.querySelector('#btnSetup'));
+  suTab('sizing');
+  click(doc.querySelector('#setupView [data-suscheme="tshirt"]:not([data-kind="story"])'));
+  ok(state().meta.sizeScheme === 'tshirt' && state().items.every(i => !i.size), 'back on T-shirt sizes the derived sizes are cleared');
+  undo(); undo(); undo();
+  ok(state().meta.sizeScheme === 'tshirt' && state().items.some(i => i.size), 'undo restores the hand-picked sizes');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ---------------------------------------------------------------- capacity types, planning level, capacity row, standalone HTML
+{
+  const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  const menuBtns = () => [...doc.querySelectorAll('#popover .menu-list button')];
+  ok(state().capTypes.slice(0, 3).join(',') === 'Development,Design,QA', 'a document starts with the default capacity types');
+  // Setup → Capacity: capacity types list (rename / add / remove / reorder) + planning level + capacity row options
+  click(doc.querySelector('#btnSetup'));
+  suTab('capacity');
+  ok(doc.querySelectorAll('#setupView [data-sulist="captype"] .su-row').length === state().capTypes.length &&
+    !!doc.querySelector('#setupView [data-sulist="captype"] .su-grip'), 'the Capacity tab lists the capacity types with reorder grips');
+  doc.querySelector('#suCapTypeAdd').value = 'Research';
+  click(doc.querySelector('#suCapTypeAddBtn'));
+  ok(state().capTypes.indexOf('Research') !== -1, 'a capacity type can be added');
+  const capIn = doc.querySelector('#setupView [data-capname="Research"]');
+  capIn.value = 'Discovery'; capIn.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().capTypes.indexOf('Discovery') !== -1 && state().capTypes.indexOf('Research') === -1, 'a capacity type can be renamed');
+  click(doc.querySelector('#setupView [data-sucaprm="Discovery"]'));
+  ok(state().capTypes.indexOf('Discovery') === -1, 'a capacity type can be removed');
+  undo(); undo(); undo();
+  ok(doc.querySelectorAll('#setupView [data-suplan]').length === 2 && doc.querySelector('#setupView [data-suplan="feature"]').classList.contains('on'),
+    'planning level offers Features (default) and Stories');
+  click(doc.querySelector('#setupView [data-suplan="story"]'));
+  ok(state().meta.planLevel === 'story' && window.RM.planLevel(state()) === 'story', 'picking Stories sets the planning level');
+  undo();
+  // Setup → Capacity tab
+  window.HeadwayApp.openSetup ? window.HeadwayApp.openSetup('capacity') : window.HeadwayApp.ai.openSetup('capacity');
+  ok(!!doc.querySelector('#suCapEnable') && !!doc.querySelector('[data-sucapmode="points"]'), 'the Capacity tab carries the enable switch and the demand picker');
+  ok(!doc.querySelector('#suCapLimit') && !doc.querySelector('#suCapBasis'), 'the weekly limit and row basis controls are gone');
+  ok(!doc.querySelector('#suDefPoints'), 'per-person demand hides the default-points input');
+  click(doc.querySelector('#setupView [data-sucapmode="points"]'));
+  ok(state().meta.capMode === 'points' && !!doc.querySelector('#suDefPoints'), 'picking story points switches the demand model and reveals the default points');
+  click(doc.querySelector('#setupView [data-sucapmode="person"]'));
+  ok(state().meta.capMode === 'person', 'and back to per person');
+  // every capacity type counts: there is nothing to track or untrack
+  ok(!doc.querySelector('#setupView [data-sucaprow]') && !/Tracked capacity types/.test(doc.querySelector('#setupView').textContent),
+    'the Capacity tab has no tracked-type checkboxes');
+  undo(); undo(); // the demand-model clicks
+  undo(); undo(); undo();
+  // people and stories carry a capacity type; assignability follows it
+  const person = state().team[0], person2 = state().team[1];
+  window.HeadwayApp.ai.commit('cap types', (s) => {
+    s.team[0].capType = 'Design';
+    s.team[1].capType = 'Development';
+    const t = s.items.find(i => !i.milestone && (i.stories || []).length);
+    t.stories[0].capType = 'Design';
+  });
+  const hostC = state().items.find(i => !i.milestone && (i.stories || []).length);
+  const pool = window.RM.assignableFor(state(), hostC.stories[0]).map(m => m.id);
+  ok(pool.length === 1 && pool[0] === person.id, 'a story with a capacity type is assignable only to people supplying it');
+  ok(window.RM.assignableFor(state(), { capType: '' }).length === state().team.length, 'a story without a type is open to everyone');
+  ok(window.RM.assignableFor(state(), { capType: 'Nobody' }).length === state().team.length, 'a type nobody supplies falls back to everyone');
+  click(doc.querySelector('#viewTabs [data-view="budget"]'));
+  const capChip = doc.querySelector('#rows [data-mid="' + person2.id + '"] [data-bact="cap"]');
+  ok(!!capChip && capChip.textContent.trim() === 'Development', 'the Budgeting / Resources rows show a Capacity type chip');
+  click(capChip);
+  ok(menuBtns().some(b => /Design/.test(b.textContent)) && menuBtns()[0].textContent.indexOf('general') !== -1, 'the chip picks from the capacity types (or general)');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  window.__headway.selectItem(hostC.id);
+  click(doc.querySelector('#panel [data-pst-edit="' + hostC.stories[0].id + '"]'));
+  const stCapBtn = doc.querySelector('#panel [data-dd="stcap"]');
+  ok(!!stCapBtn && /Design/.test(stCapBtn.textContent), 'the story panel shows its capacity type');
+  click(doc.querySelector('#panel [data-dd="stassign"]'));
+  const asgNames = menuBtns().map(b => b.textContent);
+  ok(asgNames.length === 1 && asgNames[0].indexOf(window.RM.memberLabel(person)) !== -1, 'the story assignee picker lists only the people supplying its type');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  undo();
+  // capacity: story level plans on the stories and drains per type
+  {
+    const s = window.RM.clone(window.HeadwayApp.ai.state());
+    s.meta.capacityEnabled = true; s.meta.planLevel = 'story'; s.meta.capMode = 'person';
+    s.team = [{ id: 'p1', name: 'A', capType: 'Design', weekHours: {}, capacity: 1 }];
+    const it = s.items.find((i) => i.startDay != null && !i.milestone);
+    it.stories = [{ title: 'design it', startDay: it.startDay, durDays: 5, capType: 'Design' }, { title: 'later', capType: 'Design' }];
+    const capS = window.RM.capacity(window.RM.normalizeState(s));
+    const wk = Math.floor(it.startDay / 5);
+    ok(capS.rows.Design[wk].demand === 1 && capS.rows.Design[wk].supply === 1, 'story level: one Design story vs one Design person');
+    s.items.find((i) => i.id === it.id).stories[0].capMult = 2;
+    ok(window.RM.capacity(window.RM.normalizeState(s)).weeks[wk].over, 'a ×2 story over-asks a one-person pool');
+    s.meta.capRowTypes = ['Development']; // an old document's selection
+    ok(window.RM.capacity(window.RM.normalizeState(s)).weeks[wk].over, 'an old tracked-type selection is ignored: every type counts');
+  }
+  // the header's single row sums demand / supply over every type
+  window.HeadwayApp.ai.commit('cap row', (s) => {
+    s.meta.capacityEnabled = true; s.meta.planLevel = 'feature'; s.meta.capMode = 'person';
+    s.team = [{ id: 'p1', name: 'A', capType: 'Development', weekHours: {}, capacity: 1 }];
+    s.items.forEach((i) => { if (!i.milestone) { i.capType = 'Development'; i.capMult = 1; } });
+  });
+  const capRow = () => doc.querySelectorAll('#hdrCapRows .hdr-cap');
+  ok(capRow().length === 1 && capRow()[0].querySelector('.cap-row-lab').textContent === 'Capacity (people)',
+    'one capacity row, labelled Capacity (people)');
+  const cells = [...capRow()[0].querySelectorAll('.cap-cell')];
+  ok(cells.length === 48, 'per person: 48 week cells');
+  const busy = cells.find((c) => c.classList.contains('over'));
+  ok(!!busy && /Development \d+(\.\d)? \/ \d+(\.\d)? — over/.test(busy.getAttribute('title')), 'an over-asked week reads over and lists the type in its tooltip');
+  ok(/\d+(\.\d)? ?\/ ?\d+(\.\d)?/.test(busy.textContent), 'the cell reads demand / supply');
+  ok(/people|points/.test(busy.getAttribute('title')), 'the tooltip says the unit');
+  ok([...doc.querySelectorAll('#hdrCapRows .cap-cell')].every((c) => {
+    const t = c.textContent.trim();
+    return t === '' || t === '\u2715' || /^\d+(\.\d)?( ?\/ ?\d+(\.\d)?)?$/.test(t);
+  }), 'no capacity cell renders a clipped fragment like “4 / 0.”');
+  // a two-digit ask against a fractional supply cannot fit "14 / 0.9" in a
+  // 28px week: the cell drops to the ask alone rather than clipping it
+  window.HeadwayApp.ai.commit('fractional supply', (s) => { s.team[0].capacity = 0.9; });
+  const frac = [...doc.querySelectorAll('#hdrCapRows .hdr-cap .cap-cell')]
+    .find((c) => /^\d\d/.test(c.textContent.trim()));
+  ok(!!frac && /^\d+$/.test(frac.textContent.trim()) && /0\.9 available/.test(frac.getAttribute('title')),
+    'a two-digit ask against 0.9 available shows the ask alone, with both numbers in the tooltip');
+  undo();
+  // the sum can hide one type overflowing: the cell still reads over
+  window.HeadwayApp.ai.commit('design bench', (s) => {
+    s.team.push({ id: 'p2', name: 'B', capType: 'Design', weekHours: {}, capacity: 20 });
+  });
+  {
+    const capH = window.RM.capacity(window.HeadwayApp.ai.state());
+    const hi = capH.weeks.findIndex((c) => !c.blackout && c.demand > 1 && c.demand <= c.supply);
+    const hc = [...doc.querySelectorAll('#hdrCapRows .hdr-cap .cap-cell')][hi];
+    ok(hi !== -1 && capH.rows.Development[hi].over && hc.classList.contains('over'),
+      'a week under its summed supply still reads over when Development alone is over');
+    ok(hi !== -1 && /Development \d+(\.\d)? \/ \d+(\.\d)? — over/.test(hc.getAttribute('title')) && /Design 0 \/ \d+/.test(hc.getAttribute('title')),
+      'and its tooltip lists each type\'s demand / supply (' + (hc && hc.getAttribute('title')) + ')');
+  }
+  undo();
+  // a type nobody supplies can never be done: that reads over, not ok
+  window.HeadwayApp.ai.commit('no supply', (s) => {
+    s.items.forEach((i) => { if (!i.milestone) i.capType = 'Design'; });
+  });
+  const dry = [...doc.querySelectorAll('#hdrCapRows .hdr-cap .cap-cell')].find((c) => c.classList.contains('over'));
+  ok(!!dry && / ?\/ ?1/.test(dry.textContent) && /no supply/.test(dry.getAttribute('title')),
+    'a week asking a type nobody supplies reads over and says “no supply”');
+  undo();
+  // story-points mode: one header cell per sprint, lined up under the sprint cells
+  {
+    window.HeadwayApp.ai.commit('points header', (s) => {
+      s.meta.capMode = 'points'; s.team[0].points = 10;
+      // feature sizes are labels here: give one scheduled feature a points size
+      const f = s.items.find((i) => !i.milestone && !i.done && i.startDay != null && i.startDay >= 0);
+      f.size = '5';
+    });
+    const sprCells = [...doc.querySelectorAll('#hdrSprints .sprint-cell')];
+    const pCells = [...doc.querySelectorAll('#hdrCapRows .hdr-cap .cap-cell')];
+    const px = (el, k) => parseFloat(el.style[k]);
+    ok(pCells.length === sprCells.length && pCells.length < 48, 'points mode: one capacity cell per sprint (' + pCells.length + ' vs ' + sprCells.length + ' sprints)');
+    ok(pCells.every((c, i) => Math.abs(px(c, 'left') - 1 - px(sprCells[i], 'left')) < 0.01 &&
+      Math.abs(px(c, 'width') + 2 - px(sprCells[i], 'width')) < 0.01), 'each sprint cell spans its sprint\'s weeks');
+    const capP = window.RM.capacity(window.HeadwayApp.ai.state());
+    const i0 = capP.weeks.findIndex((c) => c.demand > 0 && !c.blackout);
+    ok(i0 !== -1 && pCells[i0].textContent.trim().indexOf(String(Math.round(capP.weeks[i0].supply))) !== -1 &&
+      /points/.test(pCells[i0].getAttribute('title')) && /Sprint \d+/.test(pCells[i0].getAttribute('title')),
+      'a sprint cell reads demand / supply for the sprint and names it in the tooltip (' + (i0 !== -1 ? pCells[i0].textContent : '') + ')');
+    ok(pCells.every((c, i) => c.classList.contains('over') === capP.weeks[i].overAny || capP.weeks[i].blackout),
+      'sprint cells read over exactly when the sprint is over');
+    // a click lands on the week under the pointer: week 2 of the sprint
+    {
+      const m1 = state().meta;
+      const ci = capP.periods.findIndex((p) => p.w1 - p.w0 === 2 && p.w0 > 0 &&
+        window.RM.holidaysInWeek(m1, p.w0) === 0 && window.RM.holidaysInWeek(m1, p.w0 + 1) === 0);
+      const w0 = capP.periods[ci].w0;
+      const wkPx = px(sprCells[ci], 'width') / 2;
+      const cell = doc.querySelectorAll('#hdrCapRows .hdr-cap .cap-cell')[ci];
+      const r = cell.getBoundingClientRect();
+      cell.dispatchEvent(new window.MouseEvent('click', { bubbles: true, clientX: r.left + wkPx * 1.5, clientY: 5 }));
+      const m2 = state().meta, full = window.RM.slotsOf(m2);
+      ok(window.RM.holidaysInWeek(m2, w0 + 1) === full && window.RM.holidaysInWeek(m2, w0) === 0,
+        'clicking the second half of a sprint cell toggles the sprint\'s second week as a holiday week');
+      undo();
+    }
+    undo();
+    ok(doc.querySelectorAll('#hdrCapRows .hdr-cap .cap-cell').length === 48, 'back per person: 48 week cells');
+  }
+  undo();
+  // Auto timeline: a one-shot ⚡ button on every real phase band
+  {
+    const zapOf = (pid) => doc.querySelector('#rows .row.band[data-phase="' + pid + '"] .band-zap');
+    const snap0 = JSON.stringify(window.HeadwayApp.ai.state());
+    window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
+    const realPhases = window.HeadwayApp.ai.state().phases.filter((p) => !p.bucket);
+    const bucketPhases = window.HeadwayApp.ai.state().phases.filter((p) => p.bucket);
+    ok(realPhases.every((p) => !!zapOf(p.id)), 'every real phase band has an Auto timeline button');
+    ok(bucketPhases.every((p) => !zapOf(p.id)), 'a backlog bucket has none');
+    ok(realPhases.every((p) => zapOf(p.id).disabled && /capacity planning/.test(zapOf(p.id).getAttribute('title') || zapOf(p.id).dataset.tip || '')),
+      'with capacity planning off every button is disabled and says why');
+    ok(!!zapOf(realPhases[0].id).querySelector('[data-lucide="zap"], svg'), 'the button carries the zap icon');
+    const ph0 = realPhases[0].id;
+    let lockedId = null, lockedStart = null;
+    window.HeadwayApp.ai.commit('auto setup', (s) => {
+      s.meta.capacityEnabled = true; s.meta.planLevel = 'feature'; s.meta.capMode = 'person';
+      s.team = [{ id: 'solo', name: 'Solo', capType: 'Development', weekHours: {}, capacity: 1 }];
+      // every feature now carries a capacity type, so park the other phases'
+      // work as done — this check is about what the phase's button lays out
+      s.items.forEach((it) => {
+        if (it.phaseId === ph0) { it.locked = false; it.done = false; it.capType = 'Development'; it.capMult = 1; }
+        else it.done = true;
+      });
+      // one scheduled item is locked: a fixed point the layout works around
+      const lk = s.items.find((it) => it.phaseId === ph0 && !it.milestone && it.startDay != null);
+      lk.locked = true; lockedId = lk.id; lockedStart = lk.startDay;
+    });
+    const dry = window.RM.autoPhase(window.HeadwayApp.ai.state(), ph0, { snap: { feature: window.HeadwayApp.ai.ui().snapFeat, story: window.HeadwayApp.ai.ui().snapStory } });
+    ok(dry.changed > 0, 'the seeded phase is out of place (a dry run would move ' + dry.changed + ')');
+    ok(!zapOf(ph0).disabled, 'so its button is enabled');
+    ok(realPhases.slice(1).every((p) => zapOf(p.id).disabled ===
+      (window.RM.autoPhase(window.HeadwayApp.ai.state(), p.id, { snap: { feature: window.HeadwayApp.ai.ui().snapFeat, story: window.HeadwayApp.ai.ui().snapStory } }).changed === 0)),
+      'every other band: disabled exactly when a dry run changes nothing');
+    // the band menu and the phase dialog offer the same action
+    const band0 = doc.querySelector('#rows .row.band[data-phase="' + ph0 + '"]');
+    band0.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    const mAuto = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Auto timeline/.test(b.textContent));
+    ok(!!mAuto && !mAuto.disabled, 'the band menu has an enabled Auto timeline entry');
+    doc.querySelector('#popover').hidden = true;
+    click(band0.querySelector('[data-act="phase-edit"]'));
+    const dlgAuto = doc.querySelector('#phAutoRun');
+    ok(!!dlgAuto && !dlgAuto.disabled && /Auto timeline/.test(dlgAuto.textContent), 'the phase dialog has an enabled Auto timeline button');
+    ok(!doc.querySelector('#phAuto'), 'and no Auto timeline checkbox any more');
+    click(doc.querySelector('[data-m="x2"]'));
+    // click: one commit lays the phase out
+    const before = JSON.stringify(window.HeadwayApp.ai.state().items);
+    const hLen = window.HeadwayApp.ai.state().history.length;
+    [...doc.querySelectorAll('#toasts .toast')].forEach((t) => t.remove());
+    click(zapOf(ph0));
+    const after = window.HeadwayApp.ai.state();
+    ok(JSON.stringify(after.items) !== before, 'clicking the button moves the phase’s items');
+    ok(!window.RM.capacity(after).weeks.some((c) => c.over), 'after the click no week is over capacity');
+    ok(window.RM.itemById(after, lockedId).startDay === lockedStart, 'the locked item keeps its start');
+    ok(after.history.length === hLen + 1 && after.history[after.history.length - 1].label === 'auto timeline',
+      'the click is one version-history entry, labelled auto timeline');
+    ok([...doc.querySelectorAll('#toasts .toast')].some((t) => /Auto timeline moved \d+ item/.test(t.textContent)), 'and toasts how many items moved');
+    {
+      const was = JSON.parse(before);
+      const nMoved = after.items.filter((b) => { const a = was.find((x) => x.id === b.id); return a && (a.startDay !== b.startDay || a.durDays !== b.durDays); }).length;
+      ok([...doc.querySelectorAll('#toasts .toast')].some((t) => t.textContent.indexOf('moved ' + nMoved + ' item') !== -1),
+        'the toast counts the units that moved (' + nMoved + ')');
+    }
+    ok(zapOf(ph0).disabled && /already in place/.test(zapOf(ph0).getAttribute('title') || zapOf(ph0).dataset.tip || ''),
+      'right after the click the button is disabled: everything is in place');
+    ok(!after.phases.some((p) => 'auto' in p), 'no phase carries an auto flag');
+    undo();
+    ok(JSON.stringify(window.HeadwayApp.ai.state().items) === before, 'one undo restores every item');
+    ok(!zapOf(ph0).disabled, 'and the button is enabled again');
+    // the assistant hook: a named phase, or every real phase
+    ok(window.HeadwayApp.ai.autoTimelineNow(realPhases[0].name) > 0, 'autoTimelineNow runs a phase by name');
+    window.HeadwayApp.ai.autoTimelineNow();
+    ok(realPhases.every((p) => zapOf(p.id).disabled), 'autoTimelineNow() runs every real phase: every button is disabled after');
+    ok(window.HeadwayApp.ai.autoTimelineNow(ph0) === 0, 'and a second run of the same phase changes nothing');
+    // a snap picked in the View menu re-renders the rows: the buttons follow the new snap
+    {
+      const zOld = zapOf(ph0);
+      const curFeat = window.HeadwayApp.ai.ui().snapFeat;
+      const other = curFeat === 'day' ? 'sprint' : 'day';
+      const pickSnap = (mode) => {
+        click(doc.querySelector('.menu-btn[data-menu="view"]'));
+        const want = new RegExp('snap to ' + { day: 'day', week: 'week', sprint: 'sprint' }[mode], 'i');
+        const b = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].filter((x) => want.test(x.textContent))[0];
+        if (b) click(b);
+        return !!b;
+      };
+      ok(pickSnap(other), 'the View menu offers a feature snap');
+      ok(window.HeadwayApp.ai.ui().snapFeat === other, 'and picking it switches the feature snap');
+      ok(zapOf(ph0) !== zOld, 'the rows re-render, so the band button is rebuilt');
+      const dryO = window.RM.autoPhase(window.HeadwayApp.ai.state(), ph0, { autoOrder: window.HeadwayApp.ai.ui().autoOrder, snap: { feature: other, story: window.HeadwayApp.ai.ui().snapStory } });
+      ok(zapOf(ph0).disabled === (dryO.changed === 0), 'and its disabled state matches a dry run under the new snap');
+      pickSnap(curFeat);
+      ok(window.HeadwayApp.ai.ui().snapFeat === curFeat, 'the snap is back');
+    }
+    // the phase dialog's Auto timeline button saves the dialog's edits first
+    {
+      const st0 = window.HeadwayApp.ai.state();
+      const open = st0.items.filter((i) => i.phaseId === ph0 && !i.milestone && !i.locked && !i.done && i.startDay != null);
+      window.HeadwayApp.ai.commit('overlap', (s) => { s.items.find((i) => i.id === open[1].id).startDay = open[0].startDay; });
+      click(doc.querySelector('#rows .row.band[data-phase="' + ph0 + '"] [data-act="phase-edit"]'));
+      const nameIn = doc.querySelector('#phName');
+      const oldName = nameIn.value;
+      nameIn.value = oldName + ' renamed';
+      const run = doc.querySelector('#phAutoRun');
+      ok(!!run && !run.disabled, 'the dialog button is enabled for an overlapping phase');
+      click(run);
+      const st1 = window.HeadwayApp.ai.state();
+      ok(st1.phases.find((p) => p.id === ph0).name === oldName + ' renamed', 'the dialog\u2019s pending rename was saved, not dropped');
+      ok(st1.history[st1.history.length - 1].label === 'auto timeline', 'and then the action ran');
+      ok(zapOf(ph0).disabled, 'leaving the phase in place');
+      // a unit the roster can never fit is left where it is, and the toast says so
+      window.HeadwayApp.ai.commit('crowd', (s) => {
+        const a = s.items.find((i) => i.id === open[0].id), b = s.items.find((i) => i.id === open[1].id);
+        a.capMult = 3; b.startDay = a.startDay;
+      });
+      [...doc.querySelectorAll('#toasts .toast')].forEach((t) => t.remove());
+      if (!zapOf(ph0).disabled) {
+        click(zapOf(ph0));
+        ok([...doc.querySelectorAll('#toasts .toast')].some((t) => / \u00b7 1 could not be placed/.test(t.textContent)),
+          'the toast says a unit could not be placed');
+      } else ok(false, 'a crowded phase enables the button');
+    }
+    ok(/body\.ro[^{]*\.band-zap/.test(fs.readFileSync(require('path').join(__dirname, '..', 'css', 'app.css'), 'utf8')),
+      'read-only documents hide the Auto timeline button');
+    // editing capacity no longer toasts about a switched-off Auto flag
+    window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
+    ok(zapOf(ph0).disabled, 'turning capacity planning off disables the button');
+    window.HeadwayApp.ai.commit('restore', (s) => {
+      const d = JSON.parse(snap0);
+      s.meta = d.meta; s.phases = d.phases; s.items = d.items; s.team = d.team;
+    });
+  }
+  // Place at earliest slot: right-click a feature row
+  {
+    window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
+    const plRow = doc.querySelector('#rows .row.item');
+    plRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    ok(![...doc.querySelectorAll('#popover .menu-list button[data-mi]')].some((b) => /Place at earliest slot/.test(b.textContent)),
+      'with capacity planning off the row menu has no Place at earliest slot');
+    doc.querySelector('#popover').hidden = true;
+    window.HeadwayApp.ai.commit('cap on', (s) => { s.meta.capacityEnabled = true; });
+    const plRow2 = doc.querySelector('#rows .row.item');
+    plRow2.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    const entry = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Place at earliest slot/.test(b.textContent));
+    ok(!!entry, 'feature context menu offers Place at earliest slot when capacity planning is on');
+    doc.querySelector('#popover').hidden = true;
+    const withSt = window.HeadwayApp.ai.state().items.find((i) => i.stories.length);
+    if (!doc.querySelector('#rows .row.story[data-story]')) {
+      click(doc.querySelector('#rows .row.item[data-id="' + withSt.id + '"] [data-act="stories"]'));
+    }
+    const plStRow = doc.querySelector('#rows .row.story[data-story]');
+    plStRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    ok([...doc.querySelectorAll('#popover .menu-list button[data-mi]')].some((b) => /Place at earliest slot/.test(b.textContent)),
+      'the story context menu offers it too');
+    doc.querySelector('#popover').hidden = true;
+    // a locked feature keeps the entry, greyed out
+    const lockId = doc.querySelector('#rows .row.item').dataset.id;
+    window.HeadwayApp.ai.commit('lock it', (s) => { s.items.forEach((i) => { if (i.id === lockId) i.locked = true; }); });
+    doc.querySelector('#rows .row.item[data-id="' + lockId + '"]')
+      .dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    const lockedEntry = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Place at earliest slot/.test(b.textContent));
+    ok(!!lockedEntry && lockedEntry.disabled, 'a locked feature shows the entry disabled');
+    doc.querySelector('#popover').hidden = true;
+    undo();
+    // clicking it reports back — placed, already there, or why it could not
+    [...doc.querySelectorAll('#toasts .toast')].forEach((t) => t.remove());
+    const beforePlace = JSON.stringify(window.HeadwayApp.ai.state());
+    doc.querySelector('#rows .row.item[data-id="' + lockId + '"]')
+      .dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    click([...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Place at earliest slot/.test(b.textContent)));
+    const placeToast = doc.querySelector('#toasts .toast');
+    ok(!!placeToast && /earliest slot/.test(placeToast.textContent), 'clicking it reports back with a toast');
+    if (JSON.stringify(window.HeadwayApp.ai.state()) !== beforePlace) undo();
+    undo(); undo();
+  }
+  // the panel's own Snap earliest refuses a locked row the same way
+  {
+    window.HeadwayApp.ai.commit('cap on for snap', (s) => { s.meta.capacityEnabled = true; });
+    const snapIt = state().items.find((i) => !i.milestone && i.startDay != null && !i.done);
+    window.HeadwayApp.ai.commit('lock for snap', (s) => {
+      s.items.forEach((i) => { if (i.id === snapIt.id) { i.locked = true; i.done = false; } });
+    });
+    window.__headway.selectItem(snapIt.id);
+    const snapBtn = doc.querySelector('#panel [data-f="snap"]');
+    ok(!!snapBtn, 'the panel offers Snap earliest for a scheduled feature');
+    [...doc.querySelectorAll('#toasts .toast')].forEach((t) => t.remove());
+    const snapBefore = state().items.find((i) => i.id === snapIt.id).startDay;
+    click(snapBtn);
+    const snapToast = doc.querySelector('#toasts .toast');
+    ok(state().items.find((i) => i.id === snapIt.id).startDay === snapBefore,
+      'the panel Snap earliest leaves a locked row where it is');
+    ok(!!snapToast && /unlock it to place it/.test(snapToast.textContent),
+      'and the panel guard says so in its own words');
+    window.__headway.selectItem(null);
+    undo(); undo();
+  }
+  // capacity chips in the Planning left pane
+  {
+    window.HeadwayApp.ai.commit('chips on', (s) => { s.meta.capacityEnabled = true; s.meta.planLevel = 'story'; s.meta.capMode = 'person'; });
+    window.eval("document.querySelector('[data-menu=\"view\"]').click()");
+    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Expand all features/.test(b.textContent)));
+    const stRow = doc.querySelector('#rows .row.story');
+    ok(!!stRow && !!stRow.querySelector('.r-cap[data-act="st-cap"]'), 'story rows show a capacity type chip');
+    ok(!!stRow.querySelector('.r-mult[data-act="st-mult"]'), 'and a multiplier chip in person mode');
+    window.HeadwayApp.ai.commit('feature level', (s) => { s.meta.planLevel = 'feature'; });
+    const itRow = [...doc.querySelectorAll('#rows .row.item[data-id]')]
+      .find((r) => !(state().items.find((i) => i.id === r.dataset.id) || {}).milestone);
+    ok(!!itRow && !!itRow.querySelector('.r-cap[data-act="cap"]'), 'feature rows show the chip at Features level');
+    // a feature always plans as one of the types — no "general" entry
+    click(itRow.querySelector('.r-cap[data-act="cap"]'));
+    ok(menuBtns().length > 0 && !menuBtns().some((b) => /general/.test(b.textContent)),
+      'the feature capacity picker offers the types only, with no “general” entry');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    // the chip renders the whole type name; a narrow column clips it in CSS,
+    // so widening the column reveals the rest instead of a baked-in ellipsis
+    window.HeadwayApp.ai.commit('long type', (s) => {
+      s.capTypes.push('Quality engineering');
+      s.items.forEach((i) => { if (i.id === itRow.dataset.id) i.capType = 'Quality engineering'; });
+    });
+    ok(doc.querySelector('#rows .row.item[data-id="' + itRow.dataset.id + '"] .r-cap[data-act="cap"]').textContent === 'Quality engineering',
+      'the capacity chip carries the full type name (no JS truncation)');
+    undo();
+    // a feature whose stories all agree shows the type as inherited
+    const inhId = [...doc.querySelectorAll('#rows .row.item[data-id]')]
+      .map((r) => state().items.find((i) => i.id === r.dataset.id))
+      .find((i) => i && !i.milestone && (i.stories || []).length).id;
+    window.HeadwayApp.ai.commit('stories agree', (s) => {
+      s.items.forEach((i) => { if (i.id === inhId) { i.capType = ''; i.stories.forEach((st) => { st.capType = 'Design'; }); } });
+    });
+    const inhChip = doc.querySelector('#rows .row.item[data-id="' + inhId + '"] .r-cap[data-act="cap"]');
+    ok(!!inhChip && inhChip.classList.contains('inherited') && /Design/.test(inhChip.textContent),
+      'a feature whose stories all share a type shows it dimmed as inherited');
+    undo();
+    // story points mode: the Resources rows gain a points column
+    window.HeadwayApp.ai.commit('points mode', (s) => { s.meta.capMode = 'points'; s.team[0].capType = 'Development'; });
+    ok(!!doc.querySelector('#resGrid .rrow[data-mid] .res-pts[data-rpts]'), 'story-points mode gives each typed Resources row a points column');
+    ok(!doc.querySelector('#resGrid .rrow[data-mid] [data-rcap]'), 'and hides the × seat chip — it is points OR the multiplier, never both');
+    window.HeadwayApp.ai.commit('person mode', (s) => { s.meta.capMode = 'person'; });
+    ok(!!doc.querySelector('#resGrid .rrow[data-mid] [data-rcap]') && !doc.querySelector('#resGrid .res-pts'),
+      'per-person mode shows the × seat chip and no points column');
+    // untyped people supply nothing: a "set type" prompt instead of the chips
+    window.HeadwayApp.ai.commit('untyped person', (s) => {
+      s.team[0].capType = ''; s.team[0].capacity = 2; s.team[0].points = 50;
+      if (s.team[1]) s.team[1].capType = 'Development';
+    });
+    const utId = state().team[0].id;
+    const utRow = () => doc.querySelector('#resGrid .rrow[data-mid="' + utId + '"]');
+    const ph = utRow().querySelector('.res-cap.res-untyped');
+    ok(!!ph && /set type/.test(ph.textContent) && ph.getAttribute('tabindex') === '0' && ph.getAttribute('role') === 'button',
+      'an untyped person shows a quiet "set type" placeholder');
+    ok(!utRow().querySelector('[data-rcap]') && !utRow().querySelector('[data-rpts]'), 'and no × seat or points chip');
+    ok(state().team[0].capacity === 2 && state().team[0].points === 50, 'their seat and points are kept');
+    window.HeadwayApp.ai.commit('points for untyped', (s) => { s.meta.capMode = 'points'; });
+    ok(!!utRow().querySelector('.res-untyped') && !utRow().querySelector('[data-rpts]'), 'points mode: still the placeholder, no points chip');
+    const esc = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    const rowMenu = (row, re) => {
+      row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 300 }));
+      return menuBtns().find((b) => re.test(b.textContent));
+    };
+    // right-click → Capacity… reaches the points chip in points mode
+    const t1Row = doc.querySelector('#resGrid .rrow[data-mid="' + state().team[1].id + '"]');
+    click(rowMenu(t1Row, /Capacity/));
+    const ptsInp = doc.querySelector('#resGrid .rrow[data-mid="' + state().team[1].id + '"] [data-rpts] input');
+    ok(!!ptsInp, 'points mode: the row menu\'s Capacity… opens the points editor');
+    if (ptsInp) ptsInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    // … and the type picker for an untyped person
+    click(rowMenu(utRow(), /Capacity/));
+    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'for an untyped person Capacity… opens the type picker');
+    esc();
+    undo();
+    // the placeholder answers the keyboard too
+    utRow().querySelector('.res-untyped').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'Enter on the placeholder opens the type picker');
+    esc();
+    utRow().querySelector('.res-untyped').dispatchEvent(new window.KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'and so does Space');
+    esc();
+    click(utRow().querySelector('.res-untyped'));
+    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'the placeholder opens the capacity-type picker');
+    click(menuBtns().find((b) => /Development/.test(b.textContent)));
+    ok(state().team[0].capType === 'Development' && !!utRow().querySelector('[data-rcap]') &&
+      /^2×$/.test(utRow().querySelector('[data-rcap]').textContent.trim()), 'picking a type brings back the kept × seat');
+    undo(); undo();
+    undo();
+    window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
+    ok(!doc.querySelector('#rows .r-cap'), 'no chips with capacity planning off');
+    undo(); undo(); undo(); undo();
+  }
+  // a feature created from the UI starts on the first capacity type
+  {
+    window.HeadwayApp.ai.commit('cap default probe', (s) => {
+      s.phases.push({ id: 'ph_capdflt_probe', name: 'Cap default probe', description: '', bucket: false, collapsed: false });
+    });
+    const capAddRow = doc.querySelector('#rows .row.addrow[data-phase="ph_capdflt_probe"]');
+    click(capAddRow.querySelector('.row-left'));
+    const made = state().items.find((i) => i.phaseId === 'ph_capdflt_probe');
+    ok(!!made && made.capType === state().capTypes[0], 'a new feature carries the first capacity type');
+    undo(); undo();
+  }
+  // standalone HTML: one file with the styles and scripts inlined and the document embedded
+  const idx = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const files = { 'css/app.css': 'body{}', 'js/vendor/lucide.min.js': 'L', 'js/core.js': 'C', 'js/excel.js': 'X', 'js/export-png.js': 'P',
+    'js/export-pptx.js': 'T', 'js/export-jira.js': 'J', 'js/jira.js': 'JJ', 'js/ai.js': 'A', 'js/app.js': 'var s = "</script>";' };
+  const html = window.__headway.buildStandaloneHtml(idx, files, { meta: { title: 'My Plan' }, items: [] }, { view: 'sprints' });
+  ok(html.indexOf('<link rel="stylesheet"') === -1 && html.indexOf('<style>body{}</style>') !== -1, 'the stylesheet is inlined');
+  ok(!/<script src=/.test(html), 'no script tag points at a file');
+  ok(html.indexOf('window.HEADWAY_VIEW = {"doc":{"meta":{"title":"My Plan"},"items":[]},"ui":{"view":"sprints"}}') !== -1, 'the document and view state ride along');
+  ok(html.indexOf('<script>C</script>') !== -1 && html.indexOf('<script>A</script>') !== -1 && html.indexOf('exceljs') === -1 && html.indexOf('desktop') === -1,
+    'app scripts are inlined; the desktop bridge and the Excel/PowerPoint engines stay out');
+  ok(html.indexOf('var s = "<\\/script>";') !== -1, 'a closing script tag inside a source is escaped');
+  ok(html.indexOf('<title>My Plan</title>') !== -1, 'the page is titled after the roadmap');
+  ok(html.indexOf('data:image/svg+xml') !== -1 && html.indexOf('headway-theme-v1') !== -1, 'the favicon and the theme stamp survive');
+  window.eval("document.querySelector('#btnExport').click()");
+  ok(!!doc.querySelector('#modalHost #exFmtHtml') && !!doc.querySelector('#modalHost #exHtml'), 'the Export dialog offers Standalone HTML');
+  click(doc.querySelector('#modalHost #exFmtHtml'));
+  ok(doc.querySelector('#modalHost #exTimeline').hidden && !doc.querySelector('#modalHost #exHtml').hidden, 'picking it hides the timeline options');
+  click(doc.querySelector('#modalHost [data-m=x]'));
+}
+
 // ---------------------------------------------------------------- story assignees in the story panel
 {
   const hostA = state().items.find(i => !i.milestone && i.stories && i.stories.length &&
@@ -4070,6 +4878,29 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   if (ce) { ce.focus(); key(']', ce); ok(!doc.querySelector('#panel').hidden, 'brackets are ignored inside a rich editor'); ce.blur(); }
 }
 
+// ------------------------------------------- assistant close clears the panel peek toggle
+// #panelPeek floats over the drawer's top-right corner, so #aiClose would sit
+// under it. jsdom has no layout engine — the two boxes both measure 0 — so this
+// asserts the state class the fix keys on plus the CSS rule that reads it.
+{
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const cssPk = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  const bracket = () => doc.body.dispatchEvent(new window.KeyboardEvent('keydown', { key: ']', bubbles: true, cancelable: true }));
+  ok(!doc.body.classList.contains('peek-on'), 'no peek-on class while the right panel is open');
+  bracket();
+  ok(!doc.querySelector('#panelPeek').hidden && doc.body.classList.contains('peek-on'),
+    'collapsing the right panel marks the body peek-on');
+  click(doc.querySelector('#btnAI'));
+  ok(!doc.querySelector('#aiDrawer').hidden && doc.body.classList.contains('peek-on'),
+    'opening the assistant leaves the peek toggle (and the class) in place');
+  const mPk = cssPk.match(/body\.peek-on\s+\.ai-head\s*\{([^}]*)\}/);
+  ok(!!mPk && /padding-right:\s*(4[0-9]|[5-9]\d)px/.test(mPk[1]),
+    'body.peek-on .ai-head reserves 40px+ on the right so #aiClose lands left of #panelPeek');
+  click(doc.querySelector('#aiDrawer #aiClose'));
+  if (doc.activeElement && doc.activeElement.blur) doc.activeElement.blur(); // the drawer focused its composer
+  bracket();
+  ok(!doc.body.classList.contains('peek-on'), 'reopening the right panel drops the class again');
+}
 // ---------------------------------------------------------------- milestone styles (UI)
 {
   const schedRow = Array.from(doc.querySelectorAll('#rows .row.item')).find(r => {
@@ -4375,8 +5206,8 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     const info = rows[0].querySelector('.spv-info');
     ok(info && info.getAttribute('title') === 'Expecting to carryover for 2 sprints (through sprint ' + (startNum + 2) + ')',
       'the carry-over glyph says how many sprints it runs on and the last one');
-    ok(!rows[0].querySelector('.spv-tag:not(.spv-snum)') && rows[0].querySelector('.spv-snum').textContent === 'S' + startNum,
-      'the from/to tags are gone; the slot shows the sprint number');
+    ok(!rows[0].querySelector('.spv-tag') && !rows[0].querySelector('.r-num'),
+      'rows carry no sprint-number bubble and no #number');
     ok(!rows[0].querySelector('.spv-dates') && !rows[0].querySelector('.spv-phase'), 'rows carry no date range or phase column');
     window.HeadwayApp.ai.commit('span', (s) => { const t = window.RM.itemById(s, it.id); t.durDays = perSprint; });
     ok(!doc.querySelector('#sprintView .spv-row[data-spid="' + it.id + '"] .spv-info'), 'an item inside one sprint has no carry-over glyph');
@@ -4614,6 +5445,56 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     window.HeadwayApp.ai.commit('tshirt stories', (s) => { window.RM.setSizeScheme(s, 'tshirt', 'story'); });
     ok(hd().textContent.trim() === String(doc.querySelectorAll('#sprintView .spv-sec[data-spsec="' + secKey + '"] .spv-row').length),
       'a non-numeric story scheme keeps the plain item count');
+    ok(side().classList.contains('spv-ct') && side().parentNode.lastElementChild === side() &&
+      hd().classList.contains('spv-ct') && hd().parentNode.lastElementChild === hd(),
+      'the total sits last in the side entry and the section heading (right edge)');
+    // story-points capacity: planned points against the sprint's supply
+    const capPrev = { on: state().meta.capacityEnabled, mode: state().meta.capMode };
+    window.HeadwayApp.ai.commit('points capacity', (s) => {
+      window.RM.setSizeScheme(s, 'fibonacci', 'story');
+      const f = window.RM.itemById(s, fid);
+      f.stories[0].size = '3'; f.stories[1].size = '5';
+      s.meta.capacityEnabled = true; s.meta.capMode = 'points';
+    });
+    const capX = window.RM.capacity(state());
+    const perX = capX.periods.findIndex((p) => p.num === Number(secKey));
+    const yExp = perX === -1 ? NaN : capX.types.reduce((a, t) => a + capX.rows[t][perX].supply, 0);
+    const xy = /^(\d+(?:\.\d)?) \/ (\d+(?:\.\d)?)$/.exec(hd().textContent.trim());
+    ok(!!xy && Number(xy[1]) === 8 && Math.abs(Number(xy[2]) - yExp) < 0.06,
+      'points capacity: the heading reads planned / available points for the sprint (' + hd().textContent.trim() + ' vs ' + yExp + ')');
+    ok(side().textContent.trim() === hd().textContent.trim(), 'the side entry reads the same X / Y');
+    ok(side().parentNode.lastElementChild === side(), 'and the X / Y stays last in the side entry');
+    ok(!hd().classList.contains('over') === !(8 > yExp + 1e-9), 'over only when the sprint asks more than it has');
+    const uSide = doc.querySelector('#sprintView .spv-sbtn[data-spside="u"] .spv-ct');
+    ok(!!uSide && uSide.textContent.indexOf('/') === -1, 'Unscheduled shows its points alone (' + (uSide && uSide.textContent) + ')');
+    window.HeadwayApp.ai.commit('overbook', (s) => { window.RM.itemById(s, fid).stories[0].size = '9999'; });
+    ok(hd().classList.contains('over') && side().classList.contains('over'), 'a sprint asking more points than it has reads over');
+    // a filter hides some of the sprint's stories: X is a partial count, so no red
+    {
+      const phName = state().phases.find((p) => p.id === state().items.find((i) => i.id === fid).phaseId).name;
+      const pickPh = (re) => {
+        click(doc.querySelector('#sprintView [data-spdd="fphase"]'));
+        click([...doc.querySelectorAll('#popover .menu-list button')].find((b) => re.test(b.textContent.trim())));
+      };
+      pickPh(new RegExp('^' + phName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'));
+      ok(!!hd() && !hd().classList.contains('over') && /\(filtered\)/.test(hd().getAttribute('title') || ''),
+        'with a filter on the total is not red and its tooltip says (filtered) (' + (hd() && hd().getAttribute('title')) + ')');
+      pickPh(/All phases/);
+      ok(hd().classList.contains('over'), 'clearing the filter brings the red back');
+    }
+    // no story points to add up, or no sprints: the plain count as before
+    window.HeadwayApp.ai.commit('tshirt under points', (s) => { window.RM.setSizeScheme(s, 'tshirt', 'story'); });
+    ok(hd().textContent.trim() === String(doc.querySelectorAll('#sprintView .spv-sec[data-spsec="' + secKey + '"] .spv-row').length) &&
+      !hd().classList.contains('over'), 'points capacity with a non-numeric story scheme: the plain count, no "0 / Y"');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    window.HeadwayApp.ai.commit('sprints off', (s) => { s.meta.weeksPerSprint = 0; });
+    ok([...doc.querySelectorAll('#sprintView .spv-ct')].every((c) => c.textContent.indexOf('/') === -1),
+      'with sprints off no total reads X / Y');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    window.HeadwayApp.ai.commit('person mode', (s) => { s.meta.capMode = 'person'; });
+    ok(/^\d+(\.\d)? pt$/.test(hd().textContent.trim()) && !hd().classList.contains('over'),
+      'per-person mode: the heading shows just the points total');
+    window.HeadwayApp.ai.commit('restore capacity', (s) => { s.meta.capacityEnabled = capPrev.on; s.meta.capMode = capPrev.mode; });
     window.HeadwayApp.ai.commit('restore sizing', (s) => {
       window.RM.setSizeScheme(s, scheme0, 'story');
       const f = window.RM.itemById(s, fid);
@@ -4772,6 +5653,110 @@ ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'co
   } else ok(true, 'first sprint row has fewer than two stories');
   window.HeadwayApp.ai.commit('restore', (s) => { s.meta.storySizeScheme = prev.s; s.meta.storySizeOrder = prev.o; s.meta.storySizeDays = prev.d; });
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+
+// ------------------------------------------------ auto-sized features + story snap (Stories level)
+{
+  const restore = JSON.stringify(state());
+  const prevSnapStory = window.HeadwayApp.ai.ui().snapStory;
+  const prevSnapFeat = window.HeadwayApp.ai.ui().snapFeat;
+  window.HeadwayApp.ai.setPref('snapFeat', 'day');
+  window.HeadwayApp.ai.setPref('snapStory', 'day');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const f0 = [...doc.querySelectorAll('#rows .row.item[data-id]')]
+    .map(r => state().items.find(i => i.id === r.dataset.id))
+    .find(i => i && !i.milestone && (i.stories || []).length >= 1);
+  const stSizes = window.RM.sizeOrderOf(state(), 'story').filter(l => window.RM.sizeDays(state(), l, 'story') >= 3);
+  const stSize = stSizes[0];
+  window.HeadwayApp.ai.commit('auto-sized setup', (s) => {
+    s.meta.planLevel = 'story';
+    s.meta.capacityEnabled = true;
+    const t = s.items.find(i => i.id === f0.id);
+    t.size = 'XL';
+    t.stories.forEach((st) => { st.size = null; });
+    t.stories[0].size = stSize;
+  });
+  const ff = () => state().items.find(i => i.id === f0.id);
+  ok(ff().size === 'XL', 'nothing re-sizes a feature on commit: the hand-picked XL stands');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const szA = doc.querySelector('#rows .row.item[data-id="' + f0.id + '"] [data-act="size"]');
+  ok(!!szA && !szA.classList.contains('ro'), 'the size chip is an ordinary, editable size');
+  // the Auto timeline button sizes the phase's features from their stories, once
+  const zapF = doc.querySelector('#rows .row.band[data-phase="' + f0.phaseId + '"] .band-zap');
+  ok(!!zapF && !zapF.disabled, 'the feature’s phase has an enabled Auto timeline button');
+  click(zapF);
+  const derived = window.RM.sizeForDays(state(), window.RM.autoSizeDays(state(), ff(), { snap: { feature: 'day' } }));
+  ok(ff().size === derived && derived !== 'XL',
+    'the click sizes the feature from the span its stories cover (' + ff().size + '), not the hand-picked XL');
+  const zapF2 = doc.querySelector('#rows .row.band[data-phase="' + f0.phaseId + '"] .band-zap');
+  ok(zapF2.disabled, 'and right after, the button is disabled');
+  window.__headway.selectItem(f0.id);
+  ok(!!doc.querySelector('#panel [data-f="size"]'), 'the panel keeps its size buttons: the size stays editable');
+  window.HeadwayApp.ai.commit('hand size', (s) => { s.items.find(i => i.id === f0.id).size = 'XS'; });
+  ok(ff().size === 'XS', 'a hand-written size after the click sticks');
+  ok(!doc.querySelector('#rows .row.band[data-phase="' + f0.phaseId + '"] .band-zap').disabled,
+    'and the button offers to re-derive it');
+
+  // a 3-day story under a week feature snap derives from 5 days
+  const s3 = window.RM.sizeOrderOf(state(), 'story').find(l => window.RM.sizeDays(state(), l, 'story') === 3);
+  window.HeadwayApp.ai.commit('three-day story', (s) => {
+    const t = s.items.find(i => i.id === f0.id);
+    t.stories.forEach((st, ix) => {
+      st.size = ix ? null : s3; st.startDay = 0; st.durDays = ix ? 1 : 3;
+    });
+  });
+  const rawH = window.RM.autoSizeDays(state(), ff());
+  const roundH = window.RM.autoSizeDays(state(), ff(), { snap: { feature: 'week' } });
+  ok(roundH > rawH, 'the week snap rounds the short hull up (' + rawH + ' → ' + roundH + ')');
+  // the click sizes the feature from that rounded span, and a size set from
+  // stories never reads as a size/bar mismatch: the bar is the stories' hull
+  window.HeadwayApp.ai.setPref('snapFeat', 'week');
+  const zapW = doc.querySelector('#rows .row.band[data-phase="' + f0.phaseId + '"] .band-zap');
+  if (zapW && !zapW.disabled) click(zapW);
+  const szB = doc.querySelector('#rows .row.item[data-id="' + f0.id + '"] [data-act="size"]');
+  ok(!!szB && !szB.classList.contains('custom'),
+    'a derived size never reads as a size/bar mismatch under a week feature snap');
+  window.HeadwayApp.ai.setPref('snapFeat', 'day');
+
+
+  // a story buys whole snap units: 3 days under a week snap stores 5
+  window.HeadwayApp.ai.setPref('snapStory', 'week');
+  const stId0 = ff().stories[0].id;
+  if (!doc.querySelector('#rows .row.story[data-story="' + stId0 + '"]')) {
+    click(doc.querySelector('#rows .row.item[data-id="' + f0.id + '"] .r-chev'));
+  }
+  const stRowA = doc.querySelector('#rows .row.story[data-story="' + stId0 + '"]');
+  if (stRowA) click(stRowA.querySelector('.row-left') || stRowA);
+  const durIn = doc.querySelector('#panel [data-stf="durWeeks"]');
+  const stNow = () => ff().stories.find(st => st.id === stId0);
+  if (durIn && stNow().startDay != null) {
+    durIn.value = '0.6'; // 3 days
+    durIn.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(window.RM.workInSpan(state().meta, stNow().startDay, stNow().durDays) === 5,
+      'a 3-day story under the week snap buys a whole week (' + stNow().durDays + ')');
+  } else {
+    ok(false, 'the story panel offers a duration field for a scheduled story');
+  }
+  // …and so does a 3-day story SIZE
+  const szChipS = doc.querySelector('#rows .row.story[data-story="' + stId0 + '"] [data-act="st-size"]');
+  if (s3 && szChipS && stNow().startDay != null) {
+    click(szChipS);
+    const opt = [...doc.querySelectorAll('#popover .menu-list button')].find(b => b.textContent.trim().indexOf(s3) === 0);
+    click(opt);
+    ok(window.RM.workInSpan(state().meta, stNow().startDay, stNow().durDays) === 5,
+      'a 3-day story size under the week snap buys a whole week too (' + stNow().durDays + ')');
+  } else {
+    ok(false, 'the story row offers a size chip with a 3-day option');
+  }
+  window.HeadwayApp.ai.setPref('snapStory', prevSnapStory);
+  window.HeadwayApp.ai.setPref('snapFeat', prevSnapFeat);
+  window.HeadwayApp.ai.commit('restore', (s) => {
+    const d = JSON.parse(restore);
+    s.meta = d.meta; s.phases = d.phases; s.items = d.items;
+  });
+  window.__headway.selectItem(null);
+  ok(state().items.find(i => i.id === f0.id).size === JSON.parse(restore).items.find(i => i.id === f0.id).size,
+    'the document is back the way the suite found it');
 }
 
 // ---------------------------------------------------------------- tags (panel editor + filter)
@@ -5020,6 +6005,9 @@ tagFilterChecks().then(manualOrderRoundTrip).catch((e) => {
   const edited = state();
   edited.items[0].feature = 'Renamed on disk';
   // the file carries another machine's prefs (Planning view) — ignored on reload
+  // auto-order runs when a document opens and would legitimately dirty a file
+  // whose rows are not in start order — switch it off to judge the reload alone
+  window.HeadwayApp.ai.setPref('autoOrder', false);
   return window.RMExcel.exportWorkbook(edited, { view: 'planning' }).then((b1) => b1.arrayBuffer ? b1.arrayBuffer() : b1).then((ab1) =>
     window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab1)), 'Roadmap.xlsx', true)
   ).then(() => {
@@ -5033,6 +6021,7 @@ tagFilterChecks().then(manualOrderRoundTrip).catch((e) => {
     ok(window.HeadwayApp.ai.ui().view === 'scoping', 'disk reload: the view did not change');
     ok(window.HeadwayApp.ai.ui().selectedNum === firstNum, 'disk reload: the selection survived');
     ok(window.HeadwayApp.unsavedNow() === false, 'disk reload: nothing to save');
+    window.HeadwayApp.ai.setPref('autoOrder', true);
     // priority chips and the panel picker carry a color tier class
     const rowIds = [].slice.call(doc.querySelectorAll('#rows .row.item[data-id]')).map((r) => r.dataset.id);
     ok(rowIds.length > 1, 'setup: rows on screen to color');
@@ -5120,6 +6109,53 @@ tagFilterChecks().then(manualOrderRoundTrip).catch((e) => {
         'story dependencies survive an xlsx round trip (got ' + (back && back.st.deps) + ')');
       ok(!!back && back.st.num > 0 && state().items[0].stories[0].num === depNum,
         'story numbers survive an xlsx round trip');
+    });
+}).then(() => {
+  // opening a document runs auto-order only: the rows come back in start
+  // order, but nothing is laid out until someone clicks Auto timeline
+  const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  window.HeadwayApp.ai.setPref('autoOrder', true);
+  const doc0 = window.RM.clone(state());
+  doc0.meta.capacityEnabled = true; doc0.meta.planLevel = 'feature'; doc0.meta.capMode = 'person';
+  doc0.meta.capRowTypes = ['Design']; // an old document's tracked-type selection
+  doc0.team = [{ id: 'solo', name: 'Solo', capType: 'Development', weekHours: {}, capacity: 1 }];
+  const autoPh = doc0.phases.find((p) => !p.bucket);
+  autoPh.auto = true; // an older document's flag: ignored now
+  // three features of the Auto phase pile into the same week: the phase floor
+  // holds them at that week, so capacity has to spread them forward from it
+  const seed = doc0.items.filter((i) => !i.milestone)[0];
+  [1, 2].forEach((n) => {
+    const copy = window.RM.clone(seed);
+    copy.id = 'pile' + n; copy.num = 900 + n; copy.feature = 'Pile ' + n; copy.stories = []; copy.deps = [];
+    doc0.items.push(copy);
+  });
+  const piled = doc0.items.filter((i) => !i.milestone).slice(0, 3);
+  piled.forEach((it) => { it.phaseId = autoPh.id; it.locked = false; it.done = false; it.capType = 'Development'; it.capMult = 1; it.startDay = 10; it.durDays = 5; it.deps = []; });
+  doc0.items.reverse(); // and the rows arrive out of start order
+  return window.RMExcel.exportWorkbook(doc0)
+    .then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
+    .then((ab) => window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), 'Auto.xlsx'))
+    .then(() => {
+      const opened = state();
+      ok(!opened.phases.some((p) => 'auto' in p), 'on open: an old per-phase Auto flag is dropped');
+      ok(window.RM.capacity(opened).weeks.some((c) => c.over), 'on open: nothing is laid out — the piled week is still over capacity');
+      ok(opened.meta.capRowTypes === undefined, 'on open: an old capRowTypes selection is dropped');
+      const sorted = window.RM.clone(opened);
+      window.RM.sortItemsByStart(sorted);
+      const shownIds = [...doc.querySelectorAll('#rows .row.item')].map((r) => r.dataset.id);
+      ok(shownIds.join() === sorted.items.map((i) => i.id).filter((id) => shownIds.indexOf(id) !== -1).join(),
+        'on open: the rows RENDER in start order (auto-order is a view sort over the order keys)');
+      ok(opened.history.length === doc0.history.length && !opened.history.some((h) => h.label === 'auto'),
+        'on open: no version-history entry is written — opening is not an edit');
+      const before = JSON.stringify(state().items);
+      undo(); // the open cleared the stack — nothing to step back to
+      ok(JSON.stringify(state().items) === before, 'on open: undo cannot step back past the open');
+      ok(window.HeadwayApp.ai.autoTimelineNow(autoPh.id) > 0, 'Auto timeline on the phase moves the piled work');
+      ok(!window.RM.capacity(state()).weeks.some((c) => c.over), 'and no week is over capacity after');
+      ok(state().history[state().history.length - 1].label === 'auto timeline', 'the newest version-history entry is labelled auto timeline');
+      const hLen = state().history.length;
+      ok(window.HeadwayApp.ai.autoTimelineNow(autoPh.id) === 0, 'a second pass over a laid-out phase moves nothing');
+      ok(state().history.length === hLen, 'and a pass that moves nothing adds no version-history entry');
     });
 }).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');

@@ -17,13 +17,27 @@
   --line: #E5E0D5;
   --line-2: #CFC9BB;
   --line-3: #B9B2A2;    /* hovered borders */
-  --band: #1A1F26;
-  --band-ink: #F4F6F8;
-  --band-ink-2: #8D97A1;
-  --band-ink-3: #B9C2CA;
-  --band-line: #444C55;
-  --band-hover: #2A3138;
-  --band-edge: #000;
+  /* row-depth ramp: every row kind steps down from the phase band to the
+     white of a story, in both the left pane and the lane */
+  --lvl-phase: #E3DFD5;
+  --lvl-ws: #ECE9E2;
+  --lvl-epic: #F3F1EC;
+  --lvl-feature: #FAFAF8;
+  --lvl-story: #FFFFFF;
+  /* hover sits a clear step BELOW each base, keeping the same order */
+  --lvl-feature-hover: #EFEBE2;
+  --lvl-story-hover: #F4F1EA;
+  /* tooltips stay dark chips in both themes — they read as overlays, not rows */
+  --tip-bg: #1A1F26;
+  --tip-ink: #F4F6F8;
+  /* the phase band is the top of that ramp here, so its ink is ordinary ink */
+  --band: var(--lvl-phase);
+  --band-ink: var(--ink);
+  --band-ink-2: var(--ink-2);
+  --band-ink-3: var(--ink-3);
+  --band-line: var(--line-2);
+  --band-hover: #D8D3C6;
+  --band-edge: var(--line-2);
   --blue: #0057B8;
   --blue-hover: #0064D2;
   --blue-soft: #E3EDF9;
@@ -34,6 +48,10 @@
   --c-mixed: #A14FBF;
   --warn: #A66A00;
   --warn-bg: #FBF0DA;
+  --flag: #E8710A;       /* attention flag */
+  --flag-soft: #FFF1E3;  /* flagged row at rest */
+  --flag-hover: #FFE7D0;
+  --flag-sel: #FFD6AE;   /* flagged row selected */
   --warn-deep: #6E4700;
   --err: #B3362B;
   --err-bg: #F9E4E1;
@@ -80,12 +98,22 @@ html[data-theme="dark"] {
   --line: #2A323B;
   --line-2: #3A434E;
   --line-3: #4A545F;
-  --band: #0E1216;
+  /* the same ramp, mirrored: story rows sit at the page's own dark */
+  --lvl-phase: #2A323C;
+  --lvl-ws: #242C36;
+  --lvl-epic: #1F2630;
+  --lvl-feature: #191E24;
+  --lvl-story: #14181D;
+  --lvl-feature-hover: #232A33;
+  --lvl-story-hover: #1E242B;
+  --tip-bg: #0E1216;
+  --tip-ink: #E4E9EE;
+  --band: var(--lvl-phase);
   --band-ink: #E4E9EE;
-  --band-ink-2: #7C8791;
-  --band-ink-3: #97A2AC;
-  --band-line: #333C46;
-  --band-hover: #232B33;
+  --band-ink-2: #97A2AC;
+  --band-ink-3: #B2BCC5;
+  --band-line: #414B56;
+  --band-hover: #333C47;
   --band-edge: #000;
   --blue: #2E7FE0;
   --blue-hover: #3D8FF0;
@@ -93,6 +121,10 @@ html[data-theme="dark"] {
   --blue-line: #2E4A6E;
   --warn: #D9A03E;
   --warn-bg: #3A2D14;
+  --flag: #F08A2E;
+  --flag-soft: #33230F;
+  --flag-hover: #402B12;
+  --flag-sel: #55381A;
   --warn-deep: #F0C878;
   --err: #E5695C;
   --err-bg: #40201C;
@@ -214,6 +246,19 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
   padding: 6px 10px;
 }
 .menu-list button:hover { background: var(--blue-soft); box-shadow: none; }
+.menu-list button .avatar.sm { margin-right: 2px; }
+.menu-list button .r-dot, .menu-list button .r-type { margin-right: 2px; }
+/* searchable menus (assignees, move-to-feature): a filter box pinned at the
+   top, the rows scroll under it */
+.menu-list.has-search { max-height: 360px; overflow-y: auto; }
+.menu-search {
+  position: sticky; top: 0; z-index: 1;
+  font: inherit; font-size: 12.5px;
+  padding: 5px 9px; margin: 0 0 4px;
+  border: 1px solid var(--line-2); border-radius: 6px;
+  background: var(--surface); color: var(--ink);
+}
+.menu-search:focus { outline: none; border-color: var(--blue); }
 .menu-list button:disabled { opacity: .4; cursor: default; }
 .menu-list button:disabled:hover { background: transparent; }
 .menu-list button .kbd { margin-left: auto; }
@@ -248,7 +293,7 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
 .dd-btn .dd-label { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dd-btn svg.lucide { color: var(--ink-3); }
 .dd-btn i, .dd-label i { color: var(--ink-3); font-style: italic; }
-.dd-dot { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
+.dd-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
 
 /* view tabs (top center) + the round Setup button on their right */
 .tabs-center {
@@ -305,7 +350,10 @@ input:focus, select:focus, textarea:focus, button:focus-visible {
 #board { flex: 1; overflow: auto; overscroll-behavior: none; }
 #grid { position: relative; width: max-content; min-width: 100%; }
 
-#bgcols { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+/* the row lanes are tinted now, so the grid draws ABOVE them: #bgcols shares
+   z2 with #arrows and .st-bar but comes first in the DOM, so bars, arrows and
+   the sticky left pane (z10) still paint over it */
+#bgcols { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
 /* simplified grid: only sprint boundaries are drawn */
 #bgcols .bg-week {
   position: absolute; top: 0; bottom: 0;
@@ -362,7 +410,7 @@ body[data-view="scoping"] #todayLine { display: none !important; }
   opacity: .82;
 }
 .ph-cell:hover { opacity: 1; cursor: grab; }
-.ph-cell.pinned { outline: 1px solid rgba(255, 255, 255, .55); outline-offset: -1px; }
+.ph-cell.pinned { outline: 1px solid rgba(var(--ink-rgb), .35); outline-offset: -1px; }
 .ph-cell .ph-h { position: absolute; top: 0; bottom: 0; width: 6px; cursor: ew-resize; }
 .ph-cell .ph-h.l { left: 0; }
 .ph-cell .ph-h.r { right: 0; }
@@ -386,7 +434,16 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
 .hdr-sprints .hdr-lane { background: var(--paper-2); }
 .hdr-weeks { height: 24px; }
 .hdr-cap { height: 22px; }
+/* the column legend sits below the capacity rows, right above the rows it
+   labels; its lane is empty but paints like every other header lane */
+.hdr-legend { height: 22px; }
 .hdr-sprints .hdr-left { border-bottom: 0; }
+.hdr-cap .hdr-left { border-bottom: 0; justify-content: flex-end; }
+/* one label per capacity row, in the column-legend type */
+.cap-row-lab {
+  font-size: 10.5px; font-weight: 700; color: var(--ink);
+  text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .hdr-weeks .hdr-left { border-bottom: 0; }
 .hl-title { font-weight: 700; font-size: 12px; letter-spacing: .02em; color: var(--ink-2); }
 /* label widths mirror the row chips exactly (size 34 · risk 26 · hc 30 · warn 22) */
@@ -421,6 +478,8 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
   position: absolute; top: 3px; bottom: 3px;
   border-radius: 3px;
   font-family: var(--mono); font-size: 9px;
+  /* one line always: a wrapped "3 / 1" would spill into the row below it */
+  white-space: nowrap; overflow: hidden;
   display: flex; align-items: center; justify-content: center;
   color: var(--ink-2);
   cursor: default;
@@ -432,8 +491,6 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
 .cap-cell.idle { background: rgba(var(--ink-rgb), .04); }
 .cap-cell { cursor: pointer; }
 .cap-cell.part { box-shadow: inset 0 -2px 0 rgba(166, 106, 0, .5); } /* week with some holiday days */
-#capTypeCell .dd-btn { padding: 2px 7px; font-size: 10px; border-color: var(--line); }
-#capTypeCell .dd-btn svg.lucide { width: 11px; height: 11px; }
 
 /* rows — no z-index: children (sticky left cells z10, bars z3) must interleave
    with the arrows overlay (z2) inside the #grid stacking context */
@@ -450,6 +507,8 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
   cursor: default;
 }
 .row-lane { position: relative; flex: 1; border-bottom: 1px solid rgba(var(--ink-rgb), .045); }
+/* feature rows sit one step above stories in the ramp, on BOTH sides */
+.row.item .row-left, .row.item .row-lane { background: var(--lvl-feature); }
 .row:hover .row-left { background: var(--paper-2); }
 .row.selected .row-left { background: var(--blue-soft); box-shadow: inset 3px 0 0 var(--blue); }
 /* parent feature of the selected story: the guide bar only — the selected
@@ -478,7 +537,7 @@ body[data-view="scoping"] .hdr-phases { display: none !important; }
 /* stories carry the same number chip; outside the Planning grid it hugs the
    glyph instead of holding the feature column's fixed width */
 .r-num.st-num { width: auto; flex: 0 0 auto; text-align: left; padding-right: 0; }
-.r-dot { width: 8px; height: 8px; border-radius: 2.5px; flex: 0 0 8px; margin-right: 7px; }
+.r-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; margin-right: 7px; }
 /* milestones carry a hollow diamond / star / circle, not a filled square:
    the inline background color shows only through the ring mask */
 .r-dot.msdot { border-radius: 0; transform: scale(1.2); -webkit-mask: var(--ms-ring-diamond) center / contain no-repeat; mask: var(--ms-ring-diamond) center / contain no-repeat; }
@@ -516,7 +575,8 @@ span.r-name {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   cursor: text;
 }
-span.r-name:hover { border-color: var(--line-2); background: var(--surface); }
+/* the plain-text title shows no box: the border belongs to the editor that
+   a double-click swaps in (input.r-name), so hovering never suggests a field */
 /* an untitled row shows a quiet placeholder */
 span.r-name.r-ph, .st-title.r-ph { color: var(--ink-3); }
 .row.done .r-name-txt { text-decoration: line-through; }
@@ -541,8 +601,40 @@ span.r-name.r-ph, .st-title.r-ph { color: var(--ink-3); }
   user-select: none;
 }
 .r-size:hover { border-color: var(--line-2); background: var(--surface); }
+/* view-only (standalone HTML export): the editing chrome goes away and the
+   surfaces stay browsable */
+body.ro #btnSave, body.ro #btnAI, body.ro #btnExport, body.ro #btnJira, body.ro #btnHistory, body.ro .ss-div,
+body.ro #optBtn, body.ro #menus [data-menu="file"], body.ro #menus [data-menu="edit"], body.ro #resManage,
+body.ro .st-del, body.ro .row.story-add, body.ro .raddrow, body.ro .pr-st-add, body.ro .spv-add, body.ro [data-pradd],
+body.ro .r-grip, body.ro .st-grip, body.ro .spv-grip, body.ro .su-grip, body.ro .rr-grip, body.ro #leftRz,
+body.ro .band-add, body.ro .band-edit, body.ro .band-zap, body.ro .mi-edit, body.ro .pf-name { display: none !important; }
+body.ro .sc-edit, body.ro .sc-name, body.ro .st-name, body.ro .pr-title, body.ro .spv-title, body.ro input.r-name { cursor: default; }
+body.ro .bar, body.ro .st-bar, body.ro .sp-card, body.ro .spv-row { cursor: default; }
+/* rolled-up sizes read, never edit */
+.r-size.ro { cursor: default; }
+.r-size.ro:hover { border-color: transparent; background: transparent; }
+.p-rollup { font-family: var(--mono); font-size: 11.5px; font-weight: 700; color: var(--ink-2); display: inline-flex; align-items: baseline; gap: 6px; }
+.p-rollup small { font-weight: 400; color: var(--ink-3); }
+.p-rollup i { font-weight: 400; color: var(--ink-3); }
 .r-size.custom { color: var(--c-mixed); }
 .r-size.missing { color: var(--err); }
+.r-cap {
+  width: 58px; flex: 0 0 58px; text-align: center;
+  font-size: 10px; font-weight: 600; color: var(--ink-2);
+  border: 1px solid transparent; border-radius: 5px; padding: 1px 2px;
+  /* the full type name is always rendered; only the column width clips it */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.r-cap:hover { border-color: var(--line-2); background: var(--surface); }
+.r-cap.empty { color: var(--ink-3); }
+.r-cap.inherited { color: var(--ink-3); font-style: italic; }
+.dd-label .inherited { color: var(--ink-3); font-style: italic; }
+.r-mult { width: 26px; flex: 0 0 26px; text-align: center; font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); border-radius: 5px; }
+.r-mult.editable { cursor: text; }
+.r-mult.editable:hover { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); }
+.r-mult.one { color: var(--ink-3); opacity: .55; }
+.row:hover .r-mult.one { opacity: 1; }
+.res-pts.dflt { color: var(--ink-3); }
 .r-hc {
   width: 30px; flex: 0 0 30px;
   display: inline-flex; align-items: center; justify-content: center;
@@ -571,8 +663,49 @@ span.r-name.r-ph, .st-title.r-ph { color: var(--ink-3); }
   user-select: none;
 }
 .r-ws:hover { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); }
+/* planning chip columns for the fixed fields Scoping also shows */
+.r-ws-col, .r-epic-col, .r-date-col {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10.5px; color: var(--ink-2);
+  border: 1px solid transparent; border-radius: 5px;
+  padding: 1px 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: pointer; user-select: none;
+}
+.r-date-col { justify-content: center; font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.r-ws-col:hover, .r-epic-col:hover, .r-date-col:hover { border-color: var(--line-2); background: var(--surface); }
+.r-ws-col svg, .r-epic-col svg { width: 11px; height: 11px; flex: 0 0 auto; color: var(--ink-3); }
+.r-ws-col .dd-dot { flex: 0 0 auto; }
+.r-ws-col i.dws { color: var(--ink-3); font-style: italic; }
+.r-date-col.dl-chip.late { color: var(--err); }
+/* workstream + epic on a story row roll up from the feature: present, but
+   clearly not the story's own — and never editable there */
+.r-ws-col.roll, .r-epic-col.roll { font-style: italic; opacity: .6; cursor: default; pointer-events: none; }
+.r-ws-col.r-blank, .r-epic-col.r-blank, .r-date-col.r-blank { cursor: default; }
 .r-wk.editable { border-radius: 5px; cursor: text; }
 .r-wk.editable:hover { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); }
+/* planning header labels: the same quiet strip budgeting uses, a touch
+   smaller, each sized by its column's --pl-w-* variable */
+.hl-cols .pl-only {
+  position: relative;
+  display: inline-block;
+  font-size: 10.5px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.pl-rz {
+  position: absolute; top: 0; bottom: 0; right: 0; width: 6px;
+  cursor: col-resize; z-index: 3;
+}
+.pl-rz:hover { background: rgba(0, 87, 184, .18); }
+/* the + at the end of the strip opens the show/hide menu */
+#plColsAdd {
+  border: 0; background: transparent; color: var(--ink-3);
+  padding: 0 3px; margin-left: 2px; line-height: 1; cursor: pointer;
+  align-self: center;
+}
+#plColsAdd:hover { color: var(--blue); background: transparent; box-shadow: none; }
+#plColsAdd svg { width: 12px; height: 12px; }
+body[data-view="scoping"] #plColsAdd, body[data-view="budget"] #plColsAdd { display: none; }
 body[data-view="scoping"] .hl-cols .pl-only { display: none; }
 body[data-view="budget"] .hl-cols .pl-only,
 body[data-view="budget"] .hl-title.pl-title { display: none; }
@@ -654,7 +787,7 @@ body.cap-off .hc-lab { display: none !important; }
 .row.band { height: auto; min-height: var(--band-h); position: sticky; top: var(--hdr-h); z-index: 14; }
 .row.band .row-lane { display: flex; align-items: center; }
 .row.band .row-left, .row.band .row-lane {
-  background: var(--band);
+  background: var(--lvl-phase);
   border-bottom: 1px solid var(--band-edge);
   color: var(--band-ink);
 }
@@ -680,26 +813,43 @@ body.cap-off .hc-lab { display: none !important; }
 #resHead { cursor: pointer; }
 #resHead #resManage { cursor: pointer; }
 .band-chev.open { transform: rotate(90deg); }
-.band-chev:hover { color: var(--ink-inverse); }
+.band-chev:hover { color: var(--band-ink); }
 .band-bucket-tag {
   font-size: 9px; letter-spacing: .08em; text-transform: uppercase;
   border: 1px solid var(--band-line); color: var(--band-ink-2);
   border-radius: 4px; padding: 1px 6px; margin-left: 9px;
 }
+.p-check.disabled { opacity: .55; }
 .band-edit { opacity: 0; margin-left: 6px; background: transparent; color: var(--band-ink-2); border: 0; padding: 2px 5px; font-size: 11px; }
 .row.band:hover .band-edit { opacity: 1; }
 .band-add { opacity: 0; background: transparent; border: 0; color: var(--band-ink-2); font-size: 11px; padding: 2px 6px; }
 .row.band:hover .band-add { opacity: 1; }
 .band-add:hover, .band-edit:hover { color: var(--band-ink); background: var(--band-hover); }
+/* Auto timeline (one-shot): always visible so its enabled state reads at a glance */
+.band-zap { margin-left: 2px; background: transparent; color: var(--band-ink-2); border: 0; padding: 2px 5px; font-size: 11px;
+  display: inline-flex; align-items: center; opacity: .75; }
+.band-zap svg { width: 11px; height: 11px; }
+.row.band:hover .band-zap { opacity: 1; }
+.band-zap:hover:not(:disabled) { color: var(--band-ink); background: var(--band-hover); }
+.band-zap:disabled, .row.band:hover .band-zap:disabled { opacity: .35; cursor: default; }
 
 /* story rows */
 .row.story { height: var(--story-h); }
-.row.story .row-left { background: var(--paper-2); border-bottom-color: var(--line); }
+.row.story .row-left, .row.story .row-lane { background: var(--lvl-story); }
+.row.story .row-left { border-bottom-color: var(--line); }
 .row.story .row-lane { border-bottom-color: transparent; }
 /* 53px = grip 18 + chev 20 + dot 15; the story's #number holds the remaining
    32px, so story titles still line up with the feature titles above them */
 .st-pad { width: 53px; flex: 0 0 53px; position: relative; }
 .row.story .r-num.st-num { width: 32px; flex: 0 0 32px; text-align: right; padding-right: 7px; }
+/* the left pane shows no numbers at all — they live in the panel header, on
+   cards and on sprint rows; hiding both keeps story titles aligned with the
+   feature titles (53px pad = grip 18 + chev 20 + dot 15 for both) */
+#rows .row.item .row-left .r-num, #rows .row.story .row-left .r-num { display: none; }
+/* the title never squeezes to nothing, however many chip columns are on —
+   render() widens the pane to match (see plColsWidth) */
+body:not([data-view="scoping"]) #rows .r-main,
+body:not([data-view="scoping"]) .hl-title.pl-title { min-width: 120px; }
 /* story rows drag by their grip (reorder, or move to another feature) */
 .st-grip {
   position: absolute; left: 0; top: 0; bottom: 0; width: 18px;
@@ -709,22 +859,26 @@ body.cap-off .hc-lab { display: none !important; }
 .st-grip svg { width: 12px; height: 12px; }
 .row.story:hover .st-grip { opacity: .8; }
 .st-grip:hover { color: var(--ink); }
-.st-pad::before {
-  content: ''; position: absolute; left: 44px; top: 0; bottom: 0;
-  border-left: 1px solid var(--line-2);
-}
-.st-title { flex: 1; min-width: 0; font-size: 12px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; }
+.st-title { flex: 1; min-width: 0; font-size: 12px; color: color-mix(in srgb, var(--ink) 62%, var(--ink-2)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; }
 .st-title.done { text-decoration: line-through; }
-/* a story title renames on double-click too — the same quiet hover box */
+/* a story title renames on double-click too — boxless until it does */
 .st-title-txt {
   border: 1px solid transparent; border-radius: 5px;
   padding: 1px 5px; margin-left: -5px;
 }
-.st-title-txt:hover { border-color: var(--line-2); background: var(--surface); }
 .st-del { opacity: 0; border: 0; background: transparent; color: var(--ink-3); font-size: 11px; padding: 0 7px; }
 .row.story:hover .st-del { opacity: 1; }
 .st-del:hover { color: var(--err); }
-.row.story-add .row-left { background: var(--paper-2); border-bottom-color: var(--line); }
+.row.story-add .row-left { background: var(--lvl-story); border-bottom-color: var(--line); }
+/* flagged rows: a light orange left pane, darker when selected — the same
+   roles the gray hover / blue selection play for ordinary rows */
+.row.flagged .row-left, .row.story.flagged .row-left { background: var(--flag-soft); }
+.row.flagged:hover .row-left { background: var(--flag-hover); }
+.row.flagged.selected .row-left, .row.story.flagged.selected .row-left { background: var(--flag-sel); box-shadow: inset 3px 0 0 var(--flag); }
+/* hover has to beat the ramp now that both row kinds carry a tint of their
+   own; selected, flagged and link-source rows keep the colour that says so */
+body:not([data-view="scoping"]) .row.item:not(.selected):not(.flagged):not(.link-source):hover .row-left { background: var(--lvl-feature-hover); }
+body:not([data-view="scoping"]) .row.story:not(.selected):not(.flagged):hover .row-left { background: var(--lvl-story-hover); }
 /* the + sits LEFT of the text so the input's text starts exactly where
    story titles do (68 + 12 icon + 5 gap = 85) */
 .row.story-add .st-pad { width: 68px; flex: 0 0 68px; }
@@ -753,7 +907,7 @@ body.cap-off .hc-lab { display: none !important; }
 }
 .st-bar .stb-label.out {
   position: absolute; left: calc(100% + 6px); top: 50%; transform: translateY(-50%);
-  color: var(--ink); opacity: .55; padding: 0; line-height: 1;
+  color: var(--ink); opacity: .72; padding: 0; line-height: 1;
   overflow: visible; text-overflow: clip;
 }
 
@@ -799,7 +953,7 @@ body.cap-off .hc-lab { display: none !important; }
 .st-bar.link-target { outline: 2px solid var(--blue); outline-offset: 2px; }
 /* unscheduled story: its name sits where the feature starts — no box */
 .st-ghost {
-  position: absolute; top: 0; bottom: 0; display: flex; align-items: center;
+  position: absolute; top: 0; bottom: 0; z-index: 2; display: flex; align-items: center;
   padding-left: 5px; font-size: 11px; color: var(--ink-2); opacity: .45;
   white-space: nowrap; pointer-events: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis;
 }
@@ -915,14 +1069,14 @@ body.cap-off .hc-lab { display: none !important; }
 /* drag tooltip */
 #dragTip {
   position: fixed; z-index: 80;
-  background: var(--band); color: #fff;
+  background: var(--band); color: var(--band-ink);
   font-family: var(--mono); font-size: 10.5px;
   padding: 4px 9px; border-radius: 6px;
   pointer-events: none;
   box-shadow: var(--shadow-2);
   white-space: nowrap;
 }
-#dragTip b { color: #9CC4F5; }
+#dragTip b { color: var(--blue); }
 
 .drop-indicator {
   position: absolute; left: 0; width: var(--left-w); height: 0;
@@ -1107,7 +1261,7 @@ input[type="checkbox"]:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px rgba(0, 87, 184, .22);
 }
-/* epic-band icon slot (item rows carry the icon inside the .r-epic chip) */
+/* epic-band icon slot (item rows carry no epic tag; the Epic column does) */
 .r-ico {
   display: inline-flex; align-items: center; justify-content: center;
   width: 16px; flex: 0 0 16px;
@@ -1334,7 +1488,7 @@ table.roster .rm { width: 30px; }
 /* the one tooltip component — fed by [title] lifted to data-tip on hover */
 #uiTip {
   position: fixed; z-index: 130;
-  background: var(--band); color: var(--band-ink);
+  background: var(--tip-bg); color: var(--tip-ink);
   border-radius: 7px; padding: 6px 10px;
   font-size: 11.5px; line-height: 1.5;
   max-width: 340px; white-space: pre-line;
@@ -1397,18 +1551,37 @@ body.panning, body.panning * { cursor: grabbing !important; }
 .seg button.pt-med.on { background: var(--pri-med); color: #fff; }
 .seg button.pt-low.on { background: var(--pri-low); color: #fff; }
 
-/* epic group bands (group-by-epic mode) — sticky under the pinned phase band;
-   nested (.sub) epics stack one band lower, under their workstream band */
-/* workstream/epic group rows are transparent — the sprint grid lines show
-   through their lanes (so they scroll with the rows instead of sticking) */
-.row.eband { height: 26px; }
+/* epic / workstream group bands pin under the phase band while their rows
+   scroll; nested epics (.sub) sit one band lower under their workstream band.
+   The next band of the same level slides over the stuck one. */
+.row.eband { height: 26px; position: sticky; top: calc(var(--hdr-h) + var(--band-real-h, var(--band-h))); z-index: 13; }
+.row.eband.sub { top: calc(var(--hdr-h) + var(--band-real-h, var(--band-h)) + var(--eband-real-h, 26px)); z-index: 12; }
 .row.eband .row-left {
-  background: transparent;
+  background: var(--lvl-epic);
   border-bottom: 1px solid var(--line-2);
   padding-left: 40px;
 }
-.row.eband .row-lane { background: transparent; border-bottom-color: var(--line); }
-.row.eband.wsband .row-left { background: transparent; padding-left: 30px; }
+/* pinned bands are opaque, so the #bgcols sprint lines can no longer show
+   through: redraw them on the lane at the same pitch/phase renderBgCols uses
+   (--sprint-px / --sprint-off), in the same color as .bg-week */
+.row.eband .row-lane {
+  background-color: var(--lvl-epic);
+  border-bottom: 1px solid var(--line);
+  background-image: repeating-linear-gradient(to right,
+    rgba(var(--ink-rgb), .09) 0 1px, transparent 1px var(--sprint-px, var(--week-px)));
+  /* one period per tile, so a non-zero offset shifts the whole lattice
+     instead of leaving a short last stripe at the element's edge */
+  background-size: var(--sprint-px, var(--week-px)) 100%;
+  background-position: var(--sprint-off, 0px) 0;
+}
+/* Scoping has no time axis (#bgcols is emptied there), so the band lane must
+   not paint a sprint grid: match the Scoping item lanes below instead */
+body[data-view="scoping"] .row.eband .row-lane {
+  background-color: var(--surface);
+  background-image: none;
+}
+.row.eband.wsband .row-left, .row.eband.wsband .row-lane { background-color: var(--lvl-ws); }
+.row.eband.wsband .row-left { padding-left: 30px; }
 .row.eband.wsband .eb-name { color: var(--ink); }
 .row.eband.sub .row-left { padding-left: 52px; }
 .eb-name { font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-2); }
@@ -1499,6 +1672,7 @@ body[data-view="scoping"] #resPanel { display: none; }
   cursor: text;
 }
 .res-cap:hover { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); }
+.res-cap.res-untyped { font-family: inherit; font-style: italic; color: var(--ink-3); cursor: pointer; white-space: nowrap; }
 .rr-grip { flex: 0 0 16px; }
 .res-type:hover { border-color: var(--blue); color: var(--blue); box-shadow: none; }
 .rlane { position: relative; flex: 0 0 auto; border-bottom: 1px solid var(--line); }
@@ -1528,8 +1702,11 @@ body[data-view="scoping"] #resPanel { display: none; }
 
 /* scoping view: spreadsheet of description-oriented columns */
 body[data-view="scoping"] .hdr-weeks,
-body[data-view="scoping"] .hdr-cap { display: none; }
-body.no-cap .hdr-cap { display: none; }
+/* scoping draws its own column header into the sprint line, so the planning
+   legend strip would only be an empty band there */
+body[data-view="scoping"] .hdr-legend,
+body[data-view="scoping"] #hdrCapRows { display: none; }
+body.no-cap #hdrCapRows { display: none; }
 
 body[data-view="scoping"] .row.item { height: auto; min-height: 72px; } /* grows with content */
 /* left-pane children all center within one 26px first-line strip, matched to
@@ -1540,7 +1717,10 @@ body[data-view="scoping"] .row.item .row-left { align-items: flex-start; padding
 body[data-view="scoping"] .row.item .row-left .r-chev { visibility: hidden; pointer-events: none; }
 body[data-view="scoping"] .row.item .row-left .r-chev,
 body[data-view="scoping"] .row.item .row-left .r-grip,
-body[data-view="scoping"] .row.item .row-left .r-warn {
+body[data-view="scoping"] .row.item .row-left .r-warn,
+body[data-view="scoping"] .row.story .row-left .r-warn,
+body[data-view="scoping"] .row.item .row-left .r-type,
+body[data-view="scoping"] .row.story .row-left .r-type {
   height: 26px; align-self: flex-start;
   display: flex; align-items: center;
 }
@@ -1564,8 +1744,13 @@ body[data-view="scoping"] .row.item .row-left .r-doneck { margin-top: 6px; }
 .sc-name:hover { background: var(--paper-2); }
 .sc-name:focus { background: var(--surface); outline: 2px solid rgba(0, 87, 184, .4); }
 body[data-view="scoping"] .row.item .row-left .r-num { line-height: 26px; }
-body[data-view="scoping"] .row.item .row-left .r-dot, body[data-view="scoping"] .row.item .row-left .r-type { margin-top: 9px; }
+/* the 8px dot centers on the same 26px strip: (26 - 8) / 2 */
+body[data-view="scoping"] .row.item .row-left .r-dot, body[data-view="scoping"] .row.story .row-left .r-dot { margin-top: 9px; }
 body[data-view="scoping"] .row.item .row-lane { background: var(--surface); }
+/* Scoping is a grid, not a timeline: its left pane keeps the flat tones it had
+   before the row-depth ramp */
+body[data-view="scoping"] .row.item .row-left { background: var(--surface); }
+body[data-view="scoping"] .row.story .row-left { background: var(--paper-2); }
 .sc-row { display: flex; height: 100%; }
 .sc-cell {
   flex: 0 0 auto;
@@ -1633,7 +1818,7 @@ body[data-view="budget"] #resPanel { display: none; }
 .bu-in:focus { outline: none; border-color: var(--blue); background: var(--surface); }
 body[data-view="budget"] .hl-cols .bu-only { text-align: left; padding-left: 4px; }
 .bu-cell {
-  position: absolute; top: 0; bottom: 0;
+  position: absolute; top: 0; bottom: 0; z-index: 2;
   border-right: 1px solid var(--line);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   font-size: 10px; line-height: 1.1;
@@ -2364,6 +2549,9 @@ body.no-size .sz-lab { visibility: hidden; }
 }
 #panelPeek svg.lucide { width: 14px; height: 14px; display: block; }
 #panelPeek:hover { color: var(--ink); box-shadow: var(--shadow-1); }
+/* the toggle floats over the assistant drawer's header: keep #aiClose left of
+   it (28px button + its 12px right offset + a 6px gap) */
+body.peek-on .ai-head { padding-right: 46px; }
 body[data-view="budget"] #panelPeek, body[data-view="reports"] #panelPeek,
 body[data-view="prio"] #panelPeek,
 body[data-view="setup"] #panelPeek { display: none; }
@@ -2508,7 +2696,7 @@ body[data-view="planning"] #zoomCtl { bottom: calc(var(--res-total, 0px) + 14px)
 /* the COSTS band lines up with the person names below it */
 .bcosts-band .row-left { padding-left: 24px; }
 .bu-costmark {
-  position: absolute; top: 50%;
+  position: absolute; top: 50%; z-index: 2;
   width: 9px; height: 9px;
   transform: translate(-50%, -50%) rotate(45deg);
   background: var(--warn);
@@ -2584,6 +2772,13 @@ body[data-view="sprints"] #rowFilter { display: none; }
 }
 .spv-sechd h3 { margin: 0; font-size: 14px; font-weight: 700; color: var(--ink); }
 .spv-secdates { font-size: 11px; color: var(--ink-3); font-family: var(--mono); }
+/* a sprint's total (count, points, or planned / available) at the right edge */
+.spv-ct.pr-lanect {
+  margin-left: auto; background: none; border: 0; padding: 0;
+  font-size: 15px; font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums;
+}
+.spv-sechd .spv-ct.pr-lanect { font-size: 16px; }
+.spv-ct.pr-lanect.over { color: var(--err); }
 .spv-rows { border: 1px solid var(--line-2); border-radius: 8px; background: var(--surface); overflow: hidden; }
 .spv-row {
   display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px 0 6px;
@@ -2602,7 +2797,6 @@ body[data-view="sprints"] #rowFilter { display: none; }
 .spv-grip { display: inline-flex; color: var(--line-3); width: 14px; flex: none; }
 .spv-grip svg { width: 14px; height: 14px; }
 .spv-row:hover .spv-grip { color: var(--ink-3); }
-.spv-row .r-num { flex: none; width: 34px; }
 .spv-row .r-dot, .spv-row .r-type { margin-right: 0; }
 .spv-title {
   flex: 0 1 auto; max-width: 45%; min-width: 60px;
@@ -2617,12 +2811,11 @@ input.spv-title { max-width: 60%; }
 /* the filler after the sprint tag pushes every chip to the right edge */
 .spv-fill { flex: 1 1 auto; min-width: 8px; }
 .spv-st .spv-title { font-weight: 500; }
-.spv-st .r-num.st-num { width: 34px; margin-left: 26px; text-align: right; padding-right: 7px; }
+.spv-st { padding-left: 32px; }
 .spv-tag {
   flex: none; font-size: 10px; font-weight: 600; color: var(--ink-3);
   border: 1px dashed var(--line-3); border-radius: 999px; padding: 1px 7px; white-space: nowrap;
 }
-.spv-snum { border-style: solid; color: var(--ink-2); }
 .spv-info { display: inline-flex; flex: none; color: var(--ink-3); cursor: help; }
 .spv-info svg { width: 13px; height: 13px; }
 .spv-chip {
@@ -2639,7 +2832,6 @@ input.spv-title { max-width: 60%; }
   display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px 0 28px;
   background: var(--paper-2); border-bottom: 1px solid var(--line); font-size: 12px; font-weight: 700; color: var(--ink);
 }
-.spv-feat .r-num { width: 34px; }
 .spv-feat .r-dot, .spv-feat .r-type { margin-right: 0; }
 .spv-featname { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .spv-empty { padding: 14px 12px; font-size: 12px; color: var(--ink-3); font-style: italic; }
@@ -2704,7 +2896,6 @@ body[data-view="prio"] #rowFilter { display: none; }
   box-shadow: var(--shadow-2);
 }
 .sp-card-top { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
-.sp-card-top .r-num { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
 .sp-card-dates { flex: 1; font-size: 10px; color: var(--ink-3); font-family: var(--mono); }
 .sp-card-title { font-size: 12.5px; font-weight: 600; color: var(--ink); line-height: 1.35; }
 .sp-card-meta { display: flex; align-items: center; gap: 7px; margin-top: 6px; }
@@ -3053,6 +3244,21 @@ body[data-view="scoping"] .row.story .sc-edit { height: 50px; min-height: 50px; 
 body[data-view="budget"] #detailBtn, body[data-view="setup"] #detailBtn { display: none; }
 #rowFilter { border-radius: 7px; }
 
+
+/* ------------------------------------------------ planning column widths */
+/* every planning chip (and its blank placeholder) sizes from the column
+   variable the header resize writes; the old fixed px stay as fallbacks */
+body[data-view="planning"] #rows .r-size { width: var(--pl-w-size, 34px); flex: 0 0 var(--pl-w-size, 34px); }
+body[data-view="planning"] #rows .r-risk { width: var(--pl-w-risk, 26px); flex: 0 0 var(--pl-w-risk, 26px); }
+body[data-view="planning"] #rows .r-risk.pri { width: var(--pl-w-pri, 26px); flex: 0 0 var(--pl-w-pri, 26px); }
+body[data-view="planning"] #rows .r-wk { width: var(--pl-w-dur, 34px); flex: 0 0 var(--pl-w-dur, 34px); }
+body[data-view="planning"] #rows .r-asg { width: var(--pl-w-asg, 40px); min-width: 0; flex: 0 0 var(--pl-w-asg, 40px); }
+body[data-view="planning"] #rows .r-cap { width: var(--pl-w-cap, 58px); flex: 0 0 var(--pl-w-cap, 58px); }
+body[data-view="planning"] #rows .r-mult { width: var(--pl-w-mult, 26px); flex: 0 0 var(--pl-w-mult, 26px); }
+body[data-view="planning"] #rows .r-ws-col { width: var(--pl-w-ws, 96px); flex: 0 0 var(--pl-w-ws, 96px); }
+body[data-view="planning"] #rows .r-epic-col { width: var(--pl-w-epic, 96px); flex: 0 0 var(--pl-w-epic, 96px); }
+body[data-view="planning"] #rows .r-date-col { width: var(--pl-w-start, 62px); flex: 0 0 var(--pl-w-start, 62px); }
+body[data-view="planning"] #rows .r-date-col.dl-chip { width: var(--pl-w-deadline, 62px); flex: 0 0 var(--pl-w-deadline, 62px); }
 
 /* ------------------------------------------------------- budget column resize */
 .hl-cols i[data-bucol] { position: relative; }

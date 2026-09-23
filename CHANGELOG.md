@@ -8,6 +8,7 @@ Format: short sections, bullets, one bold title per notable change —
 `**Feature title**: a short, impactful description and use case.`
 
 ## Unreleased
+- Merged upstream main (typed capacity, Auto timeline, story-points capacity, sticky bands, Planning columns, standalone HTML export). Kept from this branch: auto-order stays a per-machine view sort over the order keys, so toggling it or opening a document never edits the file (upstream re-sorts the rows array in both cases).
 - Start page: a collapsible **How to use Headway** area (js/guide.js) — a five-step start, one line per view, the keyboard shortcuts and a features & ideas list; open by default on a fresh machine, the last tab remembered.
 - View → “Estimate ranges” toggles the low→high bands on the Planning bars (range mode only; also under Setup → Preferences → Timeline). Persists per machine like the critical-path highlight.
 - Range estimates: the min/max band now hatches the low→high stretch on top of the bar (it was drawn behind it, so under the default "high" basis it was invisible), and the working-days-per-unit rate is editable for every unit, days included, for sheets that count 4 days to a week.
@@ -17,6 +18,45 @@ Format: short sections, bullets, one bold title per notable change —
 
 ### Fixed
 - Re-importing a workbook no longer overwrites a rich Notes / Enables / Out-of-scope value with a mangled copy when ExcelJS corrupts a surrogate pair in the visible sheet, or when Excel's 32,767-character cell cap truncated it.
+- Sprinting: each sprint's total sits at the right edge of its side entry and heading as a larger number; with story-points capacity on (sprints on, numeric story sizes) it reads planned / available points (e.g. `18 / 20`), in red when the sprint is over — never red while a filter hides some of its stories.
+- Sprinting: clicking a sprint in the side list lands on the sprint heading; it used to end up hidden under the sticky filter bar.
+- Resources shows either the × seat multiplier (per-person demand) or points per sprint (story-points demand), never both; in story-points mode a person's points are scaled by their hours only. A seat of 0 still means "supplies nothing" in both modes. The row menu's Capacity… opens whichever of the two the row shows.
+- The capacity type chip in the Planning left pane shows the whole type name once its column is wide enough (it was cut to eight characters regardless).
+- Planning rows no longer show the epic tag beside the feature title; add the Epic column when you want it.
+- The assistant's close button no longer sits under the right-panel toggle.
+- **Sizes from stories on Auto timeline**: at the Stories planning level, clicking a phase's Auto timeline button also sizes each of its features that has at least one sized story — the nearest label on the feature scale for the working days its stories' timelines span (parallel stories do not add up), rounded up to the feature snap (day / week / sprint). The size is set once, on the click; afterwards it is an ordinary size you can edit.
+- Stories snap to the story snap when created, auto-placed or placed at the earliest slot.
+- **Planning columns**: the left pane's chip columns have headers, resize by dragging the header edge, reorder by dragging the label, and show/hide from the header's right-click menu or the + at its end — now including Workstream, Epic, Start and Deadline.
+- Phase bands are light in light mode, and rows step down phase → workstream → epic → feature → story to white, across both the left pane and the timeline.
+- Row titles no longer show an outline on hover; the box appears only while renaming.
+- **Setup → Capacity**: capacity planning, the planning level, the demand model and capacity types now live on their own Setup tab (Team keeps roles and the work week).
+- **Demand models**: Per person (a unit in flight uses one person of its type × its multiplier) or Story points (points spread over the unit's working days against each person's points per sprint, default 10).
+- **Capacity row**: one header row, "Capacity (people)" or "Capacity (points)", reads total demand / supply across every capacity type — per week per person, and per sprint in story-points mode (one cell spanning each sprint; two-week blocks with sprints off). It turns red when any single type is over, even if the total fits, and its tooltip lists each type's numbers. The hand-typed weekly limit and the count/points basis are gone — the limit is the roster. Every capacity type counts: Auto timeline / Place at earliest slot constrain every type the roster supplies. The column legend now sits below the capacity row.
+- **Story points are a per-sprint budget**: a unit's points follow its working days (a story starting mid-week puts most of its points where most of its days are), validation flags over-capacity once per sprint, and Auto timeline / Place at earliest slot fit work against the sprint's points. Work that can never fit a sprint is left where it is with a note instead of being pushed to the far end of the timeline.
+- **Untyped people supply nothing**: in the Resources panel a person without a capacity type shows a "set type" prompt instead of the × seat / points chip; click it to pick a type (their seat and points come back).
+- Features always carry a capacity type now (blank ones default to the first type, Development). A capacity-enabled document whose roster supplies no type will show a "nobody supplies" warning on open — give the people a capacity type in the Resources panel.
+- **Auto timeline**: a ⚡ button on every phase band (also in the band's right-click menu and the phase dialog) lays that phase out in one go — its items follow their dependencies at the earliest start the roster's capacity allows. Locked and done items never move: locked items are booked in capacity as fixed, and done items anchor their dependents' starts. It is a one-shot action, not a mode: nothing re-runs on open or after other edits, and one undo takes the whole layout back. The button is disabled when everything in the phase is already in place, and when capacity planning is off.
+- **Place at earliest slot**: right-click any feature or story → Place at earliest slot moves just that one to the first slot its dependencies and the roster's capacity allow (any phase, capacity planning on).
+- Auto timeline and Place at earliest slot never move work before its phase begins (the phase's pinned start, or where its earliest item already sits); work already under way keeps its start unless a dependency or capacity pushes it (a push past today places it as new work, on the snap grid).
+- Story rows in the Planning left pane show a capacity type chip and, in per-person mode, a × multiplier (feature rows too at the Features planning level); both are columns you can hide or reorder. The Resources panel gains a points column in story-points mode.
+- Epic and workstream group rows now stay pinned under their phase band while you scroll, like the phase band itself.
+- Auto-order rows by start now also applies when a document opens.
+- Opening a document whose rows are out of start order (with auto-order on) re-sorts them there and then, says so ("Rows auto-ordered") and leaves the document unsaved.
+- The Auto-schedule dialog is gone; Auto timeline and Place at earliest slot replace it.
+- Flagged rows are tinted light orange in the left pane, darker when selected.
+- The Planning / Scoping left pane no longer shows #numbers on rows (they stay in the panel header, on cards and on sprint rows).
+- #numbers are gone from Sprinting rows and Prioritizing cards too (the panel header keeps them), and Sprinting rows drop the sprint-number bubble.
+- Scoping: story glyphs and warning icons center on the first title line like the feature rows; story rows lose their left divider line and the epic tag beside the feature title (the Epic column already shows it).
+- Workstream color marks are filled circles everywhere (rows, chips, dropdowns, the PNG legend).
+- **Roll up from stories**: a new feature sizing option (Setup → Sizing, first in the list; T-shirt sizes stay the default). Each feature's size is the sum of its story points and its working days are the stories' days added up; feature sizes are not edited by hand in this mode. Switching back to a hand-picked scale clears the derived sizes.
+- **Move a story to another feature**: right-click a story (Planning / Scoping rows, Sprinting rows, Prioritizing cards, the panel) → Move to feature… opens a searchable list of features.
+- Assignee pickers are searchable and show each person's avatar; typing narrows the roster, Enter picks the first match.
+- Prioritizing cards: text fields (Description etc.) are read-only on the card — edit them in the panel or the Scoping grid; the title still renames on double-click. Clicking the selected card keeps it selected.
+- Story titles in the Planning left pane read a step darker (still lighter than features).
+- **Standalone HTML export**: Export → Standalone HTML (view-only) saves the whole roadmap as one self-contained .html — every tab is there to browse, nothing edits, and Setup keeps only the theme. Opens from disk in any browser.
+- **Planning level** (Setup → Capacity): Features (default) plans capacity on the features and stories need no details; Stories ignores feature weights and durations and plans the work on the stories and their capacity types.
+- **Capacity types**: stories carry a capacity type (what they drain and who can take them) and people carry the type they supply — Development, Design, QA, … by default, editable and reorderable under Setup → Capacity. Story assignee pickers list only the people supplying the story's type. The Budgeting / Resources rows gain a Capacity column.
+- Default roles now lead with Project Manager and Product Manager.
 
 ## 1.0.13 — 2026-09-09
 

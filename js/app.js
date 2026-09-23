@@ -43,6 +43,10 @@
 
   // ------------------------------------------------------------ app state
   var state;                 // document state (undo-tracked)
+  // a standalone HTML export boots with its document inlined: every tab is
+  // navigable, nothing edits, and Setup keeps only the theme
+  var readOnly = !!(window.HEADWAY_VIEW && window.HEADWAY_VIEW.doc);
+  function viewOnlyToast() { toast('This is a view-only copy \u2014 edits are off'); }
   var validation;            // RM.validate cache
   var undoStack = [], redoStack = [];
   var selectedId = null;
@@ -73,6 +77,7 @@
   var buColW = {};           // budgeting column width overrides (key -> px)
   var buColOrder = null;     // budgeting column order (array of keys; null = default)
   var buColHide = {};        // budgeting columns hidden (key -> true)
+  var plColW = {};           // planning left-pane column width overrides (key -> px)
   var plColOrder = null;     // planning left-pane column order
   var plColHide = {};        // planning left-pane columns hidden
   var autoOrder = true;      // after move/resize, reorder rows by start day (stable)
@@ -174,7 +179,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showRange: showRange, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioHideUnset: prioHideUnset, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy, docKind: docKind, bundleDir: bundleDir, activePlanId: activePlanId };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioHideUnset: prioHideUnset, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColW: plColW, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy, showRange: showRange, docKind: docKind, bundleDir: bundleDir, activePlanId: activePlanId };
   }
   // the snapshot an .xlsx carries: a workbook must never re-link a folder
   function exportUiSnapshot() {
@@ -213,6 +218,7 @@
     buColW = ui.buColW && typeof ui.buColW === 'object' ? ui.buColW : {};
     buColOrder = Array.isArray(ui.buColOrder) ? ui.buColOrder : null;
     buColHide = ui.buColHide && typeof ui.buColHide === 'object' ? ui.buColHide : {};
+    plColW = ui.plColW && typeof ui.plColW === 'object' ? ui.plColW : {};
     plColOrder = Array.isArray(ui.plColOrder) ? ui.plColOrder : null;
     plColHide = ui.plColHide && typeof ui.plColHide === 'object' ? ui.plColHide : {};
     depsMode = ui.depsMode === 'none' ? 'none' : 'on';
@@ -267,6 +273,7 @@
 
   var localSaveBroken = false;
   function saveLocal() {
+    if (readOnly) return; // the exported copy never writes the viewer's storage
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(state));
       localStorage.setItem(UI_KEY, JSON.stringify(uiSnapshot()));
@@ -594,7 +601,70 @@
     }
     historyMemo = null;
   }
+  // bumped whenever `state` changes (commit, replaceState, undo/redo, open):
+  // the cheap key the Auto timeline dry runs are memoized on
+  var stateRev = 0;
+  // Auto timeline (one-shot, per phase): what a click would do right now.
+  // Memoized per phase on the state revision + snap + today, so re-renders
+  // never re-run the scheduler.
+  var AUTO_TL_TIP = 'Auto timeline: move this phase\u2019s items to follow dependencies and capacity';
+  var autoDry = { rev: -1, key: '', byPhase: {} };
+  function autoPhaseDryRun(phaseId) {
+    var key = snapFeat + '|' + snapStory + '|' + autoOrder + '|' + RM.todayDay(state.meta);
+    if (autoDry.rev !== stateRev || autoDry.key !== key) autoDry = { rev: stateRev, key: key, byPhase: {} };
+    if (!autoDry.byPhase[phaseId]) {
+      // auto-order rides along inside the action (it re-sorts between passes),
+      // so the dry run and the click agree
+      var o = snapOpts();
+      o.autoOrder = autoOrder;
+      autoDry.byPhase[phaseId] = RM.autoPhase(state, phaseId, o);
+    }
+    return autoDry.byPhase[phaseId];
+  }
+  // { disabled, tip } for the band button, the band menu entry and the dialog
+  function autoPhaseStatus(phaseId) {
+    if (!state.meta.capacityEnabled) return { disabled: true, tip: 'Turn on capacity planning in Setup \u2192 Capacity' };
+    var ph = state.phases.filter(function (p) { return p.id === phaseId; })[0];
+    if (!ph || ph.bucket) return { disabled: true, tip: 'A backlog bucket is never auto-scheduled' };
+    if (!autoPhaseDryRun(phaseId).changed) return { disabled: true, tip: 'Everything in this phase is already in place' };
+    return { disabled: false, tip: AUTO_TL_TIP };
+  }
+  // the Auto timeline action: lay the phase out (locked / done work stays put)
+  // and, at the Stories level, size its features from their stories — one
+  // commit, so one undo takes it all back
+  function autoTimelinePhase(phaseId) {
+    if (readOnly) { viewOnlyToast(); return 0; }
+    var st = autoPhaseStatus(phaseId);
+    if (!state.meta.capacityEnabled) { toast(st.tip, 'err'); return 0; }
+    // the memoized dry run IS the result (the commit bumps the revision, so
+    // the cache never outlives the state it was computed from)
+    var r = autoPhaseDryRun(phaseId);
+    if (!r.changed) { toast('Nothing to move'); return 0; }
+    commit('auto timeline', function (s) {
+      // the scheduler re-sorted its copy by start; the document keeps key order
+      s.items = RM.sortByOrder(r.state.items);
+      s.meta = r.state.meta;
+    });
+    var sz = r.sized.length;
+    var szTxt = sz ? 'resized ' + sz + ' ' + (sz === 1 ? lvl('feature') : lvl('feature', true)).toLowerCase() : '';
+    var stuck = (r.notes || []).filter(function (n) { return /never fits/.test(n); }).length;
+    toast((r.moved
+      ? 'Auto timeline moved ' + r.moved + ' item' + (r.moved === 1 ? '' : 's') + (sz ? ' and ' + szTxt : '')
+      : sz ? 'Auto timeline ' + szTxt : 'Auto timeline rebuilt the ' + lvl('feature').toLowerCase() + ' bars') +
+      (stuck ? ' \u00b7 ' + stuck + ' could not be placed' : ''));
+    return r.changed;
+  }
+  // every real phase, one after another (the assistant's hook); returns the
+  // number of changes
+  function autoTimelineAll() {
+    var n = 0;
+    state.phases.filter(function (p) { return !p.bucket; }).forEach(function (p) {
+      if (autoPhaseDryRun(p.id).changed) n += autoTimelinePhase(p.id);
+    });
+    return n;
+  }
   function commit(label, mutate) {
+    if (readOnly) { viewOnlyToast(); return; }
     var prev = JSON.stringify(state);
     undoStack.push(prev);
     if (undoStack.length > 120) undoStack.shift();
@@ -605,6 +675,7 @@
     maybeAskName();
   }
   function replaceState(label, next) {
+    if (readOnly) { viewOnlyToast(); return; }
     var prev = JSON.stringify(state);
     undoStack.push(prev);
     if (undoStack.length > 120) undoStack.shift();
@@ -625,6 +696,9 @@
     redoStack.length = 0;
     docSaved = true;
     sessionEdited = false;
+    stateRev += 1;
+    // opening is not an edit: with auto-order on the rows RENDER in start
+    // order (RM.viewItems), the document's order keys stay as saved
     validation = RM.validate(state);
     saveLocal();
     render();
@@ -686,6 +760,8 @@
     // a freshly-inserted row is held in place only until it has a start date
     state.items.forEach(function (it) { if (it.holdPos && it.startDay != null) delete it.holdPos; });
     sessionEdited = true;
+    stateRev += 1;
+    RM.applySizeRollup(state); // the rollup scheme's feature sizes follow their stories
     validation = RM.validate(state);
     saveLocal();
     render();
@@ -2195,6 +2271,7 @@
     // by flipping it to the one being parked
     if (compareOptId === id) compareOptId = prevId;
     state = next;
+    stateRev += 1;
     docSaved = false;
     sessionEdited = true;
     validation = RM.validate(state);
@@ -2568,14 +2645,17 @@
     document.body.classList.toggle('no-size', !RM.sizingEnabled(state));
     var boardView = view === 'planning' || view === 'scoping' || view === 'budget';
     document.body.classList.toggle('left-collapsed', leftCollapsed && boardView);
+    // Planning's pane grows to fit its columns (see planLeftW)
+    var planW = planLeftW();
     document.documentElement.style.setProperty('--left-w',
       (leftCollapsed && boardView ? 0
-        : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan)) + 'px');
+        : (view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : planW)) + 'px');
     // folded: the pane is gone; only the floating reopen button remains
     var lp = $('#leftPeek');
     if (lp) lp.hidden = !(leftCollapsed && boardView);
     document.documentElement.style.setProperty('--panel-w', panelW + 'px');
     applyBuColWidths();
+    applyPlColWidths();
     renderHlCols();
     syncDetailBtn();
     cmpCache = null; // parked docs may have changed (switch/rename/close)
@@ -2636,8 +2716,7 @@
       renderScopeHeader();
       $('#hdrPhases').innerHTML = ''; // line stays visible for the row filter
       $('#bgcols').innerHTML = '';
-      $('#hdrCap').innerHTML = '';
-      $('#capTypeCell').innerHTML = '';
+      $('#hdrCapRows').innerHTML = '';
       $('#arrowPaths').innerHTML = '';
       // the svg keeps its planning-view width attribute otherwise, which
       // stretches the grid past the columns
@@ -2658,9 +2737,22 @@
     renderRows();
     renderResources();
     renderPanel();
+    if (readOnly) lockDownRo();
     syncHdrH();
     board.scrollLeft = sx; board.scrollTop = sy;
     requestAnimationFrame(function () { renderArrows(); positionToday(); });
+  }
+  // view-only: every editor in the rendered surfaces turns inert (the
+  // filters stay live — they only narrow the view)
+  function lockDownRo() {
+    $$('#rows [contenteditable="true"], #panel [contenteditable="true"], #prioView [contenteditable="true"], #sprintView [contenteditable="true"]')
+      .forEach(function (el) { el.setAttribute('contenteditable', 'false'); });
+    $$('#rows input, #rows textarea, #rows select, #panel input, #panel textarea, #panel select, #resGrid input, #prioView input, #sprintView input')
+      .forEach(function (el) {
+        if (el.type === 'search' || el.id === 'prFilter' || el.id === 'spFilter' || el.id === 'rowFilter') return;
+        if (el.type === 'checkbox' || el.type === 'radio' || el.tagName === 'SELECT') el.disabled = true;
+        else el.readOnly = true;
+      });
   }
 
   // ------------------------------------------------------------ reports page
@@ -3009,7 +3101,7 @@
     withStory('story size', itemId, stId, function (st2, s) {
       st2.size = sz;
       // a 0-point size is zero effort but still one day on the grid
-      if (sz && st2.startDay != null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, Math.max(1, RM.sizeDays(s, sz, 'story')));
+      if (sz && st2.startDay != null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, snapUpDays(Math.max(1, RM.sizeDays(s, sz, 'story')), 'story'));
     });
   }
   function setStoryRisk(itemId, stId, rv) {
@@ -3019,7 +3111,10 @@
   function setStoryDur(itemId, stId, days) {
     withStory('story duration', itemId, stId, function (st2, s) {
       if (days == null) { st2.durDays = null; st2.startDay = null; }
-      else st2.durDays = st2.startDay != null ? RM.stretchSpan(s.meta, st2.startDay, days) : days;
+      else {
+        var want = snapUpDays(days, 'story'); // a story buys whole snap units
+        st2.durDays = st2.startDay != null ? RM.stretchSpan(s.meta, st2.startDay, want) : want;
+      }
     });
   }
   function storySizeMenu(anchor, itemId, stId) {
@@ -3097,6 +3192,16 @@
       return '<span class="r-wk editable" tabindex="0" role="button" ' + attr + '="st-wk" title="Story duration">' +
         (storyWeeks(st) || blank) + '</span>';
     }
+    if (key === 'cap') {
+      if (!state.meta.capacityEnabled) return '';
+      return '<span class="r-cap' + (st.capType ? '' : ' empty') + '" tabindex="0" role="button" ' + attr + '="st-cap" title="' +
+        esc('Capacity type' + (st.capType ? '\nNow: ' + st.capType : '')) + '">' + (st.capType ? esc(st.capType) : blank) + '</span>';
+    }
+    if (key === 'mult') {
+      if (!state.meta.capacityEnabled || state.meta.capMode === 'points') return '';
+      var mv = st.capMult || 1;
+      return '<span class="r-mult editable' + (mv === 1 ? ' one' : '') + '" tabindex="0" role="button" ' + attr + '="st-mult" title="Capacity multiplier — people this story needs at once">×' + fmtPe(mv) + '</span>';
+    }
     return '';
   }
   // routes a story chip click; returns true when it handled one
@@ -3109,9 +3214,73 @@
       inlineWeeksEditor(anchor, stW ? stW.durDays : null, function (days) { setStoryDur(itemId, stId, days); });
     } else if (act === 'st-asg') {
       if (!state.team.length) { toast('Add people in the Resources panel first'); return true; }
-      openDropdown(anchor, storyAssignMenuItems(itemId, stId));
+      openDropdown(anchor, storyAssignMenuItems(itemId, stId), ASSIGN_DD);
+    } else if (act === 'st-cap') openDropdown(anchor, storyCapMenuItems(itemId, stId));
+    else if (act === 'st-mult') {
+      var stM = storyById(RM.itemById(state, itemId) || {}, stId);
+      inlineMultEditor(anchor, stM ? stM.capMult : 1, function (v) {
+        commit('story multiplier', function (s) {
+          var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
+          if (st2) st2.capMult = v;
+        });
+      });
     } else return false;
     return true;
+  }
+  // the capacity type a story / feature drains: the document's types, or general
+  function storyCapMenuItems(itemId, stId) {
+    var cur = (storyById(RM.itemById(state, itemId) || {}, stId) || {}).capType || '';
+    return [{ label: '<i>— general —</i>', checked: !cur, fn: function () {
+      commit('story capacity type', function (s) { var st2 = storyById(RM.itemById(s, itemId) || {}, stId); if (st2) st2.capType = ''; });
+    } }].concat(RM.capTypesOf(state).map(function (t) {
+      return { label: esc(t), checked: cur === t, fn: function () {
+        commit('story capacity type', function (s) { var st2 = storyById(RM.itemById(s, itemId) || {}, stId); if (st2) st2.capType = t; });
+      } };
+    }));
+  }
+  // a feature's planning type comes from its stories while they all agree; then
+  // its own capType is only what it falls back to, so the chip reads inherited
+  function itemCapInherited(it) {
+    return !!it && !it.milestone && RM.itemCapType(state, it) !== (it.capType || '');
+  }
+  var CAP_INHERIT_TITLE = 'Inherited from its stories — set the stories’ types to change it';
+  function itemCapMenuItems(itemId) {
+    var itC = RM.itemById(state, itemId);
+    var cur = (itC || {}).capType || '';
+    var head = itemCapInherited(itC)
+      ? [{ label: '<i>Type follows the stories while they all agree</i>', disabled: true, fn: function () {} }, { sep: true }]
+      : [];
+    // a feature always plans as one of the types — no "general" entry here
+    // (stories keep theirs)
+    return head.concat(RM.capTypesOf(state).map(function (t) {
+      return { label: esc(t), checked: cur === t, fn: function () {
+        commit('capacity type', function (s) { var t2 = RM.itemById(s, itemId); if (t2) t2.capType = t; });
+      } };
+    }));
+  }
+  // × multiplier chip edits in place like the duration chip
+  function inlineMultEditor(chip, cur, onSave) {
+    if (chip.querySelector('input')) return;
+    var inp = document.createElement('input');
+    inp.type = 'number'; inp.min = '0.1'; inp.step = '0.5';
+    inp.value = cur != null ? cur : 1;
+    inp.className = 'hc-edit'; inp.style.width = '30px';
+    chip.textContent = '';
+    chip.appendChild(inp);
+    inp.focus(); inp.select();
+    var done = false;
+    var fin = function (saveIt) {
+      if (done) return; done = true;
+      if (!saveIt) { render(); return; }
+      var v = parseFloat(inp.value);
+      onSave(isFinite(v) && v > 0 ? v : 1);
+    };
+    inp.addEventListener('blur', function () { fin(true); });
+    inp.addEventListener('keydown', function (ev) {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') fin(true);
+      if (ev.key === 'Escape') fin(false);
+    });
   }
   // feature twins for the boards that lack the row chips (Sprinting, Prioritizing)
   function itemRiskMenu(anchor, itemId) {
@@ -3135,7 +3304,7 @@
     if (it.milestone) return '';
     if (key === 'size') {
       if (!RM.sizingEnabled(state)) return '';
-      return '<span class="r-size" tabindex="0" role="button" ' + attr + '="size" title="Size">' + (it.size ? esc(it.size) : '·') + '</span>';
+      return '<span class="r-size' + sizeRoCls(it) + '" tabindex="0" role="button" ' + attr + '="size" title="' + sizeChipTitle(it) + '">' + (it.size ? esc(it.size) : '·') + '</span>';
     }
     if (key === 'pri') {
       if (!RM.priorityEnabled(state)) return '';
@@ -3162,6 +3331,7 @@
     var itA = RM.itemById(state, itemId);
     if (!itA) return false;
     if (act === 'size') {
+      if (sizeLocked(itA)) return true;
       openDropdown(anchor, [{ label: '<i>no size</i>', checked: !itA.size, fn: function () { setItemSize(itemId, null); } }]
         .concat(RM.sizeOrderOf(state).map(function (sz) {
           return { label: esc(sz) + ' <small>' + sizeHuman(sz) + '</small>', checked: itA.size === sz, fn: function () { setItemSize(itemId, sz); } };
@@ -3169,9 +3339,13 @@
     } else if (act === 'priority') openPriorityEditor(anchor, itemId);
     else if (act === 'risk') itemRiskMenu(anchor, itemId);
     else if (act === 'dur') inlineWeeksEditor(anchor, itA.durDays, function (days) { setItemDur(itemId, days); });
+    else if (act === 'cap') openDropdown(anchor, itemCapMenuItems(itemId));
+    else if (act === 'mult') inlineMultEditor(anchor, itA.capMult, function (v) {
+      commit('multiplier', function (s) { RM.itemById(s, itemId).capMult = v; });
+    });
     else if (act === 'asg') {
       if (!state.team.length) { toast('Add people in the Resources panel first'); return true; }
-      openDropdown(anchor, assignMenuItems(itemId));
+      openDropdown(anchor, assignMenuItems(itemId), ASSIGN_DD);
     } else return false;
     return true;
   }
@@ -3241,7 +3415,8 @@
   function prCardHtml(it) {
     var fields = prCardFields().map(function (c) {
       // no label — a quiet "No description"-style hint fills the empty field
-      return '<div class="pr-rich" contenteditable="true" data-prsc="' + c[0] + '" data-ph="No ' + esc(c[1].toLowerCase()) + '">' +
+      // read-only on the card: the panel (or the Scoping grid) edits these
+      return '<div class="pr-rich" data-prsc="' + c[0] + '" data-ph="No ' + esc(c[1].toLowerCase()) + '">' +
         richDisplay(RM.scopeValue(it, c[0])) + '</div>';
     }).join('');
     var wsColor = it.workstream ? RM.colorForWs(state, it.workstream) : RM.defaultWsColor(state);
@@ -3251,7 +3426,6 @@
       ? '<div class="pr-stories">' + (it.stories || []).map(function (st) {
           return '<div class="pr-story" data-prst="' + st.id + '">' +
             '<i data-lucide="corner-down-right" class="pr-st-ico"></i>' +
-            '<span class="r-num st-num">#' + st.num + '</span>' +
             prTitleHtml(st.title, 'story', 'pr-st-title') +
             ['size', 'pri', 'risk', 'dur'].map(function (k) { return storyChipHtml(k, st, 'data-prstact'); }).join('') +
             '</div>';
@@ -3266,7 +3440,7 @@
       fields + stories +
       '<div class="pr-chips">' +
       (prChipOn('size') // the column field's chip is redundant; hidden chips come from the Fields menu
-        ? '<span class="r-size" tabindex="0" role="button" data-pract="size" title="Size">' +
+        ? '<span class="r-size' + sizeRoCls(it) + '" tabindex="0" role="button" data-pract="size" title="' + sizeChipTitle(it) + '">' +
           (it.size ? esc(it.size) : '·') + '</span>' : '') +
       (prChipOn('priority')
         ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) +
@@ -3357,11 +3531,10 @@
       return !(k === 'size' && prioStoryCol === 'size');
     }).map(function (k) { return storyChipHtml(k, st, 'data-prstact'); }).join('');
     return '<div class="sp-card pr-card pr-stcard' + (st.done ? ' done' : '') + (selectedId === it.id && selStory === st.id ? ' selected' : '') + '" data-prcard="' + it.id + '" data-prst="' + st.id + '" style="--ws-c:#' + wsColor + '">' +
-      '<div class="pr-stfeat" title="Feature"><span class="r-num">#' + it.num + '</span>' +
+      '<div class="pr-stfeat" title="Feature">' +
       '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' +
       '<span class="pr-stfeatname">' + esc(it.feature || '(untitled)') + '</span></div>' +
       '<div class="pr-head">' + typeGlyphHtml(st, 'story', it) +
-      '<span class="r-num st-num">#' + st.num + '</span>' +
       prTitleHtml(st.title, 'story', 'pr-title pr-st-title') + prFlagHtml(st) + '</div>' +
       '<div class="pr-chips">' + chips + '</div></div>';
   }
@@ -3376,7 +3549,7 @@
   function prFeatColKinds() {
     var out = ['phase'];
     if (RM.priorityEnabled(state) && RM.prioritySchemeOf(state) !== 'rice') out.push('priority'); // RICE is computed, no ladder
-    if (RM.sizingEnabled(state)) out.push('size');
+    if (RM.sizingEnabled(state) && !RM.sizeRollup(state)) out.push('size');
     if (RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto') out.push('risk');
     return out;
   }
@@ -3586,29 +3759,6 @@
     if (stRow) prStartRename(card.dataset.prcard, stRow.dataset.prst, true);
     else prStartRename(card.dataset.prcard, card.dataset.prst || null, false);
   });
-  // card scope fields are the same rich editors as the scoping grid: the
-  // floating B/I/list toolbar rides along while one has focus
-  $('#prioView').addEventListener('focusin', function (e) {
-    if (!e.target.classList || !e.target.classList.contains('pr-rich')) return;
-    ensureScFmtBar().hidden = false;
-    scFmtTarget = e.target;
-    placeScFmtBar();
-  });
-  // card scope fields commit on blur, exactly like the scoping grid's cells
-  $('#prioView').addEventListener('focusout', function (e) {
-    if (e.target.classList && e.target.classList.contains('pr-rich') && scFmtBar) hideScFmtBar();
-    var ed = e.target.classList && e.target.classList.contains('pr-rich') ? e.target : null;
-    if (!ed || !ed.dataset.prsc) return;
-    var card = ed.closest('[data-prcard]');
-    if (!card) return;
-    var id = card.dataset.prcard;
-    var it = RM.itemById(state, id);
-    if (!it) return;
-    var key = ed.dataset.prsc;
-    var v = sanitizeHtml(ed.innerHTML);
-    if (v === RM.scopeValue(it, key) || v === displayHtml(RM.scopeValue(it, key))) return;
-    commit('scope ' + key, function (s) { RM.setScopeValue(RM.itemById(s, id), key, v); });
-  });
   $('#prioView').addEventListener('keydown', function (e) {
     var t = e.target;
     if (t.id === 'prFilter' && e.key === 'Escape') {
@@ -3729,6 +3879,7 @@
       if (!itC) return;
       var act = chip.dataset.pract;
       if (act === 'size') {
+        if (sizeLocked(itC)) return;
         openDropdown(chip, [{ label: '<i>no size</i>', checked: !itC.size, fn: function () {
           setItemSize(cid, null);
         } }].concat(RM.sizeOrderOf(state).map(function (sz) {
@@ -3746,13 +3897,11 @@
       }
       return;
     }
-    // a plain click on a card opens the panel on it; clicking the selected
-    // card again puts the panel away
+    // a plain click on a card opens the panel on it (clicking the selected
+    // card again keeps the selection)
     var cardK = e.target.closest('[data-prcard]');
     if (cardK && !e.target.closest('.pr-story,input,textarea,select,button,[contenteditable="true"],[data-pract],[data-prstact]')) {
       var kid = cardK.dataset.prcard, kst = cardK.dataset.prst || null;
-      var already = selectedId === kid && (kst ? selStory === kst : !selStory);
-      if (already && panelOpen) { select(null); return; }
       panelOpen = true;
       if (kst) selectStory(kid, kst); else select(kid);
       return;
@@ -3786,6 +3935,7 @@
       var stRowId = stRowX.dataset.prst;
       openContextMenu(cx, cy, [
         { icon: 'pencil', label: 'Rename…', fn: function () { prStartRename(cid, stRowId, true); } },
+        moveStoryFeatureEntry(cx, cy, cid, stRowId),
         { sep: true },
         storyInsertEntries(cid, stRowId)[0], storyInsertEntries(cid, stRowId)[1],
         flagMenuEntries(cid, stRowId)[0], flagMenuEntries(cid, stRowId)[1] || null,
@@ -3804,6 +3954,7 @@
       openContextMenu(cx, cy, [
         { icon: 'pencil', label: 'Rename…', fn: function () { prStartRename(cid, stIdX, false); } },
         { icon: 'rows-3', label: 'Go to feature', fn: function () { select(cid, true); } },
+        moveStoryFeatureEntry(cx, cy, cid, stIdX),
         { sep: true },
         storyInsertEntries(cid, stIdX)[0], storyInsertEntries(cid, stIdX)[1],
         flagMenuEntries(cid, stIdX)[0], flagMenuEntries(cid, stIdX)[1] || null,
@@ -3972,9 +4123,26 @@
     });
     return any ? sum : null;
   }
+  // story-points capacity: each sprint's total reads planned / available
+  // (needs numeric story sizes to add up and sprints to budget per; else the
+  // plain count / points total as before)
+  function sprCapXY() {
+    return !!state.meta.capacityEnabled && state.meta.capMode === 'points' &&
+      RM.sprintsEnabled(state.meta) && sprPointsOn();
+  }
+  // the points a sprint supplies across every capacity type (the capacity
+  // summary's sprint period); null when the sprint is off the timeline
+  function sprSupply(num) {
+    var cap = validation && validation.capacity;
+    if (!cap || !cap.periods) return null;
+    var y = null;
+    cap.periods.forEach(function (p, i) { if (p.num === num) y = cap.weeks[i].supply; });
+    return y;
+  }
   function sprSections() {
     var meta = state.meta;
     var pointsOn = sprPointsOn();
+    var capXY = sprCapXY();
     var nums = sprintNums().concat([null]); // Unscheduled trails the timeline
     var secs = nums.map(function (n) {
       var vitemsSp = viewItemsOf(state); // rows in on-screen (planning) order
@@ -3985,7 +4153,7 @@
       items.forEach(function (it) { inIds[it.id] = true; });
       var feats = [];
       // the sprint's stories: what story level lists, and what points totals add
-      var ptFeats = sprLevel === 'story' || pointsOn ? [] : null;
+      var ptFeats = sprLevel === 'story' || pointsOn || capXY ? [] : null;
       if (ptFeats) {
         vitemsSp.forEach(function (it) {
           if (!sprMatches(it)) return;
@@ -3998,8 +4166,11 @@
       var d0 = n == null ? 0 : RM.sprintStartDay(meta, n);
       var wps = RM.sprintInfo(meta).wps;
       var points = pointsOn ? sprPointsTotal(ptFeats) : null;
+      // points capacity: X is 0 until a story is sized, never the row count
+      if (capXY) points = sprPointsTotal(ptFeats) || 0;
       return {
         num: n, key: sprSecKey(n), points: points,
+        supply: capXY && n != null ? sprSupply(n) : null,
         title: n == null ? 'Unscheduled' : (RM.sprintsEnabled(meta) ? 'Sprint ' + n : 'Week of ' + RM.fmtShort(RM.weekStartDate(meta, w0))),
         dates: n == null ? '' : RM.fmtShort(RM.weekStartDate(meta, w0)) + ' – ' +
           RM.fmtShort(RM.spanEndDate(meta, d0, Math.min(wps * SPW(), meta.numWeeks * SPW() - d0))),
@@ -4016,11 +4187,6 @@
     secs.forEach(function (s, i) { if (s.num != null && keep(s)) { if (first === -1) first = i; last = i; } });
     var un = secs[secs.length - 1];
     return (first === -1 ? [] : secs.slice(first, last + 1)).concat([un]);
-  }
-  // the sprint-number tag every row in a sprint section wears
-  function sprNumTag(num) {
-    if (num == null) return '';
-    return '<span class="spv-tag spv-snum" title="' + esc(sprintLabel(num)) + '">' + (RM.sprintsEnabled(state.meta) ? 'S' : 'W') + num + '</span>';
   }
   // rows whose span runs past their sprint get an info glyph saying how far
   function sprFlagHtml(x) {
@@ -4055,10 +4221,9 @@
     return '<div class="spv-row' + (isSel(it.id) ? ' sel' : '') + (it.done ? ' done' : '') +
       '" data-spid="' + it.id + '" data-spsec="' + sprSecKey(num) + '">' +
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
-      '<span class="r-num">#' + it.num + '</span>' +
       typeGlyphHtml(it, 'feature') +
       sprTitleHtml(it.feature, 'feature') +
-      sprCarryHtml(it) + sprFlagHtml(it) + sprNumTag(num) + '<span class="spv-fill"></span>' +
+      sprCarryHtml(it) + sprFlagHtml(it) + '<span class="spv-fill"></span>' +
       '<span class="spv-chip" tabindex="0" role="button" data-spact="epic" title="Epic">' +
       '<i data-lucide="' + (RM.iconForEpic(state, it.epic) || 'tag') + '"></i>' + esc(it.epic || '—') + '</span>' +
       sprWsChip(it) +
@@ -4070,19 +4235,37 @@
     return '<div class="spv-row spv-st' + (isSel(it.id) && selStory === st.id ? ' sel' : '') + (st.done ? ' done' : '') +
       '" data-spid="' + it.id + '" data-spst="' + st.id + '" data-spsec="' + sprSecKey(num) + '">' +
       '<span class="spv-grip" title="Drag to another sprint or position"><i data-lucide="grip-vertical"></i></span>' +
-      '<span class="r-num st-num">#' + st.num + '</span>' +
       typeGlyphHtml(st, 'story', it) +
       sprTitleHtml(st.title, 'story') +
-      (own ? sprCarryHtml(st) : '') + sprFlagHtml(st) + sprNumTag(num) + '<span class="spv-fill"></span>' +
+      (own ? sprCarryHtml(st) : '') + sprFlagHtml(st) + '<span class="spv-fill"></span>' +
       '<span class="spv-est">' + ['size', 'pri', 'risk'].map(function (k) { return storyChipHtml(k, st, 'data-spact'); }).join('') + sprAsgChip(st, 'st-asg') + '</span>' +
       '</div>';
+  }
+  // a sprint's total at the right edge: planned / available points under
+  // points capacity, else the points total or the plain row count
+  function sprCtHtml(sec) {
+    var cls = 'pr-lanect spv-ct', txt, title;
+    if (sec.supply != null) {
+      // a filter leaves out some of the sprint's stories: X is then partial,
+      // so it never reads red
+      var filtered = sprFilterOn();
+      var over = !filtered && sec.points > sec.supply + 1e-9;
+      if (over) cls += ' over';
+      txt = fmtPts(sec.points) + ' / ' + fmtPts(sec.supply);
+      title = fmtPts(sec.points) + ' story points planned' + (filtered ? ' (filtered)' : '') + ' · ' +
+        fmtPts(sec.supply) + ' available this sprint' + (over ? ' — over' : '');
+    } else if (sec.points != null) {
+      txt = fmtPts(sec.points) + ' pt'; title = 'Story points';
+    } else {
+      txt = String(sec.count); title = null;
+    }
+    return '<span class="' + cls + '"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(txt) + '</span>';
   }
   function sprSectionHtml(sec) {
     var body;
     if (sprLevel === 'story') {
       body = sec.feats.map(function (f) {
         return '<div class="spv-feat" data-spfeat="' + f.it.id + '" data-spid="' + f.it.id + '">' +
-          '<span class="r-num">#' + f.it.num + '</span>' +
           typeGlyphHtml(f.it, 'feature') +
           '<span class="spv-featname">' + esc(f.it.feature || '(untitled)') + '</span>' +
           '<span class="spv-est">' + ['pri', 'size', 'dur'].map(function (k) { return itemChipHtml(k, f.it, 'data-spact'); }).join('') + '</span></div>' +
@@ -4094,8 +4277,7 @@
     return '<section class="spv-sec" data-spsec="' + sec.key + '">' +
       '<div class="spv-sechd"><h3>' + esc(sec.title) + '</h3>' +
       (sec.dates ? '<span class="spv-secdates">' + esc(sec.dates) + '</span>' : '') +
-      '<span class="pr-lanect"' + (sec.points != null ? ' title="Story points"' : '') + '>' +
-      (sec.points != null ? fmtPts(sec.points) + ' pt' : sec.count) + '</span></div>' +
+      sprCtHtml(sec) + '</div>' +
       '<div class="spv-rows">' + (body || '<div class="spv-empty">Nothing here' + (sprFilterOn() ? ' matches' : '') + '. Drop a row to move it into this sprint.</div>') + '</div>' +
       (sprLevel === 'feature' && !sec.items.length ? '<button class="spv-add" data-spadd="' + sec.key + '"><i data-lucide="plus"></i>' + esc('Add ' + lvl('feature')) + '</button>' : '') +
       '</section>';
@@ -4130,8 +4312,7 @@
         '<i data-lucide="' + (sec.num == null ? 'inbox' : 'calendar-range') + '"></i>' +
         '<span class="spv-sbtxt"><span class="spv-sbname">' + esc(sec.title) + '</span>' +
         (sec.dates ? '<small>' + esc(sec.dates) + '</small>' : '') + '</span>' +
-        '<span class="pr-lanect"' + (sec.points != null ? ' title="Story points"' : '') + '>' +
-        (sec.points != null ? fmtPts(sec.points) + ' pt' : sec.count) + '</span></button>';
+        sprCtHtml(sec) + '</button>';
     }).join('');
     host.innerHTML = '<div class="spv">' +
       '<aside class="spv-side"><div class="spv-sidehd">Sprints</div>' + side + '</aside>' +
@@ -4236,7 +4417,10 @@
       var sec = $('#spvMain .spv-sec[data-spsec="' + sb.dataset.spside + '"]');
       var main = $('#spvMain');
       if (sec && main) {
-        main.scrollTop = sec.offsetTop - main.offsetTop - 8;
+        // land with the sprint heading just under the sticky filter bar,
+        // not hidden behind it
+        var bar = main.querySelector('.pr-bar');
+        main.scrollTop = sec.offsetTop - main.offsetTop - (bar ? bar.offsetHeight : 0);
         sprScroll = main.scrollTop;
         sprSyncSide();
       }
@@ -4326,7 +4510,8 @@
         stX && sprHasOwn(stX) ? { icon: 'corner-down-right', label: 'With feature', fn: function () {
           commit('story with feature', function (s) { RM.moveStoryToSprint(s, cid, sid, null, sid); });
         } } : null,
-        state.team.length ? { icon: 'users', label: 'Assign…', fn: function () { openContextMenu(cx, cy, storyAssignMenuItems(cid, sid)); } } : null,
+        state.team.length ? { icon: 'users', label: 'Assign…', fn: function () { openContextMenu(cx, cy, storyAssignMenuItems(cid, sid), ASSIGN_DD); } } : null,
+        moveStoryFeatureEntry(cx, cy, cid, sid),
         flagMenuEntries(cid, sid)[0], flagMenuEntries(cid, sid)[1] || null,
         { sep: true },
         storyInsertEntries(cid, sid)[0], storyInsertEntries(cid, sid)[1],
@@ -4469,13 +4654,25 @@
     if (window.HeadwayJira) HeadwayJira.renderStatus($('#btnJira'), state);
   }
 
+  // the widest capacity-cell form that fits the week column: ~5.5px per
+  // character in the 9px mono those cells use, with 2px of air each side
+  function capCellText(forms, cellPx) {
+    var room = (cellPx != null ? cellPx : weekPx) - 4;
+    for (var i = 0; i < forms.length; i++) {
+      // fmtPe hands back a number, so the bare-ask form needs coercing
+      var t = String(forms[i]);
+      if (t.length * 5.5 <= room) return t;
+    }
+    return '';
+  }
+
   function renderHeader(laneW) {
     var meta = state.meta;
     var si = RM.sprintInfo(meta);
     var wps = si.wps;
     var sprintW = wps * weekPx;
     var hset = RM.holidayDaySet(meta);
-    var hs = [], hw = [], hc = [];
+    var hs = [], hw = [];
     // sprint boundaries align to the numbering anchor; the first boundary is
     // the one at or before week 0
     var firstB = si.anchorWeek - Math.ceil(si.anchorWeek / wps) * wps;
@@ -4495,31 +4692,60 @@
         '<span class="sp-date">' + dateTxt + '</span>' + numTag + '</div>');
     }
 
-    // capacity row: PEOPLE AVAILABLE per week (fractional when hours or
-    // part-time roles reduce it), colored by size-weighted WIP pressure
+    // the capacity row: ONE row summing every capacity type — each period's
+    // total demand vs total supply (a week each in people, a sprint each in
+    // story points; sprint cells span the sprint cells above). A sum can hide
+    // one type overflowing, so a cell reads over when ANY type is over
+    // (overAny, incl. work of a type nobody supplies); the tooltip lists
+    // each type's numbers.
     var cap = validation.capacity;
-    for (var w = 0; w < meta.numWeeks; w++) {
-      var cell = cap.weeks[w];
-      var avail = cell.cap;
-      var demand = cell.demand;
-      var hn = RM.holidaysInWeek(meta, w, hset);
+    var unitWord = meta.capMode === 'points' ? 'points' : 'people';
+    var bySprint = cap.period === 'sprint';
+    var capRowsHtml = [];
+    var hcc = [];
+    cap.periods.forEach(function (per, pi) {
+      var w = per.w0, nW = per.w1 - per.w0, cellPx = nW * weekPx;
+      var cell = cap.weeks[pi];
+      var hn = 0;
+      for (var hw2 = per.w0; hw2 < per.w1; hw2++) hn += RM.holidaysInWeek(meta, hw2, hset);
       var cls, txt2 = '', title;
-      if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = 'Holiday week'; }
-      else if (cap.teamTotal === 0 || avail === Infinity) {
-        cls = 'idle'; title = 'No roster yet';
-      } else {
-        var over = demand > avail + 1e-9;
-        cls = over ? 'over' : (avail > 0 && demand / avail > 0.85 ? 'mid' : (demand === 0 ? 'idle' : 'ok'));
-        txt2 = weekPx >= 20 ? fmtPe(avail) : '';
-        title = fmtPe(avail) + ' available' +
-          (over ? ' · ' + fmtPe(demand) + ' focus units in flight'
-            : demand ? ' · ' + fmtPe(demand) + ' focus units in flight' : '');
+      if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = bySprint ? 'Holiday weeks' : 'Holiday week'; }
+      else {
+        var ratio = cell.supply > 0 ? cell.demand / cell.supply : (cell.demand > 0 ? Infinity : 0);
+        cls = cell.overAny ? 'over' : (cell.demand === 0 ? 'idle' : (ratio > 0.85 ? 'mid' : 'ok'));
+        // the widest form that actually fits THIS cell's numbers: spaced
+        // demand / supply, then tight, then the ask alone, then nothing.
+        // Measured off the string, not the zoom — a clipped “4 / 0.” reads
+        // as a different number. The tooltip always carries both.
+        var dTxt = fmtPe(cell.demand), sTxt = fmtPe(cell.supply);
+        txt2 = capCellText([dTxt + ' / ' + sTxt, dTxt + '/' + sTxt, dTxt], cellPx);
+        // per type: every type with something asked or supplied this period
+        var parts = [];
+        cap.types.forEach(function (ct) {
+          var tc = cap.rows[ct][pi];
+          if (tc.demand <= 1e-9 && tc.supply <= 1e-9) return;
+          parts.push(ct + ' ' + fmtPe(tc.demand) + ' / ' + fmtPe(tc.supply) +
+            (tc.over ? (tc.supply <= 1e-9 ? ' — no supply, nobody on the roster supplies ' + ct : ' — over') : ''));
+        });
+        title = fmtPe(cell.demand) + ' ' + unitWord + ' asked · ' + fmtPe(cell.supply) + ' available' +
+          (parts.length ? ' · ' + parts.join(' · ') : '');
       }
-      hc.push('<div class="cap-cell ' + cls + (hn && !cell.blackout ? ' part' : '') + '" tabindex="0" data-w="' + w +
-        '" style="left:' + (w * weekPx + 1) + 'px;width:' + (weekPx - 2) + 'px" title="' +
-        esc('Week of ' + RM.fmtShort(RM.weekStartDate(meta, w)) + ': ' + title +
+      var when = !bySprint ? 'Week of ' + RM.fmtShort(RM.weekStartDate(meta, w))
+        : (per.num != null ? 'Sprint ' + per.num + ', ' : '') + RM.fmtShort(RM.weekStartDate(meta, w)) + ' – ' +
+          RM.fmtShort(RM.spanEndDate(meta, w * SPW(), nW * SPW()));
+      // a sprint cell spans its weeks; a click toggles the week under the
+      // pointer (data-w1 marks the span)
+      hcc.push('<div class="cap-cell ' + cls + (hn && !cell.blackout ? ' part' : '') + '" tabindex="0" data-w="' + w +
+        (bySprint ? '" data-w1="' + per.w1 : '') +
+        '" style="left:' + (w * weekPx + 1) + 'px;width:' + (cellPx - 2) + 'px" title="' +
+        esc(when + ': ' + title +
           (hn ? ' · ' + hn + ' holiday day(s)' : '') + ' · click to toggle holiday week') + '">' + txt2 + '</div>');
-    }
+    });
+    capRowsHtml.push('<div class="hdr-line hdr-cap">' +
+      '<div class="hdr-left"><span class="cap-row-lab" title="' +
+      esc((bySprint ? 'Each sprint: ' : 'Each week: ') + unitWord + ' asked / available across every capacity type — Setup → Capacity') + '">' +
+      'Capacity (' + unitWord + ')</span></div>' +
+      '<div class="hdr-lane">' + hcc.join('') + '</div></div>');
     // phase lane above the dates: user-pinned dates win, otherwise the span
     // auto-derives from the phase's scheduled items; overlapping phases stack
     var PH_H = 20;
@@ -4553,9 +4779,7 @@
 
     $('#hdrSprints').innerHTML = hs.join('');
     $('#hdrSprints').style.width = laneW + 'px';
-    $('#hdrCap').innerHTML = hc.join('');
-    $('#capTypeCell').innerHTML =
-      '<span class="cap-lab" title="People available each week (fractional) vs size-weighted work in flight">available</span>';
+    $('#hdrCapRows').innerHTML = capRowsHtml.join('');
     if (window.lucide) lucide.createIcons();
   }
 
@@ -4645,11 +4869,18 @@
   });
 
   // click a capacity cell to toggle that week as a holiday week
-  $('#hdrCap').addEventListener('click', function (e) {
+  $('#hdrCapRows').addEventListener('click', function (e) {
     if (dragConsumedClick) { dragConsumedClick = false; return; }
     var cell = e.target.closest('[data-w]');
     if (!cell) return;
     var w = parseInt(cell.dataset.w, 10);
+    // a sprint-wide cell (points mode): the week under the pointer; a
+    // keyboard click (no pointer position) takes the sprint's first week
+    if (cell.dataset.w1 && e.clientX) {
+      var r = cell.getBoundingClientRect();
+      var off = Math.floor((e.clientX - r.left) / weekPx);
+      if (off > 0) w = Math.min(parseInt(cell.dataset.w1, 10) - 1, w + off);
+    }
     var iso = RM.fmtISO(RM.weekStartDate(state.meta, w));
     var isFull = RM.holidaysInWeek(state.meta, w) === SPW();
     commit('toggle holiday', function (s) {
@@ -4671,6 +4902,11 @@
     var html = [];
     // simplified grid: only sprint boundaries (anchor-aligned) get a line
     var firstB = si.anchorWeek - Math.ceil(si.anchorWeek / si.wps) * si.wps;
+    // sticky group bands are opaque, so they redraw this grid themselves:
+    // publish the pitch and phase the lines use (lane-local pixels)
+    var rs = document.documentElement.style;
+    rs.setProperty('--sprint-px', (si.wps * weekPx) + 'px');
+    rs.setProperty('--sprint-off', (firstB * weekPx) + 'px');
     for (var w = firstB; w <= meta.numWeeks; w += si.wps) {
       if (w < 0) continue;
       html.push('<div class="bg-week sprint" style="left:calc(var(--left-w) + ' + (w * weekPx) + 'px)"></div>');
@@ -4916,7 +5152,7 @@
       var epIco2 = RM.iconForEpic(state, it.epic);
       var fixedContent = {
         size: it.milestone ? '<span class="r-size r-blank"></span>'
-          : '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="Size">' + (it.size ? esc(it.size) : '') + '</span>',
+          : '<span class="r-size' + sizeCls + sizeRoCls(it) + '" tabindex="0" role="button" data-act="size" title="' + sizeChipTitle(it) + '">' + (it.size ? esc(it.size) : '') + '</span>',
         risk: riskChipHtml(),
         duration: it.milestone
           ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone">0w</span>'
@@ -4968,7 +5204,7 @@
       '<div class="row item' + (view === 'scoping' ? ' scope' : '') + (it.milestone ? ' ms' : '') +
       // when one of its stories is the selection, the feature is only the
       // selection's parent — marked, but never in the selected background
-      (isSel(it.id) ? (selStory && selectedId === it.id ? ' sel-parent' : ' selected') : '') + (it.done ? ' done' : '') +
+      (isSel(it.id) ? (selStory && selectedId === it.id ? ' sel-parent' : ' selected') : '') + (it.done ? ' done' : '') + (it.flag ? ' flagged' : '') +
       '" data-id="' + it.id + '">' +
       '<div class="row-left">' +
       '<span class="r-grip" data-act="grip"><i data-lucide="grip-vertical"></i></span>' +
@@ -4989,25 +5225,52 @@
         // top-aligned and wrapping like every other cell
         ? '<div class="r-name sc-name" contenteditable="true" spellcheck="false" aria-label="Feature title">' + esc(it.feature) + '</div>'
         : plNameHtml(it)) +
-      (it.epic && !groupEpic ? '<span class="r-epic" title="' + esc(it.epic) + '">' +
-        (RM.iconForEpic(state, it.epic) ? '<i data-lucide="' + RM.iconForEpic(state, it.epic) + '"></i>' : '') +
-        esc(it.epic) + '</span>' : '') +
+      // no epic tag beside the title: the Epic column (Planning) / Epic
+      // cell (Scoping) carries it when wanted
       '</div>' +
       (view === 'scoping' ? '' : (function () {
         // the planning chips follow the user's column order/visibility
         var chips = {
           size: RM.sizingEnabled(state) && !it.milestone
-            ? '<span class="r-size' + sizeCls + '" tabindex="0" role="button" data-act="size" title="Size">' + (it.size ? esc(it.size) : '·') + '</span>'
+            ? '<span class="r-size' + sizeCls + sizeRoCls(it) + '" tabindex="0" role="button" data-act="size" title="' + sizeChipTitle(it) + '">' + (it.size ? esc(it.size) : '·') + '</span>'
             : '<span class="r-size r-blank"></span>',
           pri: RM.priorityEnabled(state) && !it.milestone
             ? '<span class="r-risk pri' + (priChipHasValue(it) ? ' has-risk' : '') + priTierClass(it.priority) + '" tabindex="0" role="button" data-act="priority" title="' + esc(priChipTitle(it)) + '">' + (priChipContent(it) || '·') + '</span>'
-            : '<span class="r-risk r-blank"></span>',
+            : '<span class="r-risk pri r-blank"></span>',
           risk: riskChipHtml(),
           dur: it.milestone
             ? '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Milestone">◆</span>'
             : '<span class="r-wk editable" tabindex="0" role="button" data-act="wk" title="Duration">' + totalWeeks(it) + '</span>',
           asg: '<span class="r-asg" tabindex="0" role="button" data-act="asg" title="Assignees">' +
-            (avatarStack(it.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>'
+            (avatarStack(it.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>',
+          cap: state.meta.capacityEnabled && RM.planLevel(state) === 'feature' && !it.milestone
+            ? '<span class="r-cap' + (RM.itemCapType(state, it) ? '' : ' empty') + (itemCapInherited(it) ? ' inherited' : '') + '" tabindex="0" role="button" data-act="cap" title="' +
+              esc(itemCapInherited(it) ? CAP_INHERIT_TITLE : 'Capacity type' + (RM.itemCapType(state, it) ? '\nNow: ' + RM.itemCapType(state, it) : '')) + '">' +
+              (RM.itemCapType(state, it) ? esc(RM.itemCapType(state, it)) : '·') + '</span>'
+            : '<span class="r-cap r-blank"></span>',
+          mult: state.meta.capacityEnabled && RM.planLevel(state) === 'feature' && !it.milestone && state.meta.capMode !== 'points'
+            ? '<span class="r-mult editable' + ((it.capMult || 1) === 1 ? ' one' : '') + '" tabindex="0" role="button" data-act="mult" title="Capacity multiplier — people this needs at once">×' + fmtPe(it.capMult || 1) + '</span>'
+            : '<span class="r-mult r-blank"></span>',
+          // the fixed fields Scoping also shows — same chips, same editors.
+          // milestones carry a start date and nothing else here.
+          ws: it.milestone ? '<span class="r-ws-col r-blank"></span>'
+            : '<span class="r-ws-col" tabindex="0" role="button" data-act="ws" title="Workstream">' +
+              '<span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' +
+              (it.workstream ? esc(shorten(it.workstream, 18))
+                : '<i class="dws">' + esc(shorten(RM.defaultWsName(state), 18)) + '</i>') + '</span>',
+          epic: it.milestone ? '<span class="r-epic-col r-blank"></span>'
+            : '<span class="r-epic-col" tabindex="0" role="button" data-act="epic" title="Epic">' +
+              (RM.iconForEpic(state, it.epic) ? '<i data-lucide="' + RM.iconForEpic(state, it.epic) + '"></i>' : '') +
+              (it.epic ? esc(shorten(it.epic, 18)) : '') + '</span>',
+          start: '<span class="r-date-col" tabindex="0" role="button" data-act="startd" title="Start date">' +
+            (isScheduled(it) ? esc(RM.fmtShort(RM.dayToDate(meta, it.startDay))) : '') + '</span>',
+          deadline: it.milestone ? '<span class="r-date-col dl-chip r-blank"></span>' : (function () {
+            var lateP = RM.pastDeadline(meta, it);
+            return '<span class="r-date-col dl-chip' + (lateP ? ' late' : '') +
+              '" tabindex="0" role="button" data-act="deadline" title="' +
+              esc('Hard deadline' + (lateP ? '\nThe item runs past its deadline' : '')) + '">' +
+              (it.deadline ? esc(RM.fmtShort(RM.parseISO(it.deadline))) : '') + '</span>';
+          })()
         };
         return plColsVisible().map(function (k) { return chips[k]; }).join('');
       })()) +
@@ -5021,7 +5284,7 @@
       it.stories.forEach(function (st) {
         var stSched = st.startDay != null && st.durDays != null;
         html.push(
-          '<div class="row story' + (selStory === st.id ? ' selected' : '') +
+          '<div class="row story' + (selStory === st.id ? ' selected' : '') + (st.flag ? ' flagged' : '') +
           '" data-story="' + st.id + '" data-id="' + it.id + '">' +
           '<div class="row-left"><span class="st-pad"><span class="st-grip" title="Drag to reorder or move to another feature"><i data-lucide="grip-vertical"></i></span></span>' +
           // the story number sits in the same column as the feature numbers above
@@ -5037,8 +5300,34 @@
               return '<span class="r-asg" tabindex="0" role="button" data-act="st-asg" title="Story assignees">' +
                 (avatarStack(st.assignees, 2) || '<i data-lucide="user-plus"></i>') + '</span>';
             }
+            // workstream and epic belong to the feature: shown rolled up,
+            // dimmed and italic, and never clickable on a story row
+            if (k === 'ws') {
+              return '<span class="r-ws-col roll" title="Rolls up from the feature">' +
+                '<span class="dd-dot" style="background:#' + RM.colorForWs(state, it.workstream) + '"></span>' +
+                esc(shorten(it.workstream || RM.defaultWsName(state), 18)) + '</span>';
+            }
+            if (k === 'epic') {
+              return '<span class="r-epic-col roll" title="Rolls up from the feature">' +
+                (RM.iconForEpic(state, it.epic) ? '<i data-lucide="' + RM.iconForEpic(state, it.epic) + '"></i>' : '') +
+                (it.epic ? esc(shorten(it.epic, 18)) : '') + '</span>';
+            }
+            // the story's own dates, on the same calendars Scoping opens
+            if (k === 'start') {
+              return '<span class="r-date-col" tabindex="0" role="button" data-act="st-startd" title="Story start">' +
+                (st.startDay != null ? esc(RM.fmtShort(RM.dayToDate(meta, st.startDay))) : '') + '</span>';
+            }
+            if (k === 'deadline') {
+              var stLateP = RM.pastDeadline(meta, st);
+              return '<span class="r-date-col dl-chip' + (stLateP ? ' late' : '') +
+                '" tabindex="0" role="button" data-act="st-dl" title="' +
+                esc('Story deadline' + (stLateP ? '\nThe story runs past its deadline' : '')) + '">' +
+                (st.deadline ? esc(RM.fmtShort(RM.parseISO(st.deadline))) : '') + '</span>';
+            }
             // keep the column aligned even when the story scale is off
-            return storyChipHtml(k, st, 'data-act') || '<span class="' + (k === 'size' ? 'r-size' : k === 'dur' ? 'r-wk' : 'r-risk') + ' r-blank"></span>';
+            return storyChipHtml(k, st, 'data-act') ||
+              '<span class="' + (k === 'size' ? 'r-size' : k === 'dur' ? 'r-wk' : k === 'cap' ? 'r-cap'
+                : k === 'mult' ? 'r-mult' : k === 'pri' ? 'r-risk pri' : 'r-risk') + ' r-blank"></span>';
           }).join('') + (st.flag ? flagBadgeHtml(st) : '<span class="r-warn"></span>')) +
           '</div>' +
           (view === 'scoping'
@@ -5135,6 +5424,11 @@
         (p.bucket ? '<span class="band-bucket-tag">backlog</span>' : '') +
         '<button class="band-add" data-act="phase-additem" title="' + esc('Add a ' + lvl('feature').toLowerCase() + ' to this phase') + '">+ ' + esc(lvl('feature').toLowerCase()) + '</button>' +
         '<button class="band-edit" data-act="phase-edit" title="Edit phase">edit</button>' +
+        (p.bucket ? '' : (function () {
+          var as = autoPhaseStatus(p.id);
+          return '<button class="band-zap" data-act="phase-auto" title="' + esc(as.tip) + '"' + (as.disabled ? ' disabled' : '') +
+            '><i data-lucide="zap"></i></button>';
+        })()) +
         '</div>' +
         '<div class="row-lane">' + bandLane + '</div>' +
         '</div>');
@@ -5230,8 +5524,13 @@
   }
   function sizeMatches(it) {
     if (!it.size || !isScheduled(it)) return true;
+    // a derived size is whatever the bar says it is — never a mismatch
+    if (RM.sizeRollup(state)) return true;
+    // at the Stories level a feature whose bar is the hull of its scheduled
+    // stories draws from the stories, not from its size
+    if (RM.planLevel(state) === 'story' && (it.stories || []).some(function (st) { return st.startDay != null && st.durDays != null; })) return true;
     var work = RM.workInSpan(state.meta, it.startDay, it.durDays);
-    return work === RM.sizeDays(state, it.size);
+    return work === RM.itemSizeDays(state, it, snapOpts());
   }
 
   // ------------------------------------------------------------ arrows
@@ -5399,6 +5698,12 @@
     var ae = document.activeElement;
     var refocus = reloadingDoc && ae && panel && panel.contains(ae) ? panelFieldSelector(ae) : null;
     renderPanelInner();
+    // #panelPeek floats over the top-right corner of the board, which is where
+    // the assistant drawer's close button lands too. Flag the state on <body>
+    // so CSS can pad .ai-head clear of the toggle (Prioritizing hides the
+    // toggle in CSS, so it never counts).
+    var peekEl = $('#panelPeek');
+    document.body.classList.toggle('peek-on', !!(peekEl && !peekEl.hidden) && view !== 'prio');
     if (panel && !panel.hidden && keepTop) panel.scrollTop = keepTop;
     if (refocus) {
       var el = panel.querySelector(refocus);
@@ -5466,10 +5771,14 @@
       (it.epic ? esc(it.epic) : '<i>— none —</i>'), null, 'Epic');
     var typeDd = ddButton('teamType', it.teamType ? esc(it.teamType) : 'Any role', null, 'Which role works this item');
 
-    var sizeBtns = RM.sizeOrderOf(state).map(function (s) {
-      return '<button data-f="size" data-v="' + esc(s) + '"' + (it.size === s ? ' class="on"' : '') +
-        ' title="' + fmtDays(RM.sizeDays(state, s)) + '">' + esc(s) + '</button>';
-    }).join('');
+    var sizeBtns = RM.sizeRollup(state)
+      ? '<span class="p-rollup" title="Sum of the story points">' +
+        (it.size ? esc(it.size) + ' pt <small>' + esc(fmtDays(RM.rollupDays(state, it) || 0)) + '</small>' : '<i>no sized ' + esc(lvl('story', true).toLowerCase()) + '</i>') +
+        '</span>'
+      : RM.sizeOrderOf(state).map(function (s) {
+        return '<button data-f="size" data-v="' + esc(s) + '"' + (it.size === s ? ' class="on"' : '') +
+          ' title="' + fmtDays(RM.sizeDays(state, s)) + '">' + esc(s) + '</button>';
+      }).join('');
     var riskBtns = ['<button data-f="riskSize" data-v=""' + (!it.risk ? ' class="on"' : '') + ' title="Not set">None</button>']
       .concat(RM.riskOrderOf(state).map(function (s) {
         return '<button data-f="riskSize" data-v="' + s + '"' + (it.risk === s ? ' class="on"' : '') +
@@ -5634,8 +5943,10 @@
       sec('schedule', it.milestone || !RM.sizingEnabled(state) ? 'Schedule' : 'Size &amp; schedule', '',
         (it.milestone || !RM.sizingEnabled(state) ? '' :
           '<label class="p-lab">Size</label>' +
-          '<div class="seg" style="margin-bottom:8px">' + sizeBtns +
-          '<button data-f="size" data-v=""' + (!it.size ? ' class="on"' : '') + ' title="No size">—</button></div>') +
+          (RM.sizeRollup(state)
+            ? '<div style="margin-bottom:8px">' + sizeBtns + '</div>'
+            : '<div class="seg" style="margin-bottom:8px">' + sizeBtns +
+              '<button data-f="size" data-v=""' + (!it.size ? ' class="on"' : '') + ' title="No size">—</button></div>')) +
         scheduleInfo +
         riskInfo + priInfo +
         '<div class="p-row" style="margin-top:10px">' +
@@ -5644,7 +5955,20 @@
         '</div>') +
 
       sec('people', 'People', '',
-        '<label class="p-lab">Role</label>' + typeDd +
+        (state.meta.capacityEnabled && RM.planLevel(state) === 'feature' && !it.milestone
+          ? '<label class="p-lab">Capacity type</label>' +
+            ddButton('icap',
+              RM.itemCapType(state, it)
+                ? (itemCapInherited(it) ? '<span class="inherited">' + esc(RM.itemCapType(state, it)) + '</span>' : esc(RM.itemCapType(state, it)))
+                : '<i>— general —</i>',
+              null,
+              itemCapInherited(it) ? CAP_INHERIT_TITLE : 'What this feature drains at the feature planning level') +
+            (state.meta.capMode !== 'points'
+              ? '<label class="p-lab" style="margin-top:10px">Multiplier</label>' +
+                '<input type="number" min="0.1" step="0.5" data-f="capMult" value="' + (it.capMult || 1) + '" style="width:80px" title="People this feature needs at once">'
+              : '') +
+            '<label class="p-lab" style="margin-top:10px">Role</label>'
+          : '<label class="p-lab">Role</label>') + typeDd +
         '<label class="p-lab" style="margin-top:10px">Assignees</label>' +
         '<div class="chips">' +
         (it.assignees || []).map(function (aid) {
@@ -5791,7 +6115,13 @@
       sec2('fields', 'Fields', fieldEds) +
       (estimate ? sec2('estimate', 'Estimate', estimate) : '') +
       sec2('people', 'People',
-        '<label class="p-lab">Assignees</label>' +
+        '<label class="p-lab">Capacity type</label>' +
+        ddButton('stcap', st.capType ? esc(st.capType) : '<i>\u2014 general \u2014</i>', null, 'What this story drains and who can take it') +
+        (state.meta.capacityEnabled && state.meta.capMode !== 'points'
+          ? '<label class="p-lab" style="margin-top:10px">Multiplier</label>' +
+            '<input type="number" min="0.1" step="0.5" data-stf="capMult" value="' + (st.capMult || 1) + '" style="width:80px" title="People this story needs at once">'
+          : '') +
+        '<label class="p-lab" style="margin-top:10px">Assignees</label>' +
         '<div class="chips">' +
         (st.assignees || []).map(function (aid) {
           var mm = memberById(aid);
@@ -5885,6 +6215,74 @@
       (dot ? '<span class="dd-dot" style="background:' + dot + '"></span>' : '') +
       '<span class="dd-label">' + label + '</span><i data-lucide="chevron-down"></i></button>';
   }
+  // one menu renderer for dropdowns and context menus. `m.pre` is raw HTML
+  // drawn before the label (an avatar, a type glyph); `opts.search` adds a
+  // filter box at the top (a combobox: typing narrows the rows, Enter picks
+  // the first match, arrows walk the visible rows)
+  function menuListHtml(items, minW, opts) {
+    var search = opts && opts.search
+      ? '<input class="menu-search" type="text" placeholder="' + esc(opts.search) + '" spellcheck="false" autocomplete="off">' : '';
+    return '<div class="menu-list' + (search ? ' has-search' : '') + '"' + (minW ? ' style="min-width:' + minW + 'px"' : '') + '>' +
+      search + items.map(function (m, i) {
+        if (m.sep) return '<div class="menu-sep"></div>';
+        return '<button data-mi="' + i + '"' + (m.disabled ? ' disabled' : '') + (m.title ? ' title="' + esc(m.title) + '"' : '') + (m.checked ? ' class="on"' : '') + '>' +
+          (m.dot ? '<span class="dd-dot" style="background:' + m.dot + '"></span>' : '') +
+          (m.pre || '') +
+          (m.icon ? '<i data-lucide="' + esc(m.icon) + '"></i>' : '') +
+          '<span>' + m.label + '</span>' +
+          (m.actions ? '<span class="mi-acts">' + m.actions.map(function (a, j) {
+            return '<span class="mi-act' + (a.on ? ' on' : '') + '" data-ma="' + i + ':' + j +
+              '" title="' + a.title + '"><i data-lucide="' + a.icon + '"></i></span>';
+          }).join('') + '</span>' : '')
+          +
+          (m.edit ? '<span class="mi-edit" data-me="' + i + '" title="Edit"><i data-lucide="pencil"></i></span>' : '') +
+          (m.checked && !m.actions ? '<i data-lucide="check" class="mi-check"></i>' : '') +
+          '</button>';
+      }).join('') + '</div>';
+  }
+  // keyboard + search wiring shared by both menu kinds
+  function wireMenu(host, items) {
+    var btns = $$('.menu-list [data-mi]', host);
+    var visible = function () { return btns.filter(function (b) { return !b.hidden; }); };
+    var inp = host.querySelector('.menu-search');
+    if (inp) {
+      inp.addEventListener('input', function () {
+        var q = inp.value.trim().toLowerCase();
+        btns.forEach(function (b) { b.hidden = !!q && b.textContent.toLowerCase().indexOf(q) === -1; });
+        $$('.menu-sep', host).forEach(function (sp) { sp.hidden = !!q; });
+      });
+      inp.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          var first = visible()[0];
+          if (first) first.click();
+        } else if (ev.key === 'ArrowDown') {
+          ev.preventDefault();
+          var f = visible()[0];
+          if (f) f.focus({ preventScroll: true });
+        } else if (ev.key === 'Escape') {
+          ev.stopPropagation();
+          closePopover();
+        }
+      });
+      inp.focus({ preventScroll: true });
+    } else {
+      // focus lands on the current choice
+      var start = host.querySelector('.menu-list button.on') || btns[0];
+      if (start) start.focus({ preventScroll: true });
+    }
+    host.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
+      if (ev.target === inp) return;
+      ev.preventDefault();
+      var vis = visible();
+      var i2 = vis.indexOf(document.activeElement);
+      var n = ev.key === 'ArrowDown' ? i2 + 1 : i2 - 1;
+      if (n < 0) { if (inp) { inp.focus(); return; } n = vis.length - 1; }
+      if (n >= vis.length) n = 0;
+      if (vis[n]) vis[n].focus({ preventScroll: true });
+    });
+  }
   function openDropdown(anchor, items, ddOpts) {
     var r = anchor.getBoundingClientRect();
     // remember which chip opened this so focus can return after the re-render
@@ -5900,36 +6298,10 @@
         if (el && el.focus) el.focus({ preventScroll: true });
       });
     }
-    var html = '<div class="menu-list" style="min-width:' + Math.max((ddOpts && ddOpts.minW) || 210, Math.round(r.width)) + 'px">' +
-      items.map(function (m, i) {
-        if (m.sep) return '<div class="menu-sep"></div>';
-        return '<button data-mi="' + i + '"' + (m.checked ? ' class="on"' : '') + '>' +
-          (m.dot ? '<span class="dd-dot" style="background:' + m.dot + '"></span>' : '') +
-          (m.icon ? '<i data-lucide="' + esc(m.icon) + '"></i>' : '') +
-          '<span>' + m.label + '</span>' +
-          (m.actions ? '<span class="mi-acts">' + m.actions.map(function (a, j) {
-            return '<span class="mi-act' + (a.on ? ' on' : '') + '" data-ma="' + i + ':' + j +
-              '" title="' + a.title + '"><i data-lucide="' + a.icon + '"></i></span>';
-          }).join('') + '</span>' : '') +
-          (m.edit ? '<span class="mi-edit" data-me="' + i + '" title="Edit"><i data-lucide="pencil"></i></span>' : '') +
-          (m.checked && !m.actions ? '<i data-lucide="check" class="mi-check"></i>' : '') +
-          '</button>';
-      }).join('') + '</div>';
+    var html = menuListHtml(items, Math.max((ddOpts && ddOpts.minW) || 210, Math.round(r.width)), ddOpts);
     openPopover(r.left, r.bottom + 4, html, function (host) {
       if (window.lucide) lucide.createIcons();
-      // keyboard: focus lands on the current choice; arrows move; Enter picks
-      var btns = $$('.menu-list [data-mi]', host);
-      var start = host.querySelector('.menu-list button.on') || btns[0];
-      if (start) start.focus({ preventScroll: true });
-      host.addEventListener('keydown', function (ev) {
-        if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
-        ev.preventDefault();
-        var i2 = btns.indexOf(document.activeElement);
-        var n = ev.key === 'ArrowDown' ? i2 + 1 : i2 - 1;
-        if (n < 0) n = btns.length - 1;
-        if (n >= btns.length) n = 0;
-        btns[n].focus({ preventScroll: true });
-      });
+      wireMenu(host, items);
       host.addEventListener('click', function (ev) {
         var ma = ev.target.closest('[data-ma]');
         if (ma) {
@@ -6361,35 +6733,19 @@
         return;
       }
       if (which === 'stassign' && selStory) {
-        var stAsgId = selStory;
-        openDropdown(dd, state.team.map(function (mm) {
-          var onS = ((storyById(it, stAsgId) || {}).assignees || []).indexOf(mm.id) !== -1;
-          return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onS, fn: function () {
-            commit('story assignees', function (s) {
-              var st2 = storyById(RM.itemById(s, it.id) || {}, stAsgId);
-              if (!st2) return;
-              st2.assignees = st2.assignees || [];
-              var atS = st2.assignees.indexOf(mm.id);
-              if (atS === -1) st2.assignees.push(mm.id); else st2.assignees.splice(atS, 1);
-            });
-          } };
-        }));
+        openDropdown(dd, storyAssignMenuItems(it.id, selStory), ASSIGN_DD);
+        return;
+      }
+      if (which === 'stcap' && selStory) {
+        openDropdown(dd, storyCapMenuItems(it.id, selStory));
+        return;
+      }
+      if (which === 'icap') {
+        openDropdown(dd, itemCapMenuItems(it.id));
         return;
       }
       if (which === 'assign') {
-        var aItems = state.team.map(function (mm) {
-          var onA = (it.assignees || []).indexOf(mm.id) !== -1;
-          return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onA, fn: function () {
-            commit('assignees', function (s) {
-              var t = RM.itemById(s, it.id);
-              t.assignees = t.assignees || [];
-              var at = t.assignees.indexOf(mm.id);
-              if (at === -1) t.assignees.push(mm.id);
-              else t.assignees.splice(at, 1);
-            });
-          } };
-        });
-        openDropdown(dd, aItems);
+        openDropdown(dd, assignMenuItems(it.id), ASSIGN_DD);
         return;
       }
       if (which === 'teamType') {
@@ -6427,6 +6783,7 @@
     var f = btn.dataset.f;
     if (f === 'close') { select(null); return; }
     if (f === 'size') {
+      if (sizeLocked(it)) return;
       var v = btn.dataset.v || null;
       commit('size', function (s) {
         var t = RM.itemById(s, it.id);
@@ -6459,7 +6816,12 @@
       return;
     }
     if (f === 'snap') {
-      var r = RM.snapEarliest(state, it.id);
+      // locked and finished rows never move (same rule as the context menu)
+      if (it.locked || it.done) {
+        toast(it.locked ? 'Locked — unlock it to place it' : 'Already done — nothing to place', 'err');
+        return;
+      }
+      var r = RM.placeUnit(state, it.id, null, snapOpts());
       if (r.changed) {
         replaceState('snap', r.state);
         toast('Snapped #' + it.num + ' to its earliest open slot' + (r.note ? ' — ' + r.note : ''));
@@ -6500,7 +6862,7 @@
         t.size = null; t.priority = null; // milestones carry neither
       } else if (t.durDays != null) {
         // back to a bar: restore a duration from the size (else one week)
-        var days = RM.sizeDays(s, t.size) || 5;
+        var days = RM.itemSizeDays(s, t, snapOpts()) || 5;
         t.durDays = RM.stretchSpan(s.meta, t.startDay, days);
       }
     });
@@ -6604,7 +6966,15 @@
         var swv = Math.max(0.2, parseFloat(sval) || 1);
         commit('story duration', function (s) {
           var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
-          if (st2 && st2.startDay != null) st2.durDays = Math.max(1, Math.round(swv * SPW()));
+          if (st2 && st2.startDay != null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, snapUpDays(Math.max(1, Math.round(swv * SPW())), 'story'));
+        });
+        return;
+      }
+      if (stf === 'capMult') {
+        var smv = parseFloat(sval);
+        commit('story multiplier', function (s) {
+          var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
+          if (st2) st2.capMult = isFinite(smv) && smv > 0 ? smv : 1;
         });
         return;
       }
@@ -6700,6 +7070,13 @@
       var wv = Math.max(0.2, parseFloat(val) || 1);
       commit('duration', function (s) {
         RM.itemById(s, it.id).durDays = Math.max(1, Math.round(wv * SPW()));
+      });
+      return;
+    }
+    if (f === 'capMult') {
+      var mvv = parseFloat(val);
+      commit('multiplier', function (s) {
+        RM.itemById(s, it.id).capMult = isFinite(mvv) && mvv > 0 ? mvv : 1;
       });
       return;
     }
@@ -6931,6 +7308,8 @@
         });
       } else if (act && act.dataset.act === 'phase-edit') {
         phaseModal(phase.id);
+      } else if (act && act.dataset.act === 'phase-auto') {
+        if (!act.disabled) autoTimelinePhase(phase.id);
       } else if (act && act.dataset.act === 'phase-additem') {
         addFeature(phase.id);
       }
@@ -6950,7 +7329,7 @@
         return;
       } else if (act.dataset.act === 'st-asg') {
         if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
-        openDropdown(act, storyAssignMenuItems(itemId, stId));
+        openDropdown(act, storyAssignMenuItems(itemId, stId), ASSIGN_DD);
       } else if (act.dataset.act === 'st-startd') {
         var stObjD = storyById(it, stId);
         openCalendar(act, stObjD && stObjD.startDay != null ? RM.fmtISO(RM.dayToDate(state.meta, stObjD.startDay)) : '',
@@ -6962,7 +7341,7 @@
               var sd2 = RM.dateToDay(s.meta, RM.parseISO(iso));
               if (sd2 == null) return;
               st2.startDay = Math.max(0, sd2);
-              if (st2.durDays == null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, Math.max(1, RM.storyEffortDays(s, st2)));
+              if (st2.durDays == null) st2.durDays = RM.stretchSpan(s.meta, st2.startDay, snapUpDays(Math.max(1, RM.storyEffortDays(s, st2)), 'story'));
             });
           }, { allowClear: true, clearLabel: 'Unschedule' });
       } else if (act.dataset.act === 'st-dl') {
@@ -7080,10 +7459,11 @@
         }
         case 'asg': {
           if (!state.team.length) { toast('Add people in the Resources panel first'); return; }
-          openDropdown(act, assignMenuItems(itemId));
+          openDropdown(act, assignMenuItems(itemId), ASSIGN_DD);
           return;
         }
         case 'size': {
+          if (sizeLocked(it)) return;
           openDropdown(act, [{ label: '<i>no size</i>', checked: !it.size, fn: function () {
             setItemSize(itemId, null);
           } }].concat(RM.sizeOrderOf(state).map(function (sz) {
@@ -7104,13 +7484,23 @@
           })));
           return;
         }
+        case 'cap': {
+          openDropdown(act, itemCapMenuItems(itemId));
+          return;
+        }
+        case 'mult': {
+          inlineMultEditor(act, it.capMult, function (v) {
+            commit('multiplier', function (s) { RM.itemById(s, itemId).capMult = v; });
+          });
+          return;
+        }
         case 'epic': {
           openDropdown(act, setEpicMenu(itemId, true));
           return;
         }
         case 'ws': {
           openDropdown(act, wsMenuItems(itemId, function () {
-            return rowsEl.querySelector('.row[data-id="' + itemId + '"] .r-ws');
+            return rowsEl.querySelector('.row[data-id="' + itemId + '"] .r-ws, .row[data-id="' + itemId + '"] .r-ws-col');
           }));
           return;
         }
@@ -7202,7 +7592,7 @@
     var it = RM.itemById(state, itemId);
     return state.team.map(function (mm) {
       var onA = (it.assignees || []).indexOf(mm.id) !== -1;
-      return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onA, fn: function () {
+      return { pre: avatarHtml(mm, 'sm'), label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onA, fn: function () {
         commit('assignees', function (s) {
           var t = RM.itemById(s, itemId);
           t.assignees = t.assignees || [];
@@ -7214,12 +7604,16 @@
     });
   }
 
+  // every assignee picker is the same searchable list of avatars
+  var ASSIGN_DD = { search: 'Search people\u2026' };
   // shared by the panel's story-assignee dropdown and the Sprinting story chip
   function storyAssignMenuItems(itemId, stId) {
     var it = RM.itemById(state, itemId);
-    return state.team.map(function (mm) {
+    // only people supplying the story's capacity type (everyone when it has
+    // none, or nobody supplies it)
+    return RM.assignableFor(state, storyById(it, stId)).map(function (mm) {
       var onSA = ((storyById(it, stId) || {}).assignees || []).indexOf(mm.id) !== -1;
-      return { label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onSA, fn: function () {
+      return { pre: avatarHtml(mm, 'sm'), label: esc(mLabel(mm)) + (mSub(mm) ? ' <small>' + esc(mSub(mm)) + '</small>' : ''), checked: onSA, fn: function () {
         commit('story assignees', function (s) {
           var st2 = storyById(RM.itemById(s, itemId) || {}, stId);
           if (!st2) return;
@@ -7233,7 +7627,19 @@
   }
 
   // set size / risk from the chip dropdowns
+  // under the rollup scheme feature sizes derive from the stories: every
+  // size editor says so instead of opening
+  function sizeLocked(it) {
+    if (!RM.sizeRollup(state)) return false;
+    toast(lvl('feature') + ' sizes roll up from ' + lvl('story', true).toLowerCase() + ' \u2014 size the ' + lvl('story', true).toLowerCase() + ' instead');
+    return true;
+  }
+  function sizeRoCls() { return RM.sizeRollup(state) ? ' ro' : ''; }
+  function sizeChipTitle() {
+    return RM.sizeRollup(state) ? 'Size (sum of story points)' : 'Size';
+  }
   function setItemSize(itemId, sz) {
+    if (sizeLocked(RM.itemById(state, itemId))) return;
     commit('size', function (s) {
       var t = RM.itemById(s, itemId);
       t.size = sz;
@@ -7315,6 +7721,13 @@
         { icon: 'plus', label: 'New phase…', fn: function () { phaseModal(null); } },
         { sep: true },
         { icon: 'pencil', label: 'Edit phase…', fn: function () { phaseModal(phaseId); } },
+        (function () {
+          var ph = state.phases.filter(function (p) { return p.id === phaseId; })[0];
+          if (!ph || ph.bucket) return null;
+          var as = autoPhaseStatus(phaseId);
+          return { icon: 'zap', label: 'Auto timeline', disabled: as.disabled, title: as.tip,
+            fn: function () { autoTimelinePhase(phaseId); } };
+        })(),
         { icon: 'trash-2', label: 'Delete phase…', fn: function () { deletePhaseConfirm(phaseId); } }
       ];
     } else if (rowEl.dataset.kind === 'eband') {
@@ -7342,10 +7755,12 @@
             if (st) { st.startDay = null; st.durDays = null; }
           });
         } } : null,
+        placeEntry(stmItemId, stmId),
         { icon: RM.typeOf(state, stm, 'story').icon, label: 'Type: ' + esc(RM.typeOf(state, stm, 'story').label) + '…', fn: function () {
           openContextMenu(cx, cy, typeMenuItems('story', stm.type, function (k) { setStoryType(stmItemId, stmId, k); }));
         } },
         flagMenuEntries(stmItemId, stmId)[0], flagMenuEntries(stmItemId, stmId)[1] || null,
+        moveStoryFeatureEntry(cx, cy, stmItemId, stmId),
         { sep: true },
         storyInsertEntries(stmItemId, stmId)[0], storyInsertEntries(stmItemId, stmId)[1],
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(stmItemId, stmId); } },
@@ -7373,6 +7788,7 @@
         { icon: 'plus', label: 'New phase…', fn: function () { phaseModal(null); } },
         { sep: true },
         { icon: 'folder-input', label: 'Move to phase…', fn: function () { openContextMenu(cx, cy, movePhaseMenu(itemId)); } },
+        placeEntry(itemId, null),
         { icon: 'tag', label: 'Set epic…', fn: function () { openContextMenu(cx, cy, setEpicMenu(itemId, false)); } },
         { icon: RM.typeOf(state, it, 'feature').icon, label: 'Type: ' + esc(RM.typeOf(state, it, 'feature').label) + '…', fn: function () {
           openContextMenu(cx, cy, typeMenuItems('feature', it.type, function (k) { setItemType(itemId, k); }));
@@ -7380,7 +7796,7 @@
         state.meta.workstreamsEnabled
           ? { icon: 'layers', label: 'Set workstream…', fn: function () {
               openContextMenu(cx, cy, wsMenuItems(itemId, function () {
-                return rowsEl.querySelector('.row[data-id="' + itemId + '"] .r-ws');
+                return rowsEl.querySelector('.row[data-id="' + itemId + '"] .r-ws, .row[data-id="' + itemId + '"] .r-ws-col');
               }));
             } }
           : null,
@@ -7410,19 +7826,12 @@
     openContextMenu(cx, cy, items);
   });
 
-  function openContextMenu(x, y, items) {
+  function openContextMenu(x, y, items, opts) {
     items = (items || []).filter(Boolean); // builders leave null for entries that do not apply
-    var html = '<div class="menu-list">' + items.map(function (m, i) {
-      if (m.sep) return '<div class="menu-sep"></div>';
-      return '<button data-mi="' + i + '"' + (m.checked ? ' class="on"' : '') + '>' +
-        (m.dot ? '<span class="dd-dot" style="background:' + m.dot + '"></span>' : '') +
-        (m.icon ? '<i data-lucide="' + esc(m.icon) + '"></i>' : '') +
-        '<span>' + m.label + '</span>' +
-        (m.checked ? '<i data-lucide="check" class="mi-check"></i>' : '') +
-        '</button>';
-    }).join('') + '</div>';
+    var html = menuListHtml(items, 0, opts);
     openPopover(x, y, html, function (host) {
       if (window.lucide) lucide.createIcons();
+      if (opts && opts.search) wireMenu(host, items);
       host.addEventListener('click', function (ev) {
         var mi = ev.target.closest('[data-mi]');
         if (!mi) return;
@@ -7444,6 +7853,8 @@
     if (selStory) {
       var stMoreId = selStory;
       openContextMenu(e.clientX, e.clientY, [
+        moveStoryFeatureEntry(e.clientX, e.clientY, it.id, stMoreId),
+        { sep: true },
         storyInsertEntries(it.id, stMoreId)[0], storyInsertEntries(it.id, stMoreId)[1],
         flagMenuEntries(it.id, stMoreId)[0], flagMenuEntries(it.id, stMoreId)[1] || null,
         { icon: 'copy', label: 'Duplicate story', fn: function () { duplicateStory(it.id, stMoreId); } },
@@ -7606,6 +8017,33 @@
     } }]);
   }
   // story variant: a sprint gives the story its own timeline; "With feature" drops it
+  // "Move to feature…": every other feature, searchable by title; the story
+  // lands at the end of the target's story list and the selection follows
+  function moveStoryToFeature(itemId, stId, toItemId) {
+    if (toItemId === itemId) return;
+    commit('move story', function (s) {
+      var from = RM.itemById(s, itemId);
+      var st = from && (from.stories || []).filter(function (x) { return x.id === stId; })[0];
+      var to = RM.itemById(s, toItemId);
+      if (!st || !to || to.milestone) return;
+      from.stories = from.stories.filter(function (x) { return x.id !== stId; });
+      to.stories = to.stories || [];
+      to.stories.push(st);
+      if (selStory === stId) selectedId = toItemId;
+    });
+  }
+  function moveStoryFeatureMenu(itemId, stId) {
+    return state.items.filter(function (o) { return !o.milestone && o.id !== itemId; }).map(function (o) {
+      var ph = phaseOf(o);
+      return { pre: typeGlyphHtml(o, 'feature'), label: esc(o.feature || '(untitled)') + (ph ? ' <small>' + esc(ph.name || '') + '</small>' : ''),
+        fn: function () { moveStoryToFeature(itemId, stId, o.id); } };
+    });
+  }
+  function moveStoryFeatureEntry(cx, cy, itemId, stId) {
+    return { icon: 'folder-input', label: esc('Move to ' + lvl('feature').toLowerCase() + '\u2026'), fn: function () {
+      openContextMenu(cx, cy, moveStoryFeatureMenu(itemId, stId), { search: 'Search ' + lvl('feature').toLowerCase() + 's\u2026' });
+    } };
+  }
   function moveStorySprintMenu(itemId, stId) {
     var st = storyById(RM.itemById(state, itemId) || {}, stId);
     var cur = st && sprHasOwn(st) ? sprFirstNum(st) : null;
@@ -7682,6 +8120,7 @@
       var it = RM.normalizeState({
         meta: s.meta, phases: s.phases,
         items: [{ id: newId, num: RM.nextNum(s), phaseId: anchor.phaseId, feature: '', size: 'M', headcount: 1,
+          capType: s.capTypes[0] || '',
           epic: anchor.epic || '', workstream: anchor.workstream || '', teamType: anchor.teamType }]
       }).items[0];
       it.id = newId;
@@ -7794,6 +8233,26 @@
         $('[data-m=ok]', host).onclick = function () { var r = ta.value; closeModal(); setFlag(itemId, stId, { reason: r }); };
         ta.addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('[data-m=ok]', host).click(); });
       });
+  }
+  // one item or story to its earliest dependency- and capacity-valid slot
+  function placeEntry(itemId, storyId) {
+    if (!state.meta.capacityEnabled) return null;
+    var it = RM.itemById(state, itemId);
+    if (!it) return null;
+    var st = storyId ? storyById(it, storyId) : null;
+    if (storyId && !st) return null;
+    return { icon: 'zap', label: 'Place at earliest slot',
+      disabled: !!it.locked || !!it.done || !!(st && st.done), fn: function () {
+      var r = RM.placeUnit(state, itemId, storyId || null, snapOpts());
+      // a partial placement still lands what it could — keep it, and say why
+      if (r.changed) {
+        r.state.items = RM.sortByOrder(r.state.items); // array order = order keys here
+        replaceState('place', r.state);
+        toast('Placed at the earliest slot' + (r.note ? ' — ' + r.note : ''));
+        return;
+      }
+      toast(r.note || 'Already at its earliest slot', r.note ? 'err' : undefined);
+    } };
   }
   function flagMenuEntries(itemId, stId) {
     var x = flagTarget(state, itemId, stId);
@@ -8843,6 +9302,10 @@
   // follow the sprint anchor in Setup
   var SNAP_LABELS = { day: 'day', week: 'week', sprint: 'sprint' };
   function snapModeFor(kind) { return kind === 'story' ? snapStory : snapFeat; }
+  // core never reads UI prefs: hand the snap modes down explicitly
+  function snapOpts() { return { snap: { feature: snapFeat, story: snapStory } }; }
+  // a working-day count, rounded up to a whole number of the kind's snap unit
+  function snapUpDays(days, kind) { return days == null ? days : RM.snapUpDays(state.meta, days, snapModeFor(kind)); }
   function setSnapMode(kind, mode) { if (kind === 'story') snapStory = mode; else snapFeat = mode; }
   function snapUnit(kind) {
     var mode = snapModeFor(kind);
@@ -9465,22 +9928,6 @@
     if (d != null) scrollLaneTo(d * dayPx());
   }
 
-  function doAuto() {
-    var r = RM.autoSchedule(state);
-    confirmBox('Auto-schedule?',
-      'Reschedules every unlocked item in non-backlog phases:<br>' +
-      '· dependency order first<br>' +
-      '· then earliest start with free capacity (roster of ' + state.team.length + ')<br>' +
-      '· holiday weeks stretch bars, they don’t consume them<br>' +
-      '· risk buffers follow each bar<br><br>' +
-      '<b>' + r.changed + '</b> item(s) would move.' +
-      (r.notes.length ? '<br><br>' + r.notes.slice(0, 4).map(esc).join('<br>') : ''),
-      'Apply', function () {
-        replaceState('auto-schedule', r.state);
-        toast('Auto-scheduled — ' + r.changed + ' item(s) moved');
-      });
-  }
-
   function doAddFeature() {
     if (!state.phases.length) {
       commit('add phase', function (s) {
@@ -9582,7 +10029,6 @@
         { icon: 'plus', label: esc('Add ' + lvl('feature').toLowerCase()), fn: doAddFeature },
         { icon: 'plus', label: 'Add phase…', fn: function () { phaseModal(null); } },
         { sep: true },
-        { icon: 'zap', label: 'Auto-schedule…', fn: doAuto },
         { icon: 'unlink', label: 'Clear all dependencies…', fn: function () {
           var linked = state.items.filter(function (x) { return x.deps.length || (x.depsText || []).length; }).length;
           confirmBox('Clear all dependencies?', 'Removes every dependency link from ' + linked + ' item(s). Undo works.',
@@ -9609,7 +10055,7 @@
       SNAP_MODES.forEach(function (mode) {
         snapItems.push({ icon: 'magnet', label: labelHtml + ' snap to ' + SNAP_LABELS[mode], checked: snapModeFor(k[0]) === mode, fn: function () {
           setSnapMode(k[0], mode);
-          saveLocal(); renderTopbar();
+          saveLocal(); render(); // the rows too: the Auto timeline buttons depend on the snap
           toast(raw + ' snap: ' + SNAP_LABELS[mode]);
         } });
       });
@@ -9630,10 +10076,10 @@
         saveLocal(); render();
         toast('Estimate ranges ' + (showRange ? 'shown' : 'hidden'));
       } } : null,
-      state.meta.capacityEnabled ? { icon: 'gauge', label: 'Capacity row', checked: showCap, fn: function () {
+      state.meta.capacityEnabled ? { icon: 'gauge', label: 'Capacity rows', checked: showCap, fn: function () {
         showCap = !showCap;
         saveLocal(); render();
-        toast('Capacity row ' + (showCap ? 'shown' : 'hidden'));
+        toast('Capacity rows ' + (showCap ? 'shown' : 'hidden'));
       } } : null,
       { sep: true },
       state.meta.workstreamsEnabled ? { icon: 'layers', label: 'Group by workstream', checked: groupWs, fn: function () {
@@ -9662,9 +10108,14 @@
         // a view preference: rows re-sort on screen, the document is untouched
         autoOrder = !autoOrder;
         saveLocal();
+        // auto-order is a VIEW sort here (RM.viewItems over the order keys):
+        // toggling it never touches the document. Upstream re-sorts the items
+        // array on toggle; in the bundle model the array order is the order
+        // keys, so that would be a no-op that still dirtied the file.
         render();
         toast('Auto-order ' + (autoOrder ? 'on — rows follow the timeline' : 'off'));
       } },
+      state.meta.capacityEnabled ? { icon: 'zap', label: 'Auto timeline: the \u26a1 button on a phase band', disabled: true, fn: function () {} } : null,
       { sep: true },
       { icon: 'zoom-in', label: 'Zoom in', kbd: '⌘scroll', fn: function () { zoomBy(1.2); } },
       { icon: 'zoom-out', label: 'Zoom out', fn: function () { zoomBy(1 / 1.2); } },
@@ -9772,6 +10223,7 @@
       var it = RM.normalizeState({
         meta: s.meta, phases: s.phases,
         items: [{ id: newId, num: RM.nextNum(s), phaseId: phaseId, feature: '', size: 'M', headcount: 1,
+          capType: s.capTypes[0] || '',
           epic: group && group.epic != null ? group.epic : '',
           workstream: group && group.workstream != null ? group.workstream : '' }]
       }).items[0];
@@ -9850,12 +10302,17 @@
       (isNew || itemCount > 0 || state.phases.length <= 1 ? '' : '<button id="phDelete" class="danger" style="margin-right:auto">Delete phase</button>') +
       (!isNew && itemCount > 0 ? '<span style="margin-right:auto;font-size:11.5px;color:var(--ink-3);align-self:center">' + itemCount + ' item(s) — move them out to delete</span>' : '') +
       (!isNew && itemCount === 0 && state.phases.length <= 1 ? '<span style="margin-right:auto;font-size:11.5px;color:var(--ink-3);align-self:center">the last phase can’t be deleted</span>' : '') +
+      (isNew || phase.bucket ? '' : (function () {
+        var as = autoPhaseStatus(phase.id);
+        return '<button id="phAutoRun" title="' + esc(as.tip) + '"' + (as.disabled ? ' disabled' : '') + '><i data-lucide="zap"></i> Auto timeline</button>';
+      })()) +
       '<button data-m="x2">Cancel</button><button id="phSave" class="primary">' + (isNew ? 'Add phase' : 'Save') + '</button>' +
       '</div></div>',
       function (host) {
         $('[data-m=x]', host).onclick = closeModal;
         $('[data-m=x2]', host).onclick = closeModal;
-        $('#phSave', host).onclick = function () {
+        // Save, and the Auto timeline button, which saves the pending edits first
+        function savePhase() {
           var name = $('#phName', host).value.trim() || 'Phase';
           var desc = sanitizeHtml($('#phDescEd .wz-ed', host).innerHTML);
           var bucket = $('#phBucket', host).checked;
@@ -9882,7 +10339,10 @@
               });
             });
           }
-        };
+        }
+        $('#phSave', host).onclick = savePhase;
+        var autoRun = $('#phAutoRun', host);
+        if (autoRun) autoRun.onclick = function () { savePhase(); autoTimelinePhase(phaseId); };
         var del = $('#phDelete', host);
         if (del) del.onclick = function () {
           closeModal();
@@ -9971,27 +10431,40 @@
   // (name · role · rate card · workstream · cost · rate · margin · total) +
   // week cells. Name is optional; Role is free text; Rate card is the
   // rate-card role selector (empty = not assigned).
-  var BU_COLS = { role: 110, type: 96, ws: 108, cost: 76, rate: 76, margin: 54, total: 80 };
+  var BU_COLS = { role: 110, type: 96, cap: 100, ws: 108, cost: 76, rate: 76, margin: 54, total: 80 };
   // header labels + the tooltip that explains each column (tooltips live on
   // the HEADERS — the cells themselves stay quiet)
   var BU_COL_DEFS = {
     role: ['Role', 'Role'],
     type: ['Rate card', 'Rate card'],
+    cap: ['Capacity', 'Capacity type this person supplies — stories of that type can be assigned to them and drain it'],
     ws: ['Workstream', 'Workstreams this person works on'],
     cost: ['Cost', 'Cost (hourly)'],
     rate: ['Rate', 'Rate (hourly)'],
     margin: ['Margin', 'Margin'],
     total: ['Total', 'Total']
   };
-  var BU_KEYS = ['role', 'type', 'ws', 'cost', 'rate', 'margin', 'total'];
+  var BU_KEYS = ['role', 'type', 'cap', 'ws', 'cost', 'rate', 'margin', 'total'];
+  // [short header label, tooltip, default width px, minimum width px]
   var PL_COL_DEFS = {
-    size: ['Size', 'Size', 34],
-    pri: ['Pri', 'Priority', 26],
-    risk: ['Risk', 'Risk', 26],
-    dur: ['Wks', 'Duration in weeks', 34],
-    asg: ['Ppl', 'Assignees', 40]
+    size: ['Size', 'Size', 34, 26],
+    pri: ['Pri', 'Priority', 26, 22],
+    risk: ['Risk', 'Risk', 26, 22],
+    dur: ['Wks', 'Duration in weeks', 34, 26],
+    asg: ['Ppl', 'Assignees', 40, 30],
+    cap: ['Cap', 'Capacity type', 58, 34],
+    mult: ['×', 'Capacity multiplier (per-person demand)', 26, 22],
+    ws: ['WS', 'Workstream', 96, 44],
+    epic: ['Epic', 'Epic', 96, 44],
+    start: ['Start', 'Start date', 62, 40],
+    deadline: ['Due', 'Deadline', 62, 40]
   };
-  var PL_KEYS = ['size', 'pri', 'risk', 'dur', 'asg'];
+  var PL_KEYS = ['size', 'pri', 'risk', 'dur', 'asg', 'cap', 'mult', 'ws', 'epic', 'start', 'deadline'];
+  // the fixed fields added later stay out of the way until asked for
+  var PL_DEFAULT_HIDDEN = ['ws', 'epic', 'start', 'deadline'];
+  function plHidden(k) {
+    return plColHide[k] != null ? !!plColHide[k] : PL_DEFAULT_HIDDEN.indexOf(k) !== -1;
+  }
   function orderedCols(order, allKeys) {
     var out = (order || []).filter(function (k) { return allKeys.indexOf(k) !== -1; });
     allKeys.forEach(function (k) { if (out.indexOf(k) === -1) out.push(k); });
@@ -10004,10 +10477,13 @@
   }
   function plColsVisible() {
     return plColsOrdered().filter(function (k) {
-      if (plColHide[k]) return false;
+      if (plHidden(k)) return false;
       if (k === 'size') return RM.sizingEnabled(state) || RM.sizingEnabled(state, 'story');
       if (k === 'pri') return RM.priorityEnabled(state) || RM.priorityEnabled(state, 'story');
       if (k === 'risk') return RM.riskEnabled(state);
+      if (k === 'cap') return !!state.meta.capacityEnabled;
+      if (k === 'mult') return !!state.meta.capacityEnabled && state.meta.capMode !== 'points';
+      if (k === 'ws') return !!state.meta.workstreamsEnabled;
       return true;
     });
   }
@@ -10017,6 +10493,29 @@
   function applyBuColWidths() {
     var rs = document.documentElement.style;
     Object.keys(BU_COLS).forEach(function (k) { rs.setProperty('--bu-w-' + k, buW(k) + 'px'); });
+  }
+  // the planning chip columns resize the same way, through --pl-w-*
+  function plW(k) {
+    var d = PL_COL_DEFS[k] || [];
+    return Math.max(d[3] || 22, Math.min(240, parseInt(plColW[k], 10) || d[2] || 34));
+  }
+  function applyPlColWidths() {
+    var rs = document.documentElement.style;
+    PL_KEYS.forEach(function (k) { rs.setProperty('--pl-w-' + k, plW(k) + 'px'); });
+  }
+  // the left pane the visible planning columns actually need: fixed row
+  // chrome (grip + chevron + dot + warning badge) + every chip column + a
+  // floor under the title, so turning columns on never squeezes it away
+  var PL_ROW_CHROME = 100, PL_TITLE_MIN = 120;
+  function plColsWidth() {
+    var sum = 0;
+    plColsVisible().forEach(function (k) { sum += plW(k); });
+    return PL_ROW_CHROME + sum + PL_TITLE_MIN;
+  }
+  // the wider of the user's dragged width and what the visible columns need,
+  // capped at 70vw. Derived, never persisted: leftWPlan stays the user's floor
+  function planLeftW() {
+    return Math.max(leftWPlan, Math.min(Math.round(window.innerWidth * 0.7), plColsWidth()));
   }
   // the column-label strip is rendered per view: labels, tooltips, resize
   // handles (budget), and drag-to-reorder all live here
@@ -10034,20 +10533,29 @@
       el.innerHTML = plColsVisible().map(function (k) {
         return '<i class="pl-only' + (k === 'size' ? ' sz-lab' : '') + '" data-plcol="' + k + '" title="' +
           esc(PL_COL_DEFS[k][1]) +
-          '" style="width:' + PL_COL_DEFS[k][2] + 'px"></i>';
-      }).join('');
+          '" style="width:var(--pl-w-' + k + ')">' + esc(PL_COL_DEFS[k][0]) +
+          '<span class="pl-rz" data-plrz="' + k + '"></span></i>';
+      }).join('') +
+        '<button id="plColsAdd" class="pl-add" title="Columns…" aria-label="Columns"><i data-lucide="plus"></i></button>';
     }
   }
   function columnsMenuItems(kind) {
     var keys = kind === 'bu' ? buColsOrdered() : plColsOrdered();
     var defs = kind === 'bu' ? BU_COL_DEFS : PL_COL_DEFS;
     var hide = kind === 'bu' ? buColHide : plColHide;
-    var MENU_LBL = { size: 'Size', dur: 'Duration', asg: 'Assignees' };
+    // the menu spells every column out in full, whatever its cramped header says
+    var PL_MENU_LBL = {
+      size: 'Size', pri: 'Priority', risk: 'Risk', dur: 'Duration', asg: 'Assignees',
+      cap: 'Capacity type', mult: 'Multiplier', ws: 'Workstream', epic: 'Epic',
+      start: 'Start', deadline: 'Deadline'
+    };
+    // hidden-ness is a per-kind question: planning columns have defaults
+    function isHid(k) { return kind === 'bu' ? !!hide[k] : plHidden(k); }
     var items = keys.map(function (k) {
-      var lbl = MENU_LBL[k] || defs[k][0] || k;
-      return { icon: hide[k] ? 'eye-off' : 'eye', label: esc(lbl), checked: !hide[k], fn: function () {
-        hide[k] = !hide[k];
-        if (keys.every(function (x) { return hide[x]; })) hide[k] = false; // keep one column
+      var lbl = kind === 'bu' ? (defs[k][0] || k) : (PL_MENU_LBL[k] || defs[k][0] || k);
+      return { icon: isHid(k) ? 'eye-off' : 'eye', label: esc(lbl), checked: !isHid(k), fn: function () {
+        hide[k] = !isHid(k);
+        if (keys.every(function (x) { return isHid(x); })) hide[k] = false; // keep one column
         saveLocal();
         render();
       } };
@@ -10055,7 +10563,7 @@
     items.push({ sep: true });
     items.push({ icon: 'rotate-ccw', label: 'Reset columns', fn: function () {
       if (kind === 'bu') { buColOrder = null; buColHide = {}; buColW = {}; }
-      else { plColOrder = null; plColHide = {}; }
+      else { plColOrder = null; plColHide = {}; plColW = {}; }
       saveLocal();
       render();
     } });
@@ -10068,6 +10576,22 @@
     function mv(ev) {
       buColW[k] = Math.max(44, Math.min(420, Math.round(w0 + ev.clientX - x0)));
       document.documentElement.style.setProperty('--bu-w-' + k, buW(k) + 'px');
+    }
+    function up() {
+      window.removeEventListener('pointermove', mv);
+      window.removeEventListener('pointerup', up);
+      saveLocal();
+    }
+    window.addEventListener('pointermove', mv);
+    window.addEventListener('pointerup', up);
+  }
+  function startPlColResize(e, k) {
+    e.preventDefault();
+    e.stopPropagation();
+    var w0 = plW(k), x0 = e.clientX;
+    function mv(ev) {
+      plColW[k] = Math.max(PL_COL_DEFS[k][3] || 22, Math.min(240, Math.round(w0 + ev.clientX - x0)));
+      document.documentElement.style.setProperty('--pl-w-' + k, plW(k) + 'px');
     }
     function up() {
       window.removeEventListener('pointermove', mv);
@@ -10138,8 +10662,19 @@
     if (e.button !== 0) return;
     var rz = e.target.closest('.bu-rz');
     if (rz) { startBuColResize(e, rz.dataset.burz); return; }
+    var prz = e.target.closest('.pl-rz');
+    if (prz) { startPlColResize(e, prz.dataset.plrz); return; }
+    if (e.target.closest('#plColsAdd')) return; // the + is a click, not a drag
     var cell = e.target.closest('i[data-bucol],i[data-plcol]');
     if (cell) startHdrColDrag(e, cell);
+  });
+  // the + at the end of the planning strip opens the same show/hide menu
+  $('#hlCols').addEventListener('click', function (e) {
+    var add = e.target.closest('#plColsAdd');
+    if (!add) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openDropdown(add, columnsMenuItems('pl'), { minW: 190 });
   });
   // right-click a column label (or the header corner, below) = columns menu
   $('#hlCols').addEventListener('contextmenu', function (e) {
@@ -10169,6 +10704,9 @@
       type: '<span class="r-ws sc-chip bu-col bu-chip' + (m.type ? '' : ' empty') +
         '" style="width:var(--bu-w-type)" tabindex="0" role="button" data-bact="type">' +
         (m.type ? esc(shorten(m.type, 13)) : '—') + '</span>',
+      cap: '<span class="r-ws sc-chip bu-col bu-chip' + (m.capType ? '' : ' empty') +
+        '" style="width:var(--bu-w-cap)" tabindex="0" role="button" data-bact="cap" title="Capacity type">' +
+        (m.capType ? esc(shorten(m.capType, 13)) : '—') + '</span>',
       ws: '<span class="r-ws sc-chip bu-col bu-chip' + (mws.length ? '' : ' empty') +
         '" style="width:var(--bu-w-ws)" tabindex="0" role="button" data-bact="ws">' +
         (mws.length ? '<span class="dd-dot" style="background:#' + wsHex + '"></span>' + esc(shorten(mws[0], 12)) +
@@ -10519,6 +11057,23 @@
     });
     openDropdown(chip, items);
   }
+  function openMemberCapDropdown(chip, roleId) {
+    var m = memberById(roleId);
+    if (!m) return;
+    var items = [{ label: '<i>\u2014 general \u2014</i>', checked: !m.capType, fn: function () {
+      commit('capacity type', function (s) {
+        s.team.forEach(function (x) { if (x.id === roleId) x.capType = ''; });
+      });
+    } }];
+    RM.capTypesOf(state).forEach(function (t) {
+      items.push({ label: esc(t), checked: m.capType === t, fn: function () {
+        commit('capacity type', function (s) {
+          s.team.forEach(function (x) { if (x.id === roleId) x.capType = t; });
+        });
+      } });
+    });
+    openDropdown(chip, items);
+  }
   function openMemberWsDropdown(chip, roleId) {
     var m = memberById(roleId);
     if (!m) return;
@@ -10555,6 +11110,7 @@
     var rowEl2 = e.target.closest('[data-mid]');
     if (!chip || !rowEl2 || rowEl2.classList.contains('btotal')) return;
     if (chip.dataset.bact === 'type') openMemberTypeDropdown(chip, rowEl2.dataset.mid);
+    else if (chip.dataset.bact === 'cap') openMemberCapDropdown(chip, rowEl2.dataset.mid);
     else openMemberWsDropdown(chip, rowEl2.dataset.mid);
   });
 
@@ -10783,7 +11339,7 @@
     function schemeRowsFor(kind) {
       var kAttr = kind === 'story' ? ' data-kind="story"' : '';
       var cur = m[RM.sizeKeys(kind).scheme];
-      return RM.SIZE_SCHEME_ORDER.map(function (k) {
+      return RM.sizeSchemesFor(kind).map(function (k) {
         var sch = RM.SIZE_SCHEMES[k];
         return '<button class="su-scheme' + (cur === k ? ' on' : '') + '" data-suscheme="' + k + '"' + kAttr + '>' +
           '<span class="su-scheme-check"><i data-lucide="' + (cur === k ? 'circle-check' : 'circle') + '"></i></span>' +
@@ -10807,6 +11363,12 @@
     }
     function sizingCardsFor(kind) {
       var label = kind === 'story' ? esc(lvl('story') + ' size options') : 'Size options';
+      if (kind !== 'story' && RM.sizeRollup(state)) {
+        return '<section class="su-card"><h2>' + label + '</h2>' +
+          '<div class="m-hint">' + esc('Each ' + lvl('feature').toLowerCase() + '\u2019s size is the sum of its ' + lvl('story', true).toLowerCase() +
+          '\u2019 points, and its working days are their days added up. Sizes are not set by hand in this mode \u2014 size the ' + lvl('story', true).toLowerCase() + ' instead.') + '</div>' +
+          '</section>';
+      }
       return RM.sizingEnabled(state, kind)
         ? '<section class="su-card"><h2>' + label + '</h2>' +
           '<table class="hol-table"><thead><tr><th>Label</th><th>Working days</th><th></th></tr></thead>' +
@@ -10910,6 +11472,16 @@
         '<input class="su-rc" type="number" min="0" data-rccost="' + esc(t) + '" value="' + (rc.cost || '') + '" placeholder="cost/h" title="Default hourly cost for this role">' +
         '<input class="su-rc" type="number" min="0" data-rcrate="' + esc(t) + '" value="' + (rc.rate || '') + '" placeholder="rate/h" title="Default hourly bill rate for this role">' +
         '<button data-suttrm="' + esc(t) + '" class="danger" title="Remove role"><i data-lucide="x"></i></button>' +
+        '</div>';
+    }).join('');
+
+    var capTypeCounts = {};
+    state.team.forEach(function (mm) { if (mm.capType) capTypeCounts[mm.capType] = (capTypeCounts[mm.capType] || 0) + 1; });
+    var capTypeRows = RM.capTypesOf(state).map(function (t) {
+      return '<div class="su-row" data-key="' + esc(t) + '">' + grip() +
+        '<input class="su-name su-name-in" data-capname="' + esc(t) + '" value="' + esc(t) + '" title="Rename capacity type">' +
+        '<span class="band-count" title="People supplying it">' + (capTypeCounts[t] || 0) + '</span>' +
+        '<button data-sucaprm="' + esc(t) + '" class="danger" title="Remove capacity type"><i data-lucide="x"></i></button>' +
         '</div>';
     }).join('');
 
@@ -11032,10 +11604,38 @@
             (onDay ? ' checked' : '') + '> ' + dn.slice(0, 3) + '</label>';
         }).join('') + '</div></div>' +
         '<div class="m-hint">Defines what one full-time person means — the schedule plans across exactly the days checked (1–7); bars keep their calendar dates when this changes.</div>' +
+        '</section>',
+      capacity:
+        '<section class="su-card"><h2>Capacity planning</h2>' +
+        '<label class="p-check" title="The roster limits scheduling and validation; shows the capacity row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Enable capacity planning</label>' +
+        '<div class="m-hint">People, their capacity type and weekly hours live in the Resources panel under the timeline. Auto timeline (per phase) and Place at earliest slot need this on.</div>' +
         '</section>' +
-        '<section class="su-card"><h2>Capacity</h2>' +
-        '<label class="p-check" title="Roster limits scheduling and validation; shows the availability row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Enable capacity planning</label>' +
-        '<div class="m-hint">People and their weekly hours live in the Resources panel under the timeline.</div>' +
+        '<section class="su-card"><h2>Planning level</h2><div class="su-schemes">' +
+        [['feature', esc(lvl('feature', true)), 'Capacity follows the ' + esc(lvl('feature', true).toLowerCase()) + ' and their capacity type; ' + esc(lvl('story', true).toLowerCase()) + ' need no details'],
+         ['story', esc(lvl('story', true)), esc(lvl('feature')) + ' bars become the hull of their ' + esc(lvl('story', true).toLowerCase()) + ' \u2014 work is planned on the ' + esc(lvl('story', true).toLowerCase()) + ' and their capacity types']].map(function (o) {
+          var on = RM.planLevel(state) === o[0];
+          return '<button class="su-scheme' + (on ? ' on' : '') + '" data-suplan="' + o[0] + '">' +
+            '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
+            '<span class="su-scheme-main"><b>' + o[1] + '</b><span>' + o[2] + '</span></span></button>';
+        }).join('') + '</div></section>' +
+        '<section class="su-card"><h2>Demand</h2><div class="su-schemes">' +
+        [['person', 'Per person', 'A unit in flight uses one person of its capacity type, times its multiplier'],
+         ['points', 'Story points', 'A unit\u2019s points spread over its weeks; each person supplies points per sprint']].map(function (o) {
+          var on = (m.capMode || 'person') === o[0];
+          return '<button class="su-scheme' + (on ? ' on' : '') + '" data-sucapmode="' + o[0] + '">' +
+            '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
+            '<span class="su-scheme-main"><b>' + o[1] + '</b><span>' + o[2] + '</span></span></button>';
+        }).join('') + '</div>' +
+        (m.capMode === 'points'
+          ? '<div style="margin-top:10px"><label class="p-lab">Default points per person per sprint</label>' +
+            '<input type="number" id="suDefPoints" min="0" step="1" value="' + m.defaultPoints + '" style="width:140px">' +
+            '<div class="m-hint">Each person can override this in the Resources panel. With sprints off, points are per two weeks.</div></div>'
+          : '') +
+        '</section>' +
+        '<section class="su-card"><h2>Capacity types</h2>' +
+        '<div class="su-rows" data-sulist="captype">' + capTypeRows + '</div>' +
+        '<div class="p-row" style="margin-top:8px"><input id="suCapTypeAdd" placeholder="New capacity type, e.g. Data"><button id="suCapTypeAddBtn" class="fixed">Add</button></div>' +
+        '<div class="m-hint">A ' + esc(lvl('story').toLowerCase()) + '\u2019s capacity type says what it drains and who can take it; a person\u2019s says what they supply. Drag the grips to reorder.</div>' +
         '</section>',
       columns: (function () {
         var offNotes = [];
@@ -11140,7 +11740,14 @@
     };
     if (!tabBodies[setupTab]) setupTab = 'timeline';
 
-    var rail = SETUP_SECTIONS.map(function (sec) {
+    // view-only copies keep the theme and nothing else
+    var sections = readOnly
+      ? SETUP_SECTIONS.map(function (sec) {
+          return [sec[0], sec[1].filter(function (t) { return t[0] === 'appearance'; })];
+        }).filter(function (sec) { return sec[1].length; })
+      : SETUP_SECTIONS;
+    if (readOnly) setupTab = 'appearance';
+    var rail = sections.map(function (sec) {
       return '<div class="su-rail-hd">' + sec[0] + '</div>' +
         sec[1].map(function (t) {
           return '<button class="su-tab' + (setupTab === t[0] ? ' on' : '') + '" data-sutab="' + t[0] + '">' +
@@ -11151,7 +11758,7 @@
     // page title = the active tab's rail label (typography hierarchy:
     // page h1 > card h2 > field sub-headings)
     var pageTitle = '';
-    SETUP_SECTIONS.forEach(function (sec) {
+    sections.forEach(function (sec) {
       sec[1].forEach(function (t) { if (t[0] === setupTab) pageTitle = t[1]; });
     });
 
@@ -11172,6 +11779,7 @@
       ['phases', 'Phases', 'flag'],
       ['workstreams', 'Workstreams', 'layers'],
       ['team', 'Team', 'users'],
+      ['capacity', 'Capacity', 'gauge'],
       ['columns', 'Columns', 'columns-3'],
       ['sizing', 'Sizing', 'ruler'],
       ['jira', 'Jira', 'link']
@@ -11267,6 +11875,24 @@
       var cKey = t.dataset.sucolname;
       var cLbl = t.value.trim();
       commit('rename column', function (s2) { RM.renameScopeCol(s2, cKey, cLbl); });
+      return;
+    }
+    if (t.dataset.capname != null) {
+      var oldCap = t.dataset.capname;
+      var newCap = t.value.trim();
+      if (!newCap || newCap === oldCap) { render(); return; }
+      if (state.capTypes.indexOf(newCap) !== -1) {
+        toast('\u201C' + newCap + '\u201D already exists', 'err');
+        render();
+        return;
+      }
+      commit('rename capacity type', function (s2) { RM.renameCapType(s2, oldCap, newCap); });
+      return;
+    }
+    if (t.id === 'suDefPoints') {
+      var dp = parseFloat(t.value);
+      if (!isFinite(dp) || dp < 0) { render(); return; }
+      commit('default points', function (s2) { s2.meta.defaultPoints = dp; });
       return;
     }
     if (t.dataset.rcname != null) {
@@ -11479,6 +12105,30 @@
     if (t.dataset.suepdel) { deleteEpicConfirm(t.dataset.suepdel); return; }
     if (t.dataset.suphedit) { phaseModal(t.dataset.suphedit); return; }
     if (t.dataset.suphdel) { deletePhaseConfirm(t.dataset.suphdel); return; }
+    if (t.dataset.suplan) {
+      var planV = t.dataset.suplan;
+      if (planV === RM.planLevel(state)) return;
+      commit('planning level', function (s2) { s2.meta.planLevel = planV; });
+      return;
+    }
+    if (t.dataset.sucapmode) {
+      var cmV = t.dataset.sucapmode;
+      commit('capacity mode', function (s2) { s2.meta.capMode = cmV; });
+      toast('Demand: ' + (cmV === 'points' ? 'story points' : 'per person'));
+      return;
+    }
+    if (t.id === 'suCapTypeAddBtn') {
+      var cv = $('#suCapTypeAdd').value.trim();
+      if (!cv) return;
+      if (state.capTypes.indexOf(cv) !== -1) { toast('Capacity type already exists'); return; }
+      commit('add capacity type', function (s2) { s2.capTypes.push(cv); });
+      return;
+    }
+    if (t.dataset.sucaprm) {
+      var caprm = t.dataset.sucaprm;
+      commit('remove capacity type', function (s2) { RM.removeCapType(s2, caprm); });
+      return;
+    }
     if (t.id === 'suTypeAddBtn') {
       var tv = $('#suTypeAdd').value.trim();
       if (!tv) return;
@@ -11550,6 +12200,8 @@
       commit('reorder ' + dd.kind, function (s2) {
         if (dd.kind === 'type') {
           s2.teamTypes = moveKeyBefore(s2.teamTypes, dd.key, dd.before);
+        } else if (dd.kind === 'captype') {
+          s2.capTypes = moveKeyBefore(s2.capTypes, dd.key, dd.before);
         } else if (dd.kind === 'ws') {
           s2.wsOrder = moveKeyBefore(allWorkstreams(s2), dd.key, dd.before);
         } else if (dd.kind === 'scol') {
@@ -11674,9 +12326,21 @@
         '<div class="rleft">' +
         '<span class="r-grip rr-grip"><i data-lucide="grip-vertical"></i></span>' +
         memberColsHtml(m) +
-        (state.meta.capacityEnabled
+        // one or the other: the × seat multiplier in per-person mode, points
+        // per sprint in story-points mode — never both
+        // untyped people supply nothing: a quiet prompt to give them a type
+        // instead (their seat and points are kept for when they get one)
+        (state.meta.capacityEnabled && !m.capType
+          ? '<span class="res-cap res-untyped" tabindex="0" role="button" data-runtyped="' + m.id +
+            '" title="No capacity type — supplies nothing. Click to set one">set type</span>'
+          : '') +
+        (state.meta.capacityEnabled && m.capType && state.meta.capMode !== 'points'
           ? '<span class="res-cap" tabindex="0" role="button" data-rcap="' + m.id +
             '" title="Capacity at full-time hours">' + fmtPe(m.capacity != null ? m.capacity : 1) + '×</span>'
+          : '') +
+        (state.meta.capacityEnabled && m.capType && state.meta.capMode === 'points'
+          ? '<span class="res-cap res-pts' + (m.points == null ? ' dflt' : '') + '" tabindex="0" role="button" data-rpts="' + m.id +
+            '" title="Story points per sprint (blank = document default)">' + fmtPe(RM.memberPoints(state, m)) + ' pt</span>'
           : '') +
         '</div>' +
         '<div class="rlane" style="width:' + laneW + 'px">' + cells.join('') + '</div>' +
@@ -11692,7 +12356,7 @@
     resBody.scrollLeft = board.scrollLeft;
   }
 
-  $('#hdrCap').addEventListener('keydown', function (e) {
+  $('#hdrCapRows').addEventListener('keydown', function (e) {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.closest('[data-w]')) {
       e.preventDefault();
       e.target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -11735,7 +12399,7 @@
   (function () {
     var lrs = null;
     function startLeftRz(e) {
-      lrs = { x0: e.clientX, w0: view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : leftWPlan };
+      lrs = { x0: e.clientX, w0: view === 'scoping' ? leftWScope : view === 'budget' ? leftWBudget : planLeftW() };
       e.preventDefault();
       e.stopPropagation();
     }
@@ -11743,14 +12407,30 @@
     $('#leftRzLine').addEventListener('pointerdown', startLeftRz);
     window.addEventListener('pointermove', function (e) {
       if (!lrs) return;
-      var w = Math.max(240, Math.min(window.innerWidth * 0.7, lrs.w0 + (e.clientX - lrs.x0)));
-      if (view === 'scoping') leftWScope = Math.round(w);
-      else if (view === 'budget') leftWBudget = Math.round(w);
-      else leftWPlan = Math.round(w);
-      document.documentElement.style.setProperty('--left-w', Math.round(w) + 'px');
+      var w = Math.round(Math.max(240, Math.min(window.innerWidth * 0.7, lrs.w0 + (e.clientX - lrs.x0))));
+      var shown = w;
+      if (view === 'scoping') leftWScope = w;
+      else if (view === 'budget') leftWBudget = w;
+      // the raw drag is the user's floor; the column floor still applies to
+      // what is shown, so a narrow drag previews exactly what pointerup keeps
+      else { leftWPlan = w; shown = planLeftW(); }
+      document.documentElement.style.setProperty('--left-w', shown + 'px');
     });
     window.addEventListener('pointerup', function () {
       if (lrs) { lrs = null; saveLocal(); render(); }
+    });
+  })();
+
+  // 70vw moves with the window, so Planning's derived width has to follow it
+  (function () {
+    var t = null;
+    window.addEventListener('resize', function () {
+      if (t) clearTimeout(t);
+      t = setTimeout(function () {
+        t = null;
+        if (view !== 'planning' || leftCollapsed) return;
+        document.documentElement.style.setProperty('--left-w', planLeftW() + 'px');
+      }, 120);
     });
   })();
 
@@ -12018,7 +12698,9 @@
         if (chipW) chipW.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       } },
       state.meta.capacityEnabled ? { icon: 'gauge', label: 'Capacity…', fn: function () {
-        var el = resGrid.querySelector('.rrow[data-mid="' + mid + '"] [data-rcap]');
+        // whichever capacity control the row shows: the × seat, the points
+        // per sprint, or an untyped person's "set type" prompt
+        var el = resGrid.querySelector('.rrow[data-mid="' + mid + '"] [data-rcap], .rrow[data-mid="' + mid + '"] [data-rpts], .rrow[data-mid="' + mid + '"] [data-runtyped]');
         if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       } } : null,
       { icon: 'calendar-range', label: 'Start / end dates…', fn: function () { roleDatesPopover(cx, cy, mid); } },
@@ -12076,12 +12758,65 @@
     });
   });
 
+  // story points per sprint: same click-to-type chip, blank = document default
+  resGrid.addEventListener('click', function (e) {
+    var chip = e.target.closest('[data-rpts]');
+    if (!chip || chip.querySelector('input')) return;
+    var mid = chip.dataset.rpts;
+    var m = null;
+    state.team.forEach(function (x) { if (x.id === mid) m = x; });
+    if (!m) return;
+    var inp = document.createElement('input');
+    inp.type = 'number';
+    inp.min = '0';
+    inp.step = '1';
+    inp.value = m.points != null ? m.points : '';
+    inp.placeholder = String(RM.memberPoints(state, m));
+    inp.className = 'hc-edit';
+    inp.style.width = '34px';
+    chip.textContent = '';
+    chip.appendChild(inp);
+    inp.focus();
+    inp.select();
+    var done = false;
+    function finish(saveIt) {
+      if (done) return; done = true;
+      var raw = inp.value.trim();
+      var v = raw === '' ? null : parseFloat(raw); // blank = the document default
+      if (saveIt && (v === null || (isFinite(v) && v >= 0))) {
+        commit('role points', function (s) {
+          s.team.forEach(function (x) { if (x.id === mid) x.points = v; });
+        });
+      } else renderResources();
+    }
+    inp.addEventListener('blur', function () { finish(true); });
+    inp.addEventListener('keydown', function (ev) {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') finish(true);
+      if (ev.key === 'Escape') finish(false);
+    });
+  });
+
+  // an untyped person's placeholder opens the capacity-type picker
+  resGrid.addEventListener('click', function (e) {
+    var chip = e.target.closest('[data-runtyped]');
+    if (chip) openMemberCapDropdown(chip, chip.dataset.runtyped);
+  });
+  resGrid.addEventListener('keydown', function (e) {
+    var chip = e.target.closest && e.target.closest('[data-runtyped]');
+    if (chip && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault();
+      openMemberCapDropdown(chip, chip.dataset.runtyped);
+    }
+  });
+
   // rate-card / workstream chips → the SAME dropdowns as the budgeting rows
   resGrid.addEventListener('click', function (e) {
     var chip = e.target.closest('[data-bact]');
     var rrow = e.target.closest('.rrow[data-mid]');
     if (!chip || !rrow) return;
     if (chip.dataset.bact === 'type') openMemberTypeDropdown(chip, rrow.dataset.mid);
+    else if (chip.dataset.bact === 'cap') openMemberCapDropdown(chip, rrow.dataset.mid);
     else openMemberWsDropdown(chip, rrow.dataset.mid);
   });
 
@@ -12142,7 +12877,7 @@
       }).join('') + '</div>';
     }
     var appearance =
-      '<div class="m-sec"><label>Your name</label>' +
+      '<div class="m-sec pf-name"><label>Your name</label>' +
       '<input type="text" data-pref-user maxlength="60" style="width:100%" placeholder="e.g. Alex Rivera" value="' + esc(userName()) + '">' +
       '<div class="m-hint">Recorded with your edits in Version history. Stored on this machine only.</div></div>' +
       '<div class="m-sec"><label>Theme</label>' + themeSeg + '</div>';
@@ -12154,7 +12889,7 @@
       chk('deps', 'Dependency arrows', depsMode === 'on') +
       chk('crit', 'Critical path highlight', showCrit) +
       (RM.rangeEnabled(state) ? chk('range', 'Estimate ranges (low→high bands)', showRange) : '') +
-      chk('cap', 'Capacity row', showCap) +
+      chk('cap', 'Capacity rows', showCap) +
       chk('autoOrder', 'Auto-order rows by start', autoOrder) +
       '</div>' +
       '<div class="m-sec"><label>Grouping</label>' +
@@ -12769,6 +13504,13 @@
         aiActor = true;
         try { commit(label, mutate); } finally { aiActor = false; }
       },
+      // Auto timeline for one phase (id or name), or every real phase when
+      // none is given; returns the number of changes
+      autoTimelineNow: function (phase) {
+        if (phase == null || phase === '') return autoTimelineAll();
+        var ph = state.phases.filter(function (p) { return p.id === phase || p.name === phase; })[0];
+        return ph && !ph.bucket ? autoTimelinePhase(ph.id) : 0;
+      },
       validation: function () { return validation || RM.validate(state); },
       userName: userName,
       ui: function () {
@@ -12989,11 +13731,13 @@
       '<button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
       '<div class="m-body">' +
       '<div class="m-sec"><label>Format</label><div class="p-row">' +
-      '<label class="p-check"><input type="radio" name="exFmt" id="exFmtPng"' + ck(pref.fmt !== 'pptx' && pref.fmt !== 'jira') + '> PNG image</label>' +
+      '<label class="p-check"><input type="radio" name="exFmt" id="exFmtPng"' + ck(pref.fmt !== 'pptx' && pref.fmt !== 'jira' && pref.fmt !== 'html') + '> PNG image</label>' +
       '<label class="p-check"><input type="radio" name="exFmt" id="exFmtPptx"' + ck(pref.fmt === 'pptx') + '> PowerPoint (editable)</label>' +
       '<label class="p-check"><input type="radio" name="exFmt" id="exFmtJira"' + ck(pref.fmt === 'jira') + '> Jira CSV</label>' +
+      '<label class="p-check"><input type="radio" name="exFmt" id="exFmtHtml"' + ck(pref.fmt === 'html') + '> Standalone HTML (view-only)</label>' +
       '</div></div>' +
-      '<div id="exTimeline"' + (pref.fmt === 'jira' ? ' hidden' : '') + '>' +
+      '<div id="exHtml" class="m-sec"' + (pref.fmt === 'html' ? '' : ' hidden') + '><div class="m-hint">One self-contained .html file: every tab is there to browse, nothing can be edited, and Setup keeps only the theme. Open it in any browser \u2014 no install, no server.</div></div>' +
+      '<div id="exTimeline"' + (pref.fmt === 'jira' || pref.fmt === 'html' ? ' hidden' : '') + '>' +
       '<div class="m-sec"><label>Date range</label><div class="p-grid2">' +
       '<div><label class="p-lab">From</label><select id="exFrom" style="width:100%">' + sprOpts(sprints[0].num) + '</select></div>' +
       '<div><label class="p-lab">To</label><select id="exTo" style="width:100%">' + sprOpts(sprints[sprints.length - 1].num) + '</select></div>' +
@@ -13039,17 +13783,26 @@
         // has its own options and none of the timeline ones
         function syncFmt() {
           var jira = $('#exFmtJira', host).checked;
-          $('#exTimeline', host).hidden = jira;
+          var htmlF = $('#exFmtHtml', host).checked;
+          $('#exTimeline', host).hidden = jira || htmlF;
           $('#exJira', host).hidden = !jira;
+          $('#exHtml', host).hidden = !htmlF;
           $('#exScale', host).disabled = $('#exFmtPptx', host).checked;
         }
-        ['exFmtPng', 'exFmtPptx', 'exFmtJira'].forEach(function (id) {
+        ['exFmtPng', 'exFmtPptx', 'exFmtJira', 'exFmtHtml'].forEach(function (id) {
           $('#' + id, host).addEventListener('change', syncFmt);
         });
         // restored settings get the same dependent-control states
         if (groupWsChk && splitWsChk) groupWsChk.disabled = splitWsChk.checked;
         syncFmt();
         $('#exGo', host).onclick = function () {
+          if ($('#exFmtHtml', host).checked) {
+            exportPrefs = Object.assign({}, exportPrefs || {}, { fmt: 'html' });
+            saveLocal();
+            closeModal();
+            exportHtmlTo();
+            return;
+          }
           if ($('#exFmtJira', host).checked) {
             var jo = jiraOptionsOf(host);
             if (!jo) return;
@@ -13163,6 +13916,49 @@
   };
   function safeName(s) { return String(s).replace(/[\\/:*?"<>|]+/g, '').trim(); }
 
+  // ---- standalone HTML: the app's own page with every stylesheet and
+  // script inlined, the document and view state embedded, and the
+  // desktop bridge + the Excel/PowerPoint engines left out (nothing to
+  // save or export from a view-only copy). Opens from disk in any browser.
+  var HTML_KIND = { desc: 'Standalone HTML page', mime: 'text/html', ext: 'html' };
+  var HTML_BUNDLE_FILES = ['css/app.css', 'js/vendor/lucide.min.js', 'js/core.js', 'js/excel.js', 'js/export-png.js',
+    'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/app.js'];
+  // a closing script tag inside inlined source would end the block early
+  function inlineSafe(src) { return String(src).replace(/<\/(script)/gi, '<\\/$1'); }
+  function buildStandaloneHtml(indexHtml, files, doc, ui) {
+    var out = indexHtml;
+    out = out.replace('<link rel="stylesheet" href="css/app.css">', function () {
+      return '<style>' + inlineSafe(files['css/app.css'] || '').replace(/<\/style/gi, '<\\/style') + '</style>';
+    });
+    var payload = '<script>window.HEADWAY_VIEW = ' + inlineSafe(JSON.stringify({ doc: doc, ui: ui })) + ';</script>';
+    out = out.replace(/<script src="([^"]+)"><\/script>/g, function (m0, src) {
+      if (src === 'js/desktop.js' || src === 'js/vendor/exceljs.min.js' || src === 'js/vendor/pptxgen.bundle.js') return '';
+      if (files[src] == null) return '';
+      return (src === 'js/core.js' ? payload + '\n' : '') + '<script>' + inlineSafe(files[src]) + '</script>';
+    });
+    out = out.replace(/<title>[^<]*<\/title>/, function () { return '<title>' + esc((doc.meta && doc.meta.title) || 'Roadmap') + '</title>'; });
+    return out;
+  }
+  function fetchText(path) {
+    return fetch(path, { cache: 'no-store' }).then(function (r) {
+      if (!r.ok) throw new Error('could not read ' + path);
+      return r.text();
+    });
+  }
+  function exportHtmlTo() {
+    if (typeof fetch !== 'function') { toast('Standalone HTML needs a browser that can read the app files', 'err'); return; }
+    var names = ['index.html'].concat(HTML_BUNDLE_FILES);
+    Promise.all(names.map(fetchText)).then(function (texts) {
+      var files = {};
+      names.forEach(function (n, i) { files[n] = texts[i]; });
+      var ui = uiSnapshot();
+      ui.panelOpen = false;
+      var html = buildStandaloneHtml(files['index.html'], files, RM.clone(state), ui);
+      var blob = new Blob([html], { type: 'text/html' });
+      return saveExport({ blob: blob, name: (safeName(state.meta.title) || 'Roadmap') + '.html' }, HTML_KIND);
+    }).catch(function (err) { toast('Export failed: ' + (err && err.message || err), 'err'); });
+  }
+
   function exportPngTo(exOpts) {
     var vs = viewState(); // rows in on-screen order
     var entries = RM_EXPORT.plan(vs, exOpts);
@@ -13209,7 +14005,14 @@
 
   // ------------------------------------------------------------ boot
   function boot() {
-    state = loadLocal() || blankState(); // fresh installs start completely empty
+    if (readOnly) {
+      applyUi(window.HEADWAY_VIEW.ui || null);
+      state = RM.normalizeState(RM.clone(window.HEADWAY_VIEW.doc));
+      document.body.classList.add('ro');
+      setupTab = 'appearance';
+    } else {
+      state = loadLocal() || blankState(); // fresh installs start completely empty
+    }
     validation = RM.validate(state);
     // features with stories start expanded so the story timelines are visible
     // (unless a saved expansion map — local or from an imported file — says otherwise)
@@ -13217,8 +14020,8 @@
     render();
     // fresh launches land on the start page; a mid-session reload (the
     // sessionStorage flag survives those, not app restarts) rejoins the editor
-    var inEditor = false;
-    try { inEditor = sessionStorage.getItem(SESSION_KEY) === '1'; } catch (e) { /* storage optional */ }
+    var inEditor = readOnly;
+    try { inEditor = inEditor || sessionStorage.getItem(SESSION_KEY) === '1'; } catch (e) { /* storage optional */ }
     if (inEditor) enterEditor();
     else showStart();
   }
@@ -13249,6 +14052,7 @@
     maybeShowReleaseNotes: maybeShowReleaseNotes,
     openReleaseNotes: openReleaseNotes,
     setExportSink: function (fn) { exportSink = typeof fn === 'function' ? fn : null; },
+    buildStandaloneHtml: buildStandaloneHtml,
     setItemType: setItemType,
     selectItem: select
   };

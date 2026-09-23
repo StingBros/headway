@@ -300,7 +300,7 @@
     var sws = wb.addWorksheet('Stories');
     // '#' and 'Depends on' are trailing columns added later: older importers
     // stop at Tags, and this importer reads them only when the header says so
-    sws.getRow(1).values = ['Item #', 'Feature', 'Story', 'Done', 'Description', 'Acceptance Criteria', 'Tags', '#', 'Depends on'];
+    sws.getRow(1).values = ['Item #', 'Feature', 'Story', 'Done', 'Description', 'Acceptance Criteria', 'Tags', '#', 'Depends on', 'Capacity type', 'Multiplier'];
     sws.getRow(1).font = { bold: true };
     sws.getColumn(1).width = 8;
     sws.getColumn(2).width = 44;
@@ -311,6 +311,8 @@
     sws.getColumn(7).width = 22;
     sws.getColumn(8).width = 8;
     sws.getColumn(9).width = 16;
+    sws.getColumn(10).width = 16;
+    sws.getColumn(11).width = 10;
     var srow = 2;
     state.items.forEach(function (it) {
       it.stories.forEach(function (st) {
@@ -320,7 +322,9 @@
           RM.htmlToText(st.description || ''), RM.htmlToText(st.ac || ''),
           (st.tags || []).length ? st.tags.join(', ') : null,
           st.num != null ? st.num : null,
-          (st.deps || []).length ? st.deps.join(', ') : null];
+          (st.deps || []).length ? st.deps.join(', ') : null,
+          st.capType || null,
+          st.capMult != null && st.capMult !== 1 ? st.capMult : null];
         srow += 1;
       });
     });
@@ -331,7 +335,7 @@
     // col 5 as hours) still parse this layout
     // column 2 stays the rate-card role (older importers read it as the type);
     // the free-text Role/title appends at the end to keep the layout stable
-    tws.getRow(1).values = ['Person', 'Rate card role', 'Workstream', 'Capacity (at full-time)', 'Week hours (overrides)', 'Rate (hourly)', 'Cost (hourly)', 'Role (title)'];
+    tws.getRow(1).values = ['Person', 'Rate card role', 'Workstream', 'Capacity (at full-time)', 'Week hours (overrides)', 'Rate (hourly)', 'Cost (hourly)', 'Role (title)', 'Points per sprint'];
     tws.getRow(1).font = { bold: true };
     tws.getColumn(1).width = 28;
     tws.getColumn(2).width = 18;
@@ -341,11 +345,12 @@
     tws.getColumn(6).width = 13;
     tws.getColumn(7).width = 13;
     tws.getColumn(8).width = 22;
+    tws.getColumn(9).width = 16;
     state.team.forEach(function (m, i) {
       var wh = m.weekHours || {};
       var txt = Object.keys(wh).sort().map(function (iso) { return iso + '=' + wh[iso]; }).join(', ');
       tws.getRow(i + 2).values = [m.name || null, m.type || null, m.workstream || null, m.capacity != null ? m.capacity : 1, txt,
-        m.rate || 0, m.cost || 0, m.role || null];
+        m.rate || 0, m.cost || 0, m.role || null, m.points != null ? m.points : null];
     });
 
     // ---- hidden lossless state sheet
@@ -795,7 +800,12 @@
             weekHours: weekHours,
             offWeeks: offWeeks,
             rate: parseFloat(cellText(tws.getCell(tr, 6))) || 0,
-            cost: parseFloat(cellText(tws.getCell(tr, 7))) || 0
+            cost: parseFloat(cellText(tws.getCell(tr, 7))) || 0,
+            // blank = inherit meta.defaultPoints, so an empty cell stays null
+            points: (function () {
+              var c9 = cellText(tws.getCell(tr, 9));
+              return c9 !== '' && isFinite(parseFloat(c9)) ? parseFloat(c9) : null;
+            })()
           });
         }
       }
