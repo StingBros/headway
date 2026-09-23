@@ -1569,6 +1569,58 @@ if (!ExcelJS) {
 } else {
   global.ExcelJS = ExcelJS;
   var RMExcel = require('../js/excel.js');
+  // "Excluded from Auto timeline" round trip: the lossless path, the visible
+  // Roadmap / Stories columns on the template path, and Lock winning a clash
+  var noAutoExcelTest = function () {
+    var sN = mkState([
+      { num: 1, feature: 'x', phaseId: 'p1', noAuto: true, stories: [{ title: 's', num: 11, noAuto: true }, { title: 't', num: 12 }] },
+      { num: 2, feature: 'y', phaseId: 'p1', locked: true }
+    ]);
+    var hdrCol = function (row, re) {
+      var col = 0;
+      row.eachCell({ includeEmpty: false }, function (c, n) { if (!col && re.test(String(c.value))) col = n; });
+      return col;
+    };
+    return RMExcel.exportWorkbook(sN).then(function (bufN) {
+      return RMExcel.importWorkbook(bufN).then(function (rn1) {
+        eq(rn1.state.items[0].noAuto, true, 'feature noAuto survives the lossless path');
+        eq(rn1.state.items[0].stories.map(function (x) { return x.noAuto; }), [true, false], 'story noAuto survives the lossless path');
+        var wbN = new ExcelJS.Workbook();
+        return wbN.xlsx.load(bufN).then(function () {
+          wbN.removeWorksheet(wbN.getWorksheet('_RoadmapTool').id);
+          var rwsN = wbN.getWorksheet('Roadmap');
+          var nCol = hdrCol(rwsN.getRow(3), /^excluded from auto$/i);
+          var sCol = hdrCol(rwsN.getRow(3), /^status$/i);
+          ok(nCol === sCol + 1, 'the Roadmap sheet shows an Excluded from Auto column beside Status');
+          ok(hdrCol(wbN.getWorksheet('Stories').getRow(1), /^excluded from auto$/i) > 0, 'the Stories sheet shows one too');
+          return wbN.xlsx.writeBuffer();
+        }).then(function (bufN2) {
+          return RMExcel.importWorkbook(bufN2);
+        }).then(function (rn2) {
+          ok(rn2.source === 'template', 'the noAuto doc without the tool sheet parses as a template');
+          eq([rn2.state.items[0].noAuto, rn2.state.items[0].locked], [true, false], 'template path re-reads the feature flag');
+          eq([rn2.state.items[1].noAuto, rn2.state.items[1].locked], [false, true], 'and a locked feature stays locked');
+          eq(rn2.state.items[0].stories.map(function (x) { return x.noAuto; }), [true, false], 'template path re-reads the story flag');
+          // a hand-edited sheet marking a locked row excluded too: Lock wins
+          var wbC = new ExcelJS.Workbook();
+          return wbC.xlsx.load(bufN).then(function () {
+            wbC.removeWorksheet(wbC.getWorksheet('_RoadmapTool').id);
+            var rwsC = wbC.getWorksheet('Roadmap');
+            var nColC = hdrCol(rwsC.getRow(3), /^excluded from auto$/i);
+            for (var rr = 4; rr <= rwsC.rowCount; rr++) {
+              if (String(rwsC.getRow(rr).getCell(1).value) === '2') rwsC.getRow(rr).getCell(nColC).value = 'Yes';
+            }
+            return wbC.xlsx.writeBuffer();
+          }).then(function (bufC) {
+            return RMExcel.importWorkbook(bufC);
+          }).then(function (rc) {
+            var c2 = rc.state.items.filter(function (i2) { return i2.num === 2; })[0];
+            eq([c2.locked, c2.noAuto], [true, false], 'Locked plus Excluded in the sheet imports as Locked');
+          });
+        });
+      });
+    });
+  };
   var seed = require('./seed.fixture.js');
   var st = RM.normalizeState(seed);
   st.team = [{ id: 't1', name: 'Ada', type: 'Development', rate: 210, cost: 95 }, { id: 't2', name: 'Grace', type: 'Data' }];
@@ -1776,7 +1828,7 @@ if (!ExcelJS) {
                         return RMExcel.importWorkbook(bufY2);
                       }).then(function (ry) {
                         ok(ry.state.team[0].points === null, 'a blank Points per sprint cell reads back as null (inherit)');
-                        finish();
+                        return noAutoExcelTest().then(finish);
                       });
                     });
                   });
