@@ -4205,6 +4205,30 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   ok(!!dry && / ?\/ ?0/.test(dry.textContent) && /no supply/.test(dry.getAttribute('title')),
     'a week asking a type nobody supplies reads over and says “no supply”');
   undo();
+  // story-points mode: one header cell per sprint, lined up under the sprint cells
+  {
+    window.HeadwayApp.ai.commit('points header', (s) => {
+      s.meta.capMode = 'points'; s.team[0].points = 10;
+      // feature sizes are labels here: give one scheduled feature a points size
+      const f = s.items.find((i) => !i.milestone && !i.done && i.startDay != null && i.startDay >= 0);
+      f.size = '5';
+    });
+    const sprCells = [...doc.querySelectorAll('#hdrSprints .sprint-cell')];
+    const pCells = [...doc.querySelectorAll('#hdrCapRows .hdr-cap[data-captype="Development"] .cap-cell')];
+    const px = (el, k) => parseFloat(el.style[k]);
+    ok(pCells.length === sprCells.length && pCells.length < 48, 'points mode: one capacity cell per sprint (' + pCells.length + ' vs ' + sprCells.length + ' sprints)');
+    ok(pCells.every((c, i) => Math.abs(px(c, 'left') - 1 - px(sprCells[i], 'left')) < 0.01 &&
+      Math.abs(px(c, 'width') + 2 - px(sprCells[i], 'width')) < 0.01), 'each sprint cell spans its sprint\'s weeks');
+    const capP = window.RM.capacity(window.HeadwayApp.ai.state());
+    const i0 = capP.rows.Development.findIndex((c) => c.demand > 0 && !c.blackout);
+    ok(i0 !== -1 && pCells[i0].textContent.trim().indexOf(String(Math.round(capP.rows.Development[i0].supply))) !== -1 &&
+      /points/.test(pCells[i0].getAttribute('title')) && /Sprint \d+/.test(pCells[i0].getAttribute('title')),
+      'a sprint cell reads demand / supply for the sprint and names it in the tooltip (' + (i0 !== -1 ? pCells[i0].textContent : '') + ')');
+    ok(pCells.every((c, i) => c.classList.contains('over') === capP.rows.Development[i].over || capP.rows.Development[i].blackout),
+      'sprint cells read over exactly when the sprint is over');
+    undo();
+    ok(doc.querySelectorAll('#hdrCapRows .hdr-cap[data-captype="Development"] .cap-cell').length === 48, 'back per person: 48 week cells');
+  }
   undo();
   // auto timeline: a phase flagged Auto re-lays its items on every commit
   {

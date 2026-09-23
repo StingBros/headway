@@ -3490,11 +3490,12 @@
 
   // the widest capacity-cell form that fits the week column: ~5.5px per
   // character in the 9px mono those cells use, with 2px of air each side
-  function capCellText(forms) {
+  function capCellText(forms, cellPx) {
+    var room = (cellPx != null ? cellPx : weekPx) - 4;
     for (var i = 0; i < forms.length; i++) {
       // fmtPe hands back a number, so the bare-ask form needs coercing
       var t = String(forms[i]);
-      if (t.length * 5.5 <= weekPx - 4) return t;
+      if (t.length * 5.5 <= room) return t;
     }
     return '';
   }
@@ -3526,18 +3527,22 @@
     }
 
     // capacity rows: one per TRACKED capacity type (Setup → Capacity), each
-    // week's demand vs supply for that type, in people or points
+    // period's demand vs supply for that type — a week each in people, a
+    // sprint each in story points (cells span the sprint cells above)
     var cap = validation.capacity;
     var unitWord = meta.capMode === 'points' ? 'points' : 'people';
+    var bySprint = cap.period === 'sprint';
     var capRowsHtml = [];
     cap.types.forEach(function (ct) {
       var rowCells = cap.rows[ct];
       var hcc = [];
-      for (var w = 0; w < meta.numWeeks; w++) {
-        var cell = rowCells[w];
-        var hn = RM.holidaysInWeek(meta, w, hset);
+      cap.periods.forEach(function (per, pi) {
+        var w = per.w0, nW = per.w1 - per.w0, cellPx = nW * weekPx;
+        var cell = rowCells[pi];
+        var hn = 0;
+        for (var hw2 = per.w0; hw2 < per.w1; hw2++) hn += RM.holidaysInWeek(meta, hw2, hset);
         var cls, txt2 = '', title;
-        if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = 'Holiday week'; }
+        if (cell.blackout) { cls = 'blackout'; txt2 = weekPx >= 24 ? '✕' : ''; title = bySprint ? 'Holiday weeks' : 'Holiday week'; }
         else {
           var ratio = cell.supply > 0 ? cell.demand / cell.supply : (cell.demand > 0 ? Infinity : 0);
           // work asked of a type nobody supplies can never be done: that reads
@@ -3548,18 +3553,24 @@
           // Measured off the string, not the zoom — a clipped “4 / 0.” reads
           // as a different number. The tooltip always carries both.
           var dTxt = fmtPe(cell.demand), sTxt = fmtPe(cell.supply);
-          txt2 = capCellText([dTxt + ' / ' + sTxt, dTxt + '/' + sTxt, dTxt]);
+          txt2 = capCellText([dTxt + ' / ' + sTxt, dTxt + '/' + sTxt, dTxt], cellPx);
           title = ct + ': ' + fmtPe(cell.demand) + ' ' + unitWord + ' asked · ' + fmtPe(cell.supply) + ' available' +
             (cell.supply === 0 ? ' (no supply — nobody on the roster supplies ' + ct + ')' : '');
         }
+        var when = !bySprint ? 'Week of ' + RM.fmtShort(RM.weekStartDate(meta, w))
+          : (per.num != null ? 'Sprint ' + per.num + ', ' : '') + RM.fmtShort(RM.weekStartDate(meta, w)) + ' – ' +
+            RM.fmtShort(RM.spanEndDate(meta, w * SPW(), nW * SPW()));
+        // a sprint cell spans its weeks; a click toggles the week under the
+        // pointer (data-w1 marks the span)
         hcc.push('<div class="cap-cell ' + cls + (hn && !cell.blackout ? ' part' : '') + '" tabindex="0" data-w="' + w +
-          '" style="left:' + (w * weekPx + 1) + 'px;width:' + (weekPx - 2) + 'px" title="' +
-          esc('Week of ' + RM.fmtShort(RM.weekStartDate(meta, w)) + ': ' + title +
+          (bySprint ? '" data-w1="' + per.w1 : '') +
+          '" style="left:' + (w * weekPx + 1) + 'px;width:' + (cellPx - 2) + 'px" title="' +
+          esc(when + ': ' + title +
             (hn ? ' · ' + hn + ' holiday day(s)' : '') + ' · click to toggle holiday week') + '">' + txt2 + '</div>');
-      }
+      });
       capRowsHtml.push('<div class="hdr-line hdr-cap" data-captype="' + esc(ct) + '">' +
         '<div class="hdr-left"><span class="cap-row-lab" title="' +
-        esc('Each week: ' + unitWord + ' asked / available for ' + ct + ' — Setup → Capacity') + '">' +
+        esc((bySprint ? 'Each sprint: ' : 'Each week: ') + unitWord + ' asked / available for ' + ct + ' — Setup → Capacity') + '">' +
         esc(ct) + ' capacity</span></div>' +
         '<div class="hdr-lane">' + hcc.join('') + '</div></div>');
     });
@@ -3691,6 +3702,13 @@
     var cell = e.target.closest('[data-w]');
     if (!cell) return;
     var w = parseInt(cell.dataset.w, 10);
+    // a sprint-wide cell (points mode): the week under the pointer; a
+    // keyboard click (no pointer position) takes the sprint's first week
+    if (cell.dataset.w1 && e.clientX) {
+      var r = cell.getBoundingClientRect();
+      var off = Math.floor((e.clientX - r.left) / weekPx);
+      if (off > 0) w = Math.min(parseInt(cell.dataset.w1, 10) - 1, w + off);
+    }
     var iso = RM.fmtISO(RM.weekStartDate(state.meta, w));
     var isFull = RM.holidaysInWeek(state.meta, w) === SPW();
     commit('toggle holiday', function (s) {
