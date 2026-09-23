@@ -9,6 +9,7 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- **Exclude from Auto timeline**: right-click a feature or story (Planning, Scoping, Prioritizing, Sprinting, the panel or a multi-selection) → **Exclude from Auto timeline**, or tick *Excluded from Auto timeline* in the panel / story editor. The ⚡ Auto timeline leaves it where it sits (booked in capacity like a locked item) and never counts it, so a phase whose only out-of-place item is excluded reads as in place; a feature's flag covers its stories, and Auto no longer re-sizes an excluded feature. Unlike Lock it keeps the bar draggable and editable, and **Place at earliest slot** still moves it. Lock and Exclude are mutually exclusive — setting one clears the other. Rows and bars show a zap-off mark; the flag travels in the file, in the Excel sheets (an *Excluded from Auto* column) and through the AI assistant.
 - Phase bands keep their + feature, edit and ⚡ Auto timeline buttons at the right edge, always visible.
 - Sprinting: each sprint's total sits at the right edge of its side entry and heading as a larger number; with story-points capacity on (sprints on, numeric story sizes) it reads planned / available points (e.g. `18 / 20`), in red when the sprint is over — never red while a filter hides some of its stories.
 - Sprinting: clicking a sprint in the side list lands on the sprint heading; it used to end up hidden under the sticky filter bar.
