@@ -2774,6 +2774,19 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(!!brow.querySelector('[data-bact="type"]') && !!brow.querySelector('[data-bact="ws"]'),
     'budget rows have Rate card and Workstream chips');
   ok(!!brow.querySelector('.bu-grip'), 'budget person rows have a reorder grip');
+  {
+    // drag the first person to the end (jsdom rects are zero: a large clientY
+    // means "after the last row"): the order key follows, so a reload keeps it
+    const firstMid = brow.dataset.mid;
+    brow.querySelector('.bu-grip').dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 5, clientY: 5 }));
+    window.dispatchEvent(new window.MouseEvent('pointermove', { clientX: 5, clientY: 999 }));
+    window.dispatchEvent(new window.MouseEvent('pointerup', { clientX: 5, clientY: 999 }));
+    const tm = state().team;
+    ok(tm.length > 1 && tm[tm.length - 1].id === firstMid, 'dragging a budget person grip moves them last');
+    const reTm = window.RM.normalizeState(window.RM.clone(state())).team;
+    ok(reTm[reTm.length - 1].id === firstMid, 'and a reload keeps them last (order key re-minted)');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  }
   // costs reorder too
   click(doc.querySelector('#rows .row.addrow[data-kind="baddcost"]'));
   const crow = doc.querySelector('#rows .row.bcost[data-cost]');
@@ -4260,6 +4273,12 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   click(menuBtns().find(b => !b.hidden));
   ok(!state().items.find(i => i.id === fromId).stories.some(s => s.id === stId) &&
     state().items.find(i => i.id === dest.id).stories.some(s => s.id === stId), 'the story moves to the chosen feature');
+  {
+    // its order key moves with it: last in the new list, and a reload (which
+    // sorts by key) keeps it there
+    const reDest = window.RM.normalizeState(window.RM.clone(state())).items.find(i => i.id === dest.id).stories;
+    ok(reDest[reDest.length - 1].id === stId, 'the moved story stays last in its new feature after a reload (order key re-minted)');
+  }
   undo();
   click(doc.querySelector('#detailBtn'));
   click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
@@ -5318,6 +5337,12 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   ok(copy.size === st.size && copy.priority === st.priority && JSON.stringify(copy.assignees || []) === JSON.stringify(st.assignees || []), 'fields carry over');
   ok(!copy.jiraKey, 'the copy does not point at the original Jira issue');
   ok(new Set(after.stories.map(s => s.id)).size === after.stories.length, 'story ids stay unique');
+  ok(!!copy.order && after.stories.every(x => x === copy || x.order !== copy.order),
+    'the copy gets its own order key (a cloned key would tie with the original)');
+  {
+    const re = window.RM.normalizeState(window.RM.clone(state())).items.find(i => i.id === it.id).stories;
+    ok(re.findIndex(s => s.id === copy.id) === re.findIndex(s => s.id === st.id) + 1, 'and a reload keeps it right after the original');
+  }
   // the other three menus offer it too
   ctx(doc.querySelector('#panel'));
   ok(menu().some(b => /Duplicate story/.test(b.textContent)), 'the panel story menu offers Duplicate story');

@@ -8027,12 +8027,13 @@
       if (!st || !to || to.milestone) return;
       from.stories = from.stories.filter(function (x) { return x.id !== stId; });
       to.stories = to.stories || [];
+      st.order = RM.orderAfterAll(to.stories); // last in its new list, whatever key it had
       to.stories.push(st);
       if (selStory === stId) selectedId = toItemId;
     });
   }
   function moveStoryFeatureMenu(itemId, stId) {
-    return state.items.filter(function (o) { return !o.milestone && o.id !== itemId; }).map(function (o) {
+    return viewItemsOf(state).filter(function (o) { return !o.milestone && o.id !== itemId; }).map(function (o) {
       var ph = phaseOf(o);
       return { pre: typeGlyphHtml(o, 'feature'), label: esc(o.feature || '(untitled)') + (ph ? ' <small>' + esc(ph.name || '') + '</small>' : ''),
         fn: function () { moveStoryToFeature(itemId, stId, o.id); } };
@@ -8272,7 +8273,10 @@
       copy.num = RM.nextNum(s);
       copy.title = (st.title || 'Story') + ' (copy)';
       copy.jiraKey = '';
-      t.stories.splice(t.stories.indexOf(st) + 1, 0, copy);
+      // its own key, right after the original (a cloned key would tie with it)
+      var at = t.stories.indexOf(st) + 1;
+      copy.order = orderAt(t.stories, at);
+      t.stories.splice(at, 0, copy);
       selectedId = itemId;
       selStory = copy.id;
     });
@@ -10974,6 +10978,7 @@
       list = list.filter(function (x) { return x.id !== d.id; });
       var at = d.before ? list.map(function (x) { return x.id; }).indexOf(d.before) : list.length;
       if (at < 0) at = list.length;
+      moved.order = orderAt(list, at); // the key follows the row (normalize sorts by it)
       list.splice(at, 0, moved);
       if (d.isCost) s.costs = list; else s.team = list;
     });
