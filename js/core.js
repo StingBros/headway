@@ -2546,11 +2546,21 @@
     ]);
     im.pairs.forEach(function (pr) { idMap[pr.want.id] = pr.have.id; });
     var num = RM.nextNum(state), srcOf = {};
+    // stories draw from the same number pool: every added story gets a fresh
+    // number and its story deps (workbook numbers) follow through this map —
+    // incoming number -> merged number (matched stories keep the roadmap's)
+    var storyNumMap = {}, newStories = [];
+    function numberStory(ns, fromNum) {
+      ns.num = num++;
+      if (fromNum != null) storyNumMap[fromNum] = ns.num;
+      newStories.push(ns);
+    }
     im.add.forEach(function (it) {
       var n = RM.clone(it);
       delete n.holdPos;
       n.id = fresh(it.id, itemTaken, 'i');
       n.num = num++;
+      n.stories.forEach(function (s, k) { numberStory(s, it.stories[k].num); });
       n.order = null;
       n.phaseId = phaseMap[it.phaseId] || state.phases[0].id;
       n.assignees = mapAssignees(it.assignees);
@@ -2597,14 +2607,28 @@
         ns.id = fresh(s.id, sTaken, 's');
         ns.order = null;
         ns.assignees = mapAssignees(s.assignees);
+        numberStory(ns, s.num);
         plan.stories.add.push({ itemId: pr.have.id, story: ns });
       });
       sm.pairs.forEach(function (sp) {
+        if (sp.want.num != null && sp.have.num != null) storyNumMap[sp.want.num] = sp.have.num;
         plan.stories.matched++;
         var sf = fillFields(sp.have, sp.want, RM.IMPORT_STORY_FILL_FIELDS, plan.stories);
         if (normTitle(sp.want.title) && normTitle(sp.have.title) !== normTitle(sp.want.title)) plan.stories.conflicts++;
         if (sf) plan.stories.fill.push({ itemId: pr.have.id, id: sp.have.id, fields: sf });
       });
+    });
+
+    // an added story's deps name workbook story numbers: follow them to the
+    // merged numbers; one that maps to no story is dropped (story deps hold
+    // story numbers only — never guess a feature or a roadmap story)
+    newStories.forEach(function (st) {
+      var out = [];
+      (st.deps || []).forEach(function (d) {
+        var to = storyNumMap[d];
+        if (to != null && to !== st.num && out.indexOf(to) === -1) out.push(to);
+      });
+      st.deps = out;
     });
 
     function fieldCount(list) { return list.reduce(function (n, f) { return n + Object.keys(f.fields).length; }, 0); }

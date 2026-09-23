@@ -2763,6 +2763,31 @@ var fDeps = planDeps.items.fill.filter(function (f) { return f.id === 'q2'; })[0
 eq(fDeps && fDeps.fields.deps, ['q1'], 'empty dep list filled with the resolvable dep');
 eq(fDeps && fDeps.fields.depsText, ['#77'], 'the unresolvable numbered dep lands in depsText');
 // ------------------------------------------------------------- jira keys
+// story numbers come from the shared pool: an imported story never keeps
+// the workbook's number, and its story deps follow it (Mine#1 / Theirs#1)
+(function () {
+  var mine = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1', name: 'Now' }], items: [
+    { id: 'iMine0001-1-aaaaa', num: 1, phaseId: 'p1', feature: 'Mine', stories: [
+      { id: 'sMine0001-1-aaaaa', num: 2, title: 'M1' }, { id: 'sMine0002-1-aaaaa', num: 3, title: 'M2', deps: [2] }] }] });
+  var theirs = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1', name: 'Now' }], items: [
+    { id: 'iThrs0001-1-bbbbb', num: 1, phaseId: 'p1', feature: 'Theirs', stories: [
+      { id: 'sThrs0001-1-bbbbb', num: 2, title: 'T1' }, { id: 'sThrs0002-1-bbbbb', num: 3, title: 'T2', deps: [2] }] }] });
+  var sIm = RM.clone(mine);
+  RM.applyImport(sIm, RM.planImport(mine, theirs));
+  sIm = RM.normalizeState(sIm);
+  function st(title) { var r = null; sIm.items.forEach(function (it) { it.stories.forEach(function (x) { if (x.title === title) r = x; }); }); return r; }
+  eq([st('M1').num, st('M2').num, st('M2').deps], [2, 3, [2]], 'the roadmap\'s stories keep #2 / #3 and their dependency');
+  var all = []; sIm.items.forEach(function (it) { all.push(it.num); it.stories.forEach(function (x) { all.push(x.num); }); });
+  eq(all.filter(function (n, i) { return all.indexOf(n) !== i; }), [], 'no number is used twice after the import');
+  ok(st('T1').num > 3 && st('T2').num > 3, 'the imported stories get new numbers from the pool (' + st('T1').num + ', ' + st('T2').num + ')');
+  eq(st('T2').deps, [st('T1').num], 'and the imported dependency follows its story to the new number');
+  // a workbook story dep naming no story in the workbook is dropped, never repointed
+  var theirs2 = RM.clone(theirs); theirs2.items[0].stories[1].deps = [2, 99];
+  var sIm2 = RM.clone(mine); RM.applyImport(sIm2, RM.planImport(mine, theirs2));
+  var t2 = sIm2.items[1].stories.filter(function (x) { return x.title === 'T2'; })[0];
+  eq(t2.deps.length, 1, 'an unmapped story dep number is dropped');
+})();
+
 section('jira keys');
 var sJk = mkState([{ num: 1, feature: 'a', epic: 'Login', jiraKey: ' hw-12 ',
   stories: [{ title: 's', jiraKey: 'HW-13' }, { title: 't', jiraKey: 42 }] }],
