@@ -5872,7 +5872,9 @@
         }
         return;
       }
-      commit('story ' + stf, function (s) {
+      // the Auto flag reads the same in history as the feature's
+      var stLbl = stf === 'noAuto' ? (sval ? 'exclude from auto' : 'include in auto') : 'story ' + stf;
+      commit(stLbl, function (s) {
         var st2 = storyById(RM.itemById(s, it.id) || {}, stId);
         if (!st2) return;
         if (stf === 'title') st2.title = String(sval);
@@ -11076,7 +11078,7 @@
       '<b>Sizes in weeks</b> — XS 2d · S 1w · M 2w · L 4w · XL 8w; the risk buffer uses the same scale (panel), shown as one duration<br>' +
       '<b>Rows</b> — drag the left pane to reorder / move phase (auto-order can re-sort by start) · right-click for insert/delete · chips cycle on click<br>' +
       '<b>Links</b> — drag a bar’s edge circles onto another row (left = depends ON it, right = dependency FOR it; Esc cancels) · click an arrow, Delete removes · orange = critical path<br>' +
-      '<b>Timeline</b> — drag empty space to pan · <span class="kbd">⌘scroll</span> zooms · click a capacity cell to toggle a holiday week; single dates + sprint numbering (e.g. S1 = Sep 7) in Settings<br>' +
+      '<b>Timeline</b> — drag empty space to pan · <span class="kbd">⌘+</span> / <span class="kbd">⌘−</span> or <span class="kbd">⌘scroll</span> zoom · click a capacity cell to toggle a holiday week; single dates + sprint numbering (e.g. S1 = Sep 7) in Settings<br>' +
       '<b>Availability row</b> — people available per week (fractional when hours dip); flags weeks with too much concurrent work<br>' +
       '<b>Resources panel</b> — bottom, resizable/collapsible; hours per person per week (default = the project full-time week) — click a cell to type, drag to fill; drag the grip to reorder people<br>' +
       '<b>Auto</b> — dependency-ordered, capacity-aware schedule; locked items and those excluded from Auto stay put<br>' +

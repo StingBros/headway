@@ -4435,13 +4435,39 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok(!!menuBtn(/(Exclude from|Include in) Auto timeline/), 'the Prioritizing card menu offers it');
     doc.querySelector('#popover').hidden = true;
     window.HeadwayApp.ai.setView('sprints');
-    const spRow = doc.querySelector('#sprintView [data-spit]') || doc.querySelector('#sprintView .spv-row');
-    if (spRow) {
-      ctx(spRow);
-      ok(!!menuBtn(/(Exclude from|Include in) Auto timeline/), 'the Sprinting row menu offers it');
-      doc.querySelector('#popover').hidden = true;
-    }
+    const spRow = doc.querySelector('#sprintView .spv-row[data-spid]:not([data-spst])');
+    ok(!!spRow, 'Sprinting shows a feature row to right-click');
+    ctx(spRow);
+    ok(!!menuBtn(/(Exclude from|Include in) Auto timeline/), 'the Sprinting row menu offers it');
+    doc.querySelector('#popover').hidden = true;
+    // Scoping: the feature and story rows
+    window.HeadwayApp.ai.setView('scoping');
+    ctx(rowOf(itX.id));
+    ok(!!menuBtn(/Exclude from Auto timeline/), 'the Scoping feature row menu offers it');
+    click(menuBtn(/Exclude from Auto timeline/));
+    ok(window.RM.itemById(state(), itX.id).noAuto === true, 'and it excludes the feature from Scoping');
+    ok(!!rowOf(itX.id).querySelector('.r-noauto'), 'the Scoping row shows the mark');
+    undo();
+    if (!stRowX()) click(rowOf(itX.id).querySelector('[data-act="stories"]'));
+    ok(!!stRowX(), 'Scoping shows the story row');
+    ctx(stRowX());
+    ok(!!menuBtn(/Exclude from Auto timeline/), 'the Scoping story row menu offers it');
+    doc.querySelector('#popover').hidden = true;
     window.HeadwayApp.ai.setView('planning');
+    // multi-select: the bulk entry excludes every selected feature
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'a', metaKey: true, bubbles: true }));
+    const selIdsX = [...doc.querySelectorAll('#rows .row.item')].map((r) => r.dataset.id);
+    ctx(rowOf(itX.id));
+    ok(/selected/.test((doc.querySelector('#popover .menu-list') || {}).textContent || ''), 'the multi-select menu opens');
+    click(menuBtn(/Exclude from Auto timeline/));
+    ok(selIdsX.length > 1 && selIdsX.every((id) => window.RM.itemById(state(), id).noAuto && !window.RM.itemById(state(), id).locked),
+      'the bulk entry excludes every selected feature (' + selIdsX.length + ')');
+    ok(state().history[state().history.length - 1].label === 'exclude from auto', 'as one exclude from auto change');
+    ctx(rowOf(itX.id));
+    click(menuBtn(/Include in Auto timeline/));
+    ok(selIdsX.every((id) => !window.RM.itemById(state(), id).noAuto), 'and the bulk Include clears them all');
+    undo(); undo();
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     // panel: Locked and Excluded checkboxes, each unchecking the other
     window.__headway.selectItem(itX.id);
     const pcb = (f) => doc.querySelector('#panel input[type="checkbox"][data-f="' + f + '"]');
@@ -4455,13 +4481,16 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok(fx.locked === true && fx.noAuto === false && !pcb('noAuto').checked, 'checking Locked unchecks Excluded');
     // the story editor has the checkbox too
     const pstEdit = doc.querySelector('#panel [data-pst-edit]');
-    if (pstEdit) click(pstEdit);
+    ok(!!pstEdit, 'the panel lists the feature’s stories with an edit affordance');
+    click(pstEdit);
     const scb = doc.querySelector('#panel input[type="checkbox"][data-stf="noAuto"]');
     ok(!!scb, 'the story editor has an Excluded from Auto timeline checkbox');
-    if (scb) {
-      scb.checked = true; scb.dispatchEvent(new window.Event('change', { bubbles: true }));
-      ok(window.RM.itemById(state(), itX.id).stories.some((x) => x.noAuto), 'checking it excludes the story');
-    }
+    scb.checked = true; scb.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(window.RM.itemById(state(), itX.id).stories.some((x) => x.noAuto), 'checking it excludes the story');
+    ok(state().history[state().history.length - 1].label === 'exclude from auto', 'labelled exclude from auto, like features');
+    const scb2 = doc.querySelector('#panel input[type="checkbox"][data-stf="noAuto"]');
+    scb2.checked = false; scb2.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(state().history[state().history.length - 1].label === 'include in auto', 'and unchecking reads include in auto');
     // the ⚡ dry run ignores an excluded feature
     const zapOf = (pid) => doc.querySelector('#rows .row.band[data-phase="' + pid + '"] .band-zap');
     const phX = itX.phaseId;
@@ -5961,6 +5990,14 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
   const evTyping = zkey('=', null, rf);
   ok(wp() === w && !evTyping.defaultPrevented, 'ignored while typing in the filter box');
   rf.blur();
+  const ce = doc.createElement('div');
+  ce.setAttribute('contenteditable', 'true'); ce.tabIndex = 0;
+  doc.body.appendChild(ce);
+  ce.focus();
+  w = wp();
+  const evCe = zkey('=', null, ce);
+  ok(doc.activeElement === ce && wp() === w && !evCe.defaultPrevented, 'ignored inside a contenteditable');
+  ce.blur(); ce.remove();
   click(doc.querySelector('#rows .row.band [data-act="phase-edit"]'));
   ok(!doc.querySelector('#modalHost').hidden, 'a dialog is open');
   w = wp();
@@ -5977,6 +6014,13 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
   const zout = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Zoom out/.test(b.textContent));
   ok(!!zin && /⌘\+/.test(zin.textContent) && !!zout && /⌘−/.test(zout.textContent), 'the View menu shows ⌘+ / ⌘− beside Zoom in / out');
   doc.querySelector('#popover').hidden = true;
+  click(doc.querySelector('.menu-btn[data-menu="file"]'));
+  const helpBtn = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Shortcuts & help/.test(b.textContent));
+  ok(!!helpBtn, 'File offers Shortcuts & help');
+  click(helpBtn);
+  ok(/⌘\+/.test(doc.querySelector('#modalHost').textContent) && /⌘−/.test(doc.querySelector('#modalHost').textContent),
+    'the help dialog mentions ⌘+ / ⌘−');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 }).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
