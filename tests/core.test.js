@@ -2689,6 +2689,16 @@ ok(sOk.phases[1].order === pKeys[0] && sOk.phases[0].order < pKeys[0], 'movePhas
   eq(RM.viewItems(sN, { autoOrder: true }).map(function (i) { return i.id; }).join(), 'n,d,c,b,a', 'anchored above d: over d on screen');
   eq(RM.viewItems(sN, {}).map(function (i) { return i.id; }).join(), 'a,b,c,n,d', 'and right before d in key order');
 })();
+// chained inserts: a held row anchored to another held row
+(function () {
+  var sC = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1', name: 'P' }], items: [
+    { id: 'X', num: 1, phaseId: 'p1', feature: 'X', startDay: 10, durDays: 5 }, { id: 'A', num: 2, phaseId: 'p1', feature: 'A', startDay: 1, durDays: 5 }] });
+  sC.items.push({ id: 'A1', num: 3, phaseId: 'p1', feature: 'A1', holdPos: { anchor: 'A', below: false } });
+  RM.placeItem(sC, 'A1', 'p1', 'A');
+  sC.items.push({ id: 'A2', num: 4, phaseId: 'p1', feature: 'A2', holdPos: { anchor: 'A1', below: false } });
+  RM.placeItem(sC, 'A2', 'p1', 'A1');
+  eq(RM.viewItems(sC, { autoOrder: true }).map(function (i) { return i.id; }).join(' '), 'A2 A1 A X', 'insert A1 above A, then A2 above A1: A2 A1 A X on screen');
+})();
 var sView = mkState([
   { num: 1, feature: 'late', phaseId: 'p1', startDay: 10, durDays: 5 },
   { num: 2, feature: 'inserted', phaseId: 'p1' },

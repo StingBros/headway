@@ -4496,13 +4496,35 @@
       // a held row shows at its array slot — or, when holdPos names an
       // anchor row ({anchor, below}: Insert feature above / below), right
       // beside that row wherever the start sort put it
-      held.forEach(function (h) {
-        var hp = h.it.holdPos, at = -1;
-        if (hp && typeof hp === 'object' && hp.anchor != null) {
-          mine.forEach(function (x, k) { if (x.it.id === hp.anchor) at = hp.below ? k + 1 : k; });
+      // Anchored rows go in as their anchor lands (an anchor may itself be a
+      // held row — chained inserts), repeating until no more resolve; what
+      // is left (slot-held rows, missing anchors, cycles) takes its slot.
+      function anchorOf(h) {
+        var hp = h.it.holdPos;
+        return hp && typeof hp === 'object' && hp.anchor != null ? hp : null;
+      }
+      var pending = held.slice();
+      function resolveAnchored() {
+        var progress = true;
+        while (pending.length && progress) {
+          progress = false;
+          pending = pending.filter(function (h) {
+            var hp = anchorOf(h), at = -1;
+            if (!hp) return true;
+            mine.forEach(function (x, k) { if (x.it.id === hp.anchor) at = hp.below ? k + 1 : k; });
+            if (at === -1) return true;
+            mine.splice(at, 0, { it: h.it });
+            progress = true;
+            return false;
+          });
         }
-        mine.splice(at !== -1 ? at : Math.min(h.pi, mine.length), 0, { it: h.it });
-      });
+      }
+      function placeAtSlot(h) { mine.splice(Math.min(h.pi, mine.length), 0, { it: h.it }); }
+      resolveAnchored();
+      // slot-held rows next (an anchored row may name one), then the rest
+      pending = pending.filter(function (h) { if (anchorOf(h)) return true; placeAtSlot(h); return false; });
+      resolveAnchored();
+      pending.forEach(placeAtSlot);
       mine.forEach(function (x) { out.push(x.it); });
     });
     // anything with an unknown phase (shouldn't exist post-normalize) tags along
