@@ -146,8 +146,31 @@ ok(!doc.querySelector('#startBody [data-sp-notes]') && !doc.querySelector('#star
     'openReleaseNotes reopens the current version\'s notes');
   click(doc.querySelector('#modalHost [data-m="ok"]'));
 
+  // bundle-first desktop: ONE Open (a project marker or a legacy .xlsx) on
+  // the start page and in the File menu, the legacy convert entry, Save as…
+  window.HeadwayApp.renderStartPage();
+  const spBtns = [...doc.querySelectorAll('#startBody .sp-actions button')].map((b) => b.textContent.trim());
+  ok(spBtns.filter((x) => /^Open/.test(x)).length === 1 && spBtns.indexOf('Open…') >= 0, 'desktop start page: a single Open… (' + spBtns.join(' / ') + ')');
+  ok(!doc.querySelector('#startBody [data-sp-openbundle]') && !/shared roadmap/i.test(doc.querySelector('#startBody').textContent),
+    'desktop start page: no "Open shared roadmap…"');
+  for (const list of ['file', 'macApp']) {
+    const dl = window.HeadwayApp.menuItems(list).map((m) => m.label || '');
+    ok(dl.filter((l) => l === 'Open…').length === 1 && dl.filter((l) => /^Open/.test(l)).length === 2 && dl.indexOf('Open and Convert Legacy File…') >= 0,
+      'desktop ' + list + ' menu: one Open… plus "Open and Convert Legacy File…" (' + dl.join(' / ') + ')');
+    ok(!dl.some((l) => /shared roadmap|Convert to shared/.test(l)) && dl.filter((l) => /^New/.test(l)).length === 1,
+      'desktop ' + list + ' menu: no shared-roadmap duplicates, one New');
+    const iS = dl.findIndex((l) => /^(Save|Export \.xlsx)/.test(l));
+    ok(iS >= 0 && dl[iS + 1] === 'Save as…', 'desktop ' + list + ' menu: Save as… right after Save');
+    ok(!dl.some((l) => /Auto save/.test(l)), 'desktop ' + list + ' menu: no Auto save (nothing is written in place)');
+  }
+
   delete window.HeadwayDesktop;
   window.HeadwayApp.renderStartPage();
+  const bl = window.HeadwayApp.menuItems('file').map((m) => m.label || '');
+  ok(bl.indexOf('Open project…') >= 0 && !bl.some((l) => /^Save as…|Convert Legacy|shared roadmap/.test(l)),
+    'browser File menu: its Open project…, no Save as…, no legacy convert (' + bl.join(' / ') + ')');
+  ok([...doc.querySelectorAll('#startBody .sp-actions button')].filter((b) => /^Open/.test(b.textContent.trim())).length === 1,
+    'browser start page: a single Open…');
 }
 
 const contBtn = doc.querySelector('#startBody [data-sp-continue]');
@@ -181,6 +204,48 @@ ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidd
   ok(window.localStorage.getItem('headway-user-v1') === 'Test User', 'the name persists on this machine');
   const hist = state().history;
   ok(hist.length && hist[hist.length - 1].u === 'Test User', 'the anonymous change is stamped with the new author');
+}
+
+// --------------------- header: the view tabs condense only when they must
+{
+  const bar = doc.querySelector('#topbar');
+  const H = window.__headway;
+  const css = fs.readFileSync(path.join(ROOT, 'css/app.css'), 'utf8');
+  const medias = css.match(/@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g) || [];
+  ok(!medias.some((m) => /tabs-center|tab-l|view-tabs/.test(m)), 'no fixed breakpoint touches the view tabs');
+  ok(/#topbar\.tabs-compact \.view-tabs \.tab-l \{ display: none; \}/.test(css) && !/^\.view-tabs \.tab-l \{ display: none/m.test(css),
+    'labels hide only under .tabs-compact');
+  // jsdom has no layout: mock the widths the header would measure
+  let W = 1700, brandW = 400;
+  const tabsW = () => (bar.classList.contains('tabs-compact') ? 330 : 700);
+  const widths = new Map([['tb-brand', () => brandW], ['menus', () => 150], ['tabs-center', tabsW], ['tb-right', () => 300]]);
+  const kids = [...bar.children];
+  kids.forEach((el) => {
+    const f = widths.get(el.className.split(' ')[0]) || (() => 0);
+    Object.defineProperty(el, 'offsetWidth', { configurable: true, get: f });
+  });
+  Object.defineProperty(bar, 'clientWidth', { configurable: true, get: () => W });
+  // full: 400 + 150 + 700 + 300 + 3 × 18 gap = 1604, room = W − 28 padding
+  H.fitHeaderTabs();
+  ok(!bar.classList.contains('tabs-compact') && !bar.classList.contains('tabs-wrap'), 'a wide window keeps every tab label');
+  W = 1500; H.fitHeaderTabs();
+  ok(bar.classList.contains('tabs-compact') && !bar.classList.contains('tabs-wrap'), 'labels drop only when the full tabs genuinely do not fit');
+  W = 1640; H.fitHeaderTabs();
+  ok(!bar.classList.contains('tabs-compact'), '…and come back as soon as they fit (1640 px here, no breakpoint)');
+  brandW = 520; H.fitHeaderTabs();
+  ok(bar.classList.contains('tabs-compact'), 'a long title / plan name at the same width condenses them');
+  brandW = 400; W = 1100; H.fitHeaderTabs();
+  ok(bar.classList.contains('tabs-compact') && bar.classList.contains('tabs-wrap'), 'when even the icons do not fit, the tab group takes its own row');
+  W = 1700;
+  const raf = window.requestAnimationFrame;
+  window.requestAnimationFrame = (fn) => { fn(0); return 0; }; // run the queued fit now
+  window.dispatchEvent(new window.Event('resize'));
+  window.requestAnimationFrame = raf;
+  ok(!bar.classList.contains('tabs-compact') && !bar.classList.contains('tabs-wrap'), 'a window resize re-measures (full labels again)');
+  kids.forEach((el) => { delete el.offsetWidth; });
+  delete bar.clientWidth;
+  H.fitHeaderTabs();
+  ok(!bar.classList.contains('tabs-compact'), 'not laid out (no width): left as is');
 }
 
 // ------------------------------------------------------------ AI assistant

@@ -4810,6 +4810,45 @@
     $('#hdrSprints').style.width = scopeW() + 'px';
   }
 
+  // ---- header fit. The view tabs show their labels unless the header
+  // genuinely cannot hold them beside the title, plan name, menus and toolbar:
+  // measured (never a fixed breakpoint) on every header resize and whenever
+  // the title or plan name changes. Full labels → compact (icons, the active
+  // tab keeps its label) → the group on its own row, each step only if the
+  // previous one does not fit. Not laid out (hidden, headless) → untouched.
+  function headerNeeds(bar) {
+    var cs = getComputedStyle(bar);
+    var gap = parseFloat(cs.columnGap || cs.gap) || 18;
+    var kids = Array.prototype.filter.call(bar.children, function (el) {
+      return !el.hidden && getComputedStyle(el).display !== 'none';
+    });
+    var need = 0;
+    kids.forEach(function (el) { need += el.offsetWidth || 0; });
+    return need + gap * Math.max(0, kids.length - 1);
+  }
+  function headerRoom(bar) {
+    var cs = getComputedStyle(bar);
+    return bar.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+  }
+  function fitHeaderTabs() {
+    var bar = $('#topbar');
+    if (!bar || !bar.clientWidth) return;
+    bar.classList.remove('tabs-compact', 'tabs-wrap');
+    var room = headerRoom(bar);
+    if (headerNeeds(bar) > room) {
+      bar.classList.add('tabs-compact');
+      if (headerNeeds(bar) > room) bar.classList.add('tabs-wrap');
+    }
+  }
+  var headerFitQueued = false;
+  function queueHeaderFit() {
+    if (headerFitQueued) return;
+    headerFitQueued = true;
+    requestAnimationFrame(function () { headerFitQueued = false; fitHeaderTabs(); });
+  }
+  if (typeof ResizeObserver === 'function') new ResizeObserver(queueHeaderFit).observe($('#topbar'));
+  window.addEventListener('resize', queueHeaderFit);
+
   function renderTopbar() {
     // the desktop shell mirrors File/Edit/View into the macOS menu bar;
     // nudge it so checkmarks and enabled states track the app state
@@ -4837,6 +4876,7 @@
     var fsEl = $('#finishStat');
     if (fsEl) fsEl.textContent = fs;
     if (window.HeadwayJira) HeadwayJira.renderStatus($('#btnJira'), state);
+    fitHeaderTabs(); // the title, plan name or Save label may have changed width
   }
 
   // the widest capacity-cell form that fits the week column: ~5.5px per
@@ -14210,6 +14250,7 @@
 
   window.__headway = {
     getState: function () { return RM.clone(state); },
+    fitHeaderTabs: fitHeaderTabs,
     saveFileName: saveFileName,
     getValidation: function () { return validation; },
     templateState: templateState,
