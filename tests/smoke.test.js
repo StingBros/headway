@@ -4230,6 +4230,21 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
       'a sprint cell reads demand / supply for the sprint and names it in the tooltip (' + (i0 !== -1 ? pCells[i0].textContent : '') + ')');
     ok(pCells.every((c, i) => c.classList.contains('over') === capP.weeks[i].overAny || capP.weeks[i].blackout),
       'sprint cells read over exactly when the sprint is over');
+    // a click lands on the week under the pointer: week 2 of the sprint
+    {
+      const m1 = state().meta;
+      const ci = capP.periods.findIndex((p) => p.w1 - p.w0 === 2 && p.w0 > 0 &&
+        window.RM.holidaysInWeek(m1, p.w0) === 0 && window.RM.holidaysInWeek(m1, p.w0 + 1) === 0);
+      const w0 = capP.periods[ci].w0;
+      const wkPx = px(sprCells[ci], 'width') / 2;
+      const cell = doc.querySelectorAll('#hdrCapRows .hdr-cap .cap-cell')[ci];
+      const r = cell.getBoundingClientRect();
+      cell.dispatchEvent(new window.MouseEvent('click', { bubbles: true, clientX: r.left + wkPx * 1.5, clientY: 5 }));
+      const m2 = state().meta, full = window.RM.slotsOf(m2);
+      ok(window.RM.holidaysInWeek(m2, w0 + 1) === full && window.RM.holidaysInWeek(m2, w0) === 0,
+        'clicking the second half of a sprint cell toggles the sprint\'s second week as a holiday week');
+      undo();
+    }
     undo();
     ok(doc.querySelectorAll('#hdrCapRows .hdr-cap .cap-cell').length === 48, 'back per person: 48 week cells');
   }
@@ -5103,6 +5118,28 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok(!!uSide && uSide.textContent.indexOf('/') === -1, 'Unscheduled shows its points alone (' + (uSide && uSide.textContent) + ')');
     window.HeadwayApp.ai.commit('overbook', (s) => { window.RM.itemById(s, fid).stories[0].size = '9999'; });
     ok(hd().classList.contains('over') && side().classList.contains('over'), 'a sprint asking more points than it has reads over');
+    // a filter hides some of the sprint's stories: X is a partial count, so no red
+    {
+      const phName = state().phases.find((p) => p.id === state().items.find((i) => i.id === fid).phaseId).name;
+      const pickPh = (re) => {
+        click(doc.querySelector('#sprintView [data-spdd="fphase"]'));
+        click([...doc.querySelectorAll('#popover .menu-list button')].find((b) => re.test(b.textContent.trim())));
+      };
+      pickPh(new RegExp('^' + phName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'));
+      ok(!!hd() && !hd().classList.contains('over') && /\(filtered\)/.test(hd().getAttribute('title') || ''),
+        'with a filter on the total is not red and its tooltip says (filtered) (' + (hd() && hd().getAttribute('title')) + ')');
+      pickPh(/All phases/);
+      ok(hd().classList.contains('over'), 'clearing the filter brings the red back');
+    }
+    // no story points to add up, or no sprints: the plain count as before
+    window.HeadwayApp.ai.commit('tshirt under points', (s) => { window.RM.setSizeScheme(s, 'tshirt', 'story'); });
+    ok(hd().textContent.trim() === String(doc.querySelectorAll('#sprintView .spv-sec[data-spsec="' + secKey + '"] .spv-row').length) &&
+      !hd().classList.contains('over'), 'points capacity with a non-numeric story scheme: the plain count, no "0 / Y"');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    window.HeadwayApp.ai.commit('sprints off', (s) => { s.meta.weeksPerSprint = 0; });
+    ok([...doc.querySelectorAll('#sprintView .spv-ct')].every((c) => c.textContent.indexOf('/') === -1),
+      'with sprints off no total reads X / Y');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
     window.HeadwayApp.ai.commit('person mode', (s) => { s.meta.capMode = 'person'; });
     ok(/^\d+(\.\d)? pt$/.test(hd().textContent.trim()) && !hd().classList.contains('over'),
       'per-person mode: the heading shows just the points total');

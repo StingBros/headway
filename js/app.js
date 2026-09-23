@@ -2996,7 +2996,12 @@
     return any ? sum : null;
   }
   // story-points capacity: each sprint's total reads planned / available
-  function sprCapXY() { return !!state.meta.capacityEnabled && state.meta.capMode === 'points'; }
+  // (needs numeric story sizes to add up and sprints to budget per; else the
+  // plain count / points total as before)
+  function sprCapXY() {
+    return !!state.meta.capacityEnabled && state.meta.capMode === 'points' &&
+      RM.sprintsEnabled(state.meta) && sprPointsOn();
+  }
   // the points a sprint supplies across every capacity type (the capacity
   // summary's sprint period); null when the sprint is off the timeline
   function sprSupply(num) {
@@ -3112,10 +3117,14 @@
   function sprCtHtml(sec) {
     var cls = 'pr-lanect spv-ct', txt, title;
     if (sec.supply != null) {
-      var over = sec.points > sec.supply + 1e-9;
+      // a filter leaves out some of the sprint's stories: X is then partial,
+      // so it never reads red
+      var filtered = sprFilterOn();
+      var over = !filtered && sec.points > sec.supply + 1e-9;
       if (over) cls += ' over';
       txt = fmtPts(sec.points) + ' / ' + fmtPts(sec.supply);
-      title = fmtPts(sec.points) + ' story points planned · ' + fmtPts(sec.supply) + ' available this sprint' + (over ? ' — over' : '');
+      title = fmtPts(sec.points) + ' story points planned' + (filtered ? ' (filtered)' : '') + ' · ' +
+        fmtPts(sec.supply) + ' available this sprint' + (over ? ' — over' : '');
     } else if (sec.points != null) {
       txt = fmtPts(sec.points) + ' pt'; title = 'Story points';
     } else {
