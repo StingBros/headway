@@ -83,7 +83,7 @@ rows have right-click context menus; dropdowns share one list UI.
 | Area | How |
 |---|---|
 | Timeline | Biweekly-sprint grid (dates primary, sprint numbers secondary — numbering anchor configurable, e.g. S1 = Sep 7). Holidays are individual DATES drawn as day-level hatched segments; click a week header to toggle a whole week, single dates in Settings. Drag empty space to pan, `⌘scroll` to zoom |
-| Bars | One uniform duration per item (the work/risk split lives in the panel). Drag to move, edges resize; `⌘-drag` pushes all downstream dependents along. Snap grids in View → Snap, one for features (default week) and one for stories (default sprint); day / week / sprint each. View → Auto-order (default on) re-sorts rows by start date after a move |
+| Bars | One uniform duration per item (the work/risk split lives in the panel). Drag to move, edges resize; `⌘-drag` pushes all downstream dependents along. Snap grids in View → Snap, one for features (default week) and one for stories (default sprint); day / week / sprint each. View → Auto-order (default on) shows rows sorted by start date — a view sort; the document keeps its own row order |
 | Sizes | Measured in weeks: XS 2d · S 1w · M 2w · L 4w · XL 8w (editable in Settings). Risk buffers use the same scale |
 | Risk | Per-item severity — None / L / M / H (legacy t-shirt values migrate). Shown in Scoping and the panel only; Planning rows carry no risk chip. The panel also shows a computed dependency-risk estimate with reasons |
 | Phases | Header phase lane: spans auto-derive from items, or pin explicit dates (phase modal, or drag the span — body moves, edges resize). Pinned spans show a white outline |
@@ -107,17 +107,19 @@ rows have right-click context menus; dropdowns share one list UI.
 | Excel | **Save .xlsx** writes a styled workbook in the source template's layout at WEEK granularity (one column per week, sprint numbers merged above; solid work + pale risk cells, Next/Future markers) + Stories + Team (incl. off weeks) + a hidden `_RoadmapTool` sheet with lossless state. **Open** loads tool files losslessly and parses template-shaped workbooks — weekly or legacy sprint columns, inferred from the header dates; the pale run at either end of a bar is read as the risk area |
 | Jira | **Export → Jira CSV** writes a file for Jira Cloud's user-level CSV importer (work navigator → ⋯ → Import issues from CSV; needs only Create work items + Make bulk changes). Rows are features and/or stories with each item's type mapped to a Jira issue type in Setup → Hierarchy; Parent and Blocked By carry the Jira keys typed into Headway (panel "Jira key" on features and stories, Edit epic… for epics), so the first import creates issues, you paste the keys back, and later exports parent stories and re-map as updates. Dates are ISO — pick `yyyy-MM-dd` in the wizard |
 | AI assistant | The **AI** toolbar button (⌘J) opens a chat drawer that answers questions about Headway, the open plan and project-management practice, and edits the document, your preferences or (when Setup → Jira is connected) Jira itself on request — every document edit is undoable and shows in Version history as “you · AI”. Set it up in Setup → Personal → AI assistant: a **LiteLLM gateway** (URL, API key, model picked from the gateway, optional extra headers) or, in the desktop app, your **Claude subscription** (runs `claude -p` from Claude Code, no API key). The drawer loads the gateway's models when it opens and the effort levels a model supports when you pick one, falling back to Medium. Pick the model and effort level in the drawer's compose bar; replies show their thinking; attach images, PDFs or text files with the paperclip, drag-drop or paste. Settings stay on this machine |
+| Shared roadmaps | Desktop only. **File → New shared roadmap / Open shared roadmap / Convert to shared folder…** keeps a roadmap as a `<Title>.headway` folder of small per-entity JSON files in any synced folder (OneDrive, SharePoint, Dropbox), so several people edit it at once with no server. Edits merge field by field (the later edit of the same field wins; both stay in Version history); dependencies reference item ids and rows carry order keys, so concurrent adds and reorders never repoint or reshuffle anything. Plans replace Options (one sub-folder each), presence chips show who else is on a row, **Import from Excel…** adds a workbook's new rows and fills only empty fields, and Save becomes Export .xlsx. Format: `docs/superpowers/specs/2026-09-01-shared-bundle-format-design.md` |
 | Safety | Undo/redo (⌘Z / ⇧⌘Z), localStorage autosave (full state + UI prefs; a blocked/full storage now shows "local save unavailable" instead of failing silently), seed restore (File menu). Saved .xlsx files carry the UI prefs too — opening one on another machine restores the exact browser state |
 
 ## Files
 
 - `index.html` — open this
 - `js/core.js` — pure logic (calendar, deps, capacity, scheduler, risk, critical path); node-testable
+- `js/bundle.js` — shared-roadmap (folder) format: envelopes, field-level merge, plans, history lines; node-testable
 - `js/excel.js` — ExcelJS import/export
 - `js/app.js` — UI
 - `js/export-jira.js` — Jira CSV export (user-level importer shape)
 - `js/jira.js` — Jira Cloud sync
-- `js/desktop.js` — Tauri desktop bridge (native dialogs, disk save/load, file watching); no-op in a browser
+- `js/desktop.js` — Tauri desktop bridge (native dialogs, disk save/load, file watching, the shared-roadmap folder backend); no-op in a browser
 - `tests/seed.fixture.js` — sample document used by the test suites only
 - `js/vendor/exceljs.min.js`, `js/vendor/lucide.min.js` — vendored libraries
 - `src-tauri/` — Tauri shell (Rust); `scripts/copy-frontend.mjs` stages the static files into `dist/` for bundling
@@ -145,7 +147,12 @@ to a GitHub release.
 NODE_PATH=./node_modules node tests/core.test.js
 # headless UI smoke (needs jsdom + exceljs; skips politely without them)
 NODE_PATH=./node_modules node tests/smoke.test.js
+# shared roadmaps: the desktop folder backend, and the app wired to it in jsdom
+NODE_PATH=./node_modules node tests/desktop.test.js
+NODE_PATH=./node_modules node tests/wiring.test.js
 ```
+
+`make test` runs all six suites (core, jira, ai, smoke, desktop, wiring).
 
 760 core assertions (calendar, deps/cycles, validation, capacity incl. time
 off, autoTimeline/placeUnit, risk buffers, iterative ripple, scope columns, end date, workstream colors, capacity-safe scheduling, critical
