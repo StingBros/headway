@@ -27,15 +27,21 @@ scheduler on commit or on open (the on-open auto-order pass stays). Instead
 every non-bucket phase band carries a ⚡ button — also in the band context
 menu and the phase dialog footer — that runs `RM.autoPhase(state, phaseId,
 snap)` once, in a single `commit('auto timeline')`: `RM.autoTimeline` for
-that phase (locked / done units and other phases stay fixed points, the phase
-floor holds), then, at the Stories level, `RM.autoSizeChanges` writes each
+that phase (locked units and other phases are booked as fixed, done units
+anchor dependencies without being booked, the phase floor holds), then, at the Stories level, `RM.autoSizeChanges` writes each
 feature's size from the span its sized stories now cover (`RM.autoSizeDays`,
 rounded up to the feature snap). The size is written once; afterwards it is an
 ordinary editable size — `RM.autoSized` and the derived / read-only size
 treatment are gone. The button is disabled when capacity planning is off or
 when a dry run of `RM.autoPhase` changes nothing; the dry run is memoized per
 phase on a state revision counter. `RM.autoTimeline` without `phaseIds` now
-targets every non-bucket phase. Sections 1 (phase `auto`), 4 (Triggers, Phase
+targets every non-bucket phase. One click settles the phase: `RM.autoPhase`
+repeats the layout (start-sorting the rows between passes when auto-order is
+on, `opts.autoOrder`) until a pass moves nothing, at most 5 passes; the derived
+phase floor reads story bars as well as feature bars; work under way (begun
+before today) keeps its start unless a dependency or capacity pushes it —
+still before today it moves minimally on the day grid, pushed to today or
+later it is placed as new work (snap grid, phase floor). Sections 1 (phase `auto`), 4 (Triggers, Phase
 flag UI) and 7 below describe the superseded flag.
 
 ## Non-goals
