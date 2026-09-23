@@ -2531,7 +2531,37 @@
     return Math.max(1, n);
   };
 
-  // what a unit asks of its type in each in-flight week
+  // what a unit asks of its type in each week of a span, as {w0, byWeek}
+  // (byWeek[i] is week w0 + i). Per person: its heads (× multiplier) in
+  // every non-blackout week. Story points: its points follow its working
+  // days — a week carries points × (the unit's working days in it) / (its
+  // working days in all), so a story starting mid-week puts most of its
+  // points where most of its days are; holiday days carry none.
+  RM.unitDemandByWeek = function (state, u, startDay, durDays, set) {
+    var meta = state.meta, S = RM.slotsOf(meta);
+    set = set || RM.holidayDaySet(meta);
+    var span = Math.max(1, durDays || 0);
+    var w0 = Math.floor(startDay / S), w1 = Math.floor((startDay + span - 1) / S);
+    var out = [];
+    for (var w = w0; w <= w1; w++) out.push(0);
+    if (u.milestone) return { w0: w0, byWeek: out };
+    if (meta.capMode === 'points') {
+      if (!(u.points > 0)) return { w0: w0, byWeek: out };
+      var total = 0;
+      for (var d = startDay; d < startDay + span; d++) {
+        if (RM.offDay(meta, d, set)) continue;
+        out[Math.floor(d / S) - w0] += 1; total += 1;
+      }
+      for (var i = 0; i < out.length; i++) out[i] = total ? u.points * out[i] / total : 0;
+      return { w0: w0, byWeek: out };
+    }
+    var heads = u.mult > 0 ? u.mult : 1;
+    for (var w2 = w0; w2 <= w1; w2++) if (!RM.isBlackoutWeek(meta, w2, set)) out[w2 - w0] = heads;
+    return { w0: w0, byWeek: out };
+  };
+
+  // a unit's average ask per working week (the week-by-week split is
+  // RM.unitDemandByWeek)
   RM.unitWeekDemand = function (state, u, startDay, durDays, set) {
     if (u.milestone) return 0;
     if (state.meta.capMode === 'points') {
@@ -2617,13 +2647,14 @@
     RM.capUnits(state).forEach(function (u) {
       if (u.done || u.milestone || u.startDay == null || u.durDays == null) return;
       var t = u.capType || '';
-      var d = RM.unitWeekDemand(state, u, u.startDay, u.durDays);
+      var dem = RM.unitDemandByWeek(state, u, u.startDay, u.durDays);
       // untyped work has no row of its own — it still lands in byType['']
       addType(t);
       var row = t ? rows[t] : null;
-      var w0 = Math.floor(u.startDay / S), w1 = Math.floor((u.startDay + Math.max(1, u.durDays) - 1) / S);
+      var w0 = dem.w0, w1 = dem.w0 + dem.byWeek.length - 1;
       for (var wk = Math.max(0, w0); wk <= Math.min(meta.numWeeks - 1, w1); wk++) {
         if (blackW[wk]) continue;
+        var d = dem.byWeek[wk - w0];
         var pi2 = pOf[wk];
         var cell = weeks[pi2];
         if (row) {
@@ -3005,9 +3036,6 @@
     var used = Object.create(null);
     sup.types.forEach(function (t) { used[t] = new Array(horizonWeeks); for (var i = 0; i < horizonWeeks; i++) used[t][i] = 0; });
     var set = RM.holidayDaySet(meta);
-    function weeksOf(startDay, durDays) {
-      return [Math.floor(startDay / S), Math.floor((startDay + Math.max(1, durDays) - 1) / S)];
-    }
     // every type the roster supplies constrains the plan; work of a type
     // nobody supplies (or untyped work) is placed by its dependencies alone
     function constrained(u) {
@@ -3045,26 +3073,26 @@
       },
       book: function (u, startDay, durDays, sign) {
         if (!constrained(u) || startDay == null || durDays == null) return;
-        var d = RM.unitWeekDemand(state, u, startDay, durDays, set) * (sign || 1);
-        var ww = weeksOf(startDay, durDays);
-        for (var w = Math.max(0, ww[0]); w <= ww[1] && w < horizonWeeks; w++) {
-          if (RM.isBlackoutWeek(meta, w, set)) continue;
-          used[u.capType][w] += d;
+        var dem = RM.unitDemandByWeek(state, u, startDay, durDays, set);
+        for (var i = 0; i < dem.byWeek.length; i++) {
+          var w = dem.w0 + i;
+          if (w < 0 || w >= horizonWeeks || black[w]) continue;
+          used[u.capType][w] += dem.byWeek[i] * (sign || 1);
         }
       },
       // every period the unit touches must hold what is booked there plus
-      // the unit's share of it (its weekly demand × its working weeks there)
+      // the unit's share of it (its week-by-week demand summed per period)
       fits: function (u, startDay, durDays) {
         if (!constrained(u)) return true;
-        var d = RM.unitWeekDemand(state, u, startDay, durDays, set);
-        var ww = weeksOf(startDay, durDays);
+        var dem = RM.unitDemandByWeek(state, u, startDay, durDays, set);
+        var ww = [dem.w0, dem.w0 + dem.byWeek.length - 1];
         var t = u.capType, ps = periodSupply(t), ut = used[t];
         var w = Math.max(0, ww[0]);
         while (w <= ww[1]) {
           if (w >= horizonWeeks) return true;
           var p = periods[pOf[w]];
           var ask = 0;
-          for (var x = w; x <= ww[1] && x < p.w1; x++) if (!black[x]) ask += d;
+          for (var x = w; x <= ww[1] && x < p.w1; x++) if (!black[x]) ask += dem.byWeek[x - dem.w0];
           if (ask > 0) {
             var booked = 0;
             for (var y = p.w0; y < p.w1; y++) booked += ut[y];

@@ -526,8 +526,8 @@ var sPm3 = autoState([
   { num: 2, feature: 'six', phaseId: 'p1', durDays: 5, size: 6, capType: 'Development' },
   { num: 3, feature: 'six more', phaseId: 'p1', durDays: 5, size: 6, capType: 'Development' }
 ], [{ name: 'X', capType: 'Development', points: 20 }], { capMode: 'points', sizeScheme: 'points' });
-eq(byNum(RM.autoTimeline(sPm3, { today: 0 }).state)[3].startDay, 6,
-  '10 + 6 + 6 exceed the 20-point sprint → the third starts once only half of it lands in sprint 1');
+eq(byNum(RM.autoTimeline(sPm3, { today: 0 }).state)[3].startDay, 7,
+  '10 + 6 + 6 exceed the 20-point sprint → the third starts at day 7: points follow working days, so only 3 of its 5 days (3.6 of its 6 points) land in sprint 1');
 eq(byNum(RM.autoTimeline(sPm3, { today: 0, snap: { feature: 'sprint' } }).state)[3].startDay, 10,
   'snapped to sprints, the third waits for the next sprint');
 // the ledger checks the sprint, not the week: 8 booked in week 1 leaves 2 of
@@ -537,9 +537,9 @@ var sPl8 = autoState([
   { num: 1, feature: 'booked', phaseId: 'p2', startDay: 0, durDays: 5, size: 8, capType: 'Development' },
   { num: 2, feature: 'four', phaseId: 'p1', durDays: 5, size: 4, capType: 'Development' }
 ], [{ name: 'X', capType: 'Development', points: 10 }], { capMode: 'points', sizeScheme: 'points' });
-eq(byNum(RM.autoTimeline(sPl8, { today: 5 }).state)[2].startDay, 6,
-  'week 2 alone has room, but the sprint does not → not at day 5; from day 6 only 2 of its points land in sprint 1');
-eq(byNum(RM.placeUnit(sPl8, sPl8.items[1].id, null, { today: 5 }).state)[2].startDay, 6, 'Place at earliest slot checks the sprint too');
+eq(byNum(RM.autoTimeline(sPl8, { today: 5 }).state)[2].startDay, 8,
+  'week 2 alone has room, but the sprint does not → not at day 5; at day 8 only 2 of its 5 days (1.6 points) land in sprint 1');
+eq(byNum(RM.placeUnit(sPl8, sPl8.items[1].id, null, { today: 5 }).state)[2].startDay, 8, 'Place at earliest slot checks the sprint too');
 eq(byNum(RM.placeUnit(sPl8, sPl8.items[1].id, null, { today: 5, snap: { feature: 'sprint' } }).state)[2].startDay, 10,
   'snapped to sprints, it takes the next sprint');
 // the never-fits guard measures a sprint: 8 points in one week asks more than
@@ -552,6 +552,23 @@ var rBig = RM.autoTimeline(sBig, { today: 0 });
 var Big = byNum(rBig.state);
 ok(Big[1].startDay === 0 && !rBig.notes.some(function (n) { return /never fits/.test(n); }), '8 points in one week fits a 10-point sprint');
 eq(Big[2].startDay, 0, 'and 2 more fill the sprint exactly');
+// points follow working days, not weeks touched: a 5-day, 10-point story
+// starting on the Wednesday of week 2 puts 3 days (6 points) in sprint 1 and
+// 2 days (4 points) in sprint 2 — not 5 / 5 by weeks touched
+{
+  var sDw = mkState([{ num: 1, feature: 'wed', startDay: 7, durDays: 5, size: 10, capType: 'Development' }],
+    { team: [{ name: 'X', capType: 'Development', points: 10 }] });
+  sDw.meta.capMode = 'points'; sDw.meta.holidays = [];
+  var dw = RM.unitDemandByWeek(sDw, RM.capUnits(sDw)[0], 7, 5);
+  eq([dw.w0, dw.byWeek], [1, [6, 4]], 'week 2 gets 3 of 5 days (6 points), week 3 gets 2 (4 points)');
+  var cDw = RM.capacity(sDw);
+  eq([cDw.rows.Development[0].demand, cDw.rows.Development[1].demand], [6, 4], 'the sprint cells follow the days');
+  sDw.meta.capMode = 'person';
+  eq(RM.unitDemandByWeek(sDw, RM.capUnits(sDw)[0], 7, 5).byWeek, [1, 1], 'per person: one head in each week touched');
+  // a holiday day carries no points
+  sDw.meta.capMode = 'points'; sDw.meta.holidays = ['2026-08-07']; // Friday of week 2 (day 9)
+  eq(RM.unitDemandByWeek(sDw, RM.capUnits(sDw)[0], 7, 6).byWeek, [4, 6], 'a holiday inside the span carries none of the points (2 + 3 working days)');
+}
 // cycles do not hang
 var sCy2 = autoState([
   { num: 1, feature: 'a', phaseId: 'p1', durDays: 5, deps: [2], capType: 'Development' },
