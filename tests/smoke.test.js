@@ -1622,7 +1622,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   const anchorIdx = s3.items.findIndex(i => i.id === anchorId);
   const fresh = s3.items[anchorIdx - 1];
   ok(fresh && fresh.feature === '' && fresh.startDay == null, 'new item sits immediately above the anchor');
-  ok(fresh.holdPos === true, 'inserted item carries holdPos until a date is set');
+  ok(!!fresh.holdPos && fresh.holdPos.anchor === anchorId && fresh.holdPos.below === false, 'inserted item carries holdPos (anchored above its row) until a date is set');
   const anchorIt = s3.items[anchorIdx];
   ok(typeof fresh.order === 'string' && fresh.order < anchorIt.order,
     'the inserted item is keyed just before its anchor');
@@ -1677,6 +1677,9 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
     seq = rowSeq();
     ok(!!fresh && seq.indexOf(fresh.id) === seq.indexOf(A.id) + 1,
       'Insert below renders the new row directly under A on screen');
+    const keyOrder = () => window.RM.sortByOrder(state().items.filter(i => i.phaseId === ph.id)).map(i => i.id);
+    ok(!!fresh && keyOrder().indexOf(fresh.id) === keyOrder().indexOf(A.id) + 1,
+      'and its order key sits right after A (key order = auto-order off, peers, the saved file)');
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
     doc.querySelector('#rows .row.item[data-id="' + A.id + '"]').dispatchEvent(
@@ -1686,6 +1689,8 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
     seq = rowSeq();
     ok(!!fresh2 && seq.indexOf(fresh2.id) === seq.indexOf(A.id) - 1,
       'Insert above renders the new row directly over A on screen');
+    ok(!!fresh2 && keyOrder().indexOf(fresh2.id) === keyOrder().indexOf(A.id) - 1,
+      'and its order key sits right before A');
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true })); // the insert
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true })); // the reorder
@@ -1866,7 +1871,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 {
   // give an unscheduled item an explicit duration, then place it — the
   // preset must win over the size estimate
-  const unsched = state().items.find(i => i.startDay == null && !i.milestone);
+  const unsched = state().items.find(i => i.startDay == null && !i.milestone && doc.querySelector('#rows .row.item[data-id="' + i.id + '"] .r-num'));
   if (unsched) {
     click(doc.querySelector('#rows .row.item[data-id="' + unsched.id + '"] .r-num'));
     const durInp = doc.querySelector('#panel [data-f="durWeeks"]');

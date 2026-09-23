@@ -2543,6 +2543,59 @@ var pKeys = sOk.phases.map(function (p) { return p.order; });
 RM.movePhaseTo(sOk, 'p2', 'p1');
 eq(sOk.phases.map(function (p) { return p.id; }), ['p2', 'p1'], 'movePhaseTo moves the phase in the array');
 ok(sOk.phases[1].order === pKeys[0] && sOk.phases[0].order < pKeys[0], 'movePhaseTo changes only the moved phase\'s key');
+// a keyless row added this session (keys are minted on the next commit or
+// load) must never make a move land on a duplicate or out-of-sequence key
+(function () {
+  function mkK() {
+    return RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1', name: 'P1' }, { id: 'p2', name: 'P2' }, { id: 'p3', name: 'P3' }],
+      items: [{ id: 'a', num: 1, phaseId: 'p1', feature: 'A', stories: [{ id: 's1', title: 'one' }, { id: 's2', title: 'two' }] }] });
+  }
+  function ids(list) { return list.map(function (x) { return x.id; }).join(); }
+  function reloadPhases(st) { return ids(RM.normalizeState(RM.clone(st)).phases); }
+  var k1 = mkK();
+  k1.phases.push({ id: 'p4', name: 'P4', bucket: false, collapsed: false }); // Add phase: keyless push
+  RM.movePhaseTo(k1, 'p1', null); // drag P1 to the bottom
+  eq(ids(k1.phases), 'p2,p3,p4,p1', 'phase drag to the bottom after adding a phase');
+  eq(reloadPhases(k1), 'p2,p3,p4,p1', '…survives a reload');
+  var k2 = mkK();
+  k2.phases.push({ id: 'p4', name: 'P4' });
+  RM.movePhaseTo(k2, 'p3', null); // "Move down" past the new keyless last phase
+  var k2keys = k2.phases.map(function (p) { return p.order; }).filter(Boolean);
+  eq(k2keys.filter(function (k, i) { return k2keys.indexOf(k) !== i; }), [], 'Move down next to a new phase never duplicates a key');
+  eq(reloadPhases(k2), 'p1,p2,p4,p3', '…and the reload reads the moved order');
+  var k3 = mkK();
+  k3.items[0].stories.push({ id: 's3', title: 'three' }); // Add story: keyless push
+  RM.moveStoryToSprint(k3, 'a', 's1', 1, null); // Sprinting drop of s1 to the end of the list
+  eq(ids(RM.normalizeState(RM.clone(k3)).items[0].stories), 's2,s3,s1', 'a story dropped last past a keyless story stays last after a reload');
+  var k4 = mkK();
+  k4.items[0].stories.push({ id: 's3', title: 'three' });
+  RM.moveStoryToSprint(k4, 'a', 's1', 1, 's3'); // dropped right before the keyless story
+  eq(ids(RM.normalizeState(RM.clone(k4)).items[0].stories), 's2,s1,s3', 'a story dropped before a keyless story stays there after a reload');
+  // the commit-time sweep: every keyed list comes out keyed, array = key order
+  var k5 = mkK();
+  k5.phases.splice(1, 0, { id: 'pX', name: 'X' });
+  k5.items[0].stories.splice(1, 0, { id: 'sX', title: 'x' });
+  k5.team.push({ id: 'tX', name: 'T' });
+  RM.ensureAllOrder(k5);
+  ok(k5.phases.every(function (p) { return p.order; }) && k5.items[0].stories.every(function (x) { return x.order; }) && k5.team.every(function (m) { return m.order; }),
+    'ensureAllOrder keys every phase, story and person');
+  eq([ids(k5.phases), ids(k5.items[0].stories)], ['p1,pX,p2,p3', 's1,sX,s2'], '…in their array slots');
+})();
+// a held row anchored to another row shows beside it under auto-order,
+// wherever its array slot is (keys a,b,c,d with reversed starts)
+(function () {
+  var sN = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1', name: 'P' }], items: [
+    { id: 'a', num: 1, phaseId: 'p1', feature: 'A', startDay: 30, durDays: 5 }, { id: 'b', num: 2, phaseId: 'p1', feature: 'B', startDay: 20, durDays: 5 },
+    { id: 'c', num: 3, phaseId: 'p1', feature: 'C', startDay: 10, durDays: 5 }, { id: 'd', num: 4, phaseId: 'p1', feature: 'D', startDay: 0, durDays: 5 }] });
+  sN.items.push({ id: 'n', num: 5, phaseId: 'p1', feature: 'N', holdPos: { anchor: 'd', below: true } });
+  RM.placeItem(sN, 'n', 'p1', null); // key right after d
+  eq(RM.viewItems(sN, { autoOrder: true }).map(function (i) { return i.id; }).join(), 'd,n,c,b,a', 'a held row anchored below d shows under d on screen');
+  eq(RM.viewItems(sN, {}).map(function (i) { return i.id; }).join(), 'a,b,c,d,n', 'and sits right after d in key order');
+  var n = RM.itemById(sN, 'n'); n.holdPos = { anchor: 'd', below: false };
+  RM.placeItem(sN, 'n', 'p1', 'd');
+  eq(RM.viewItems(sN, { autoOrder: true }).map(function (i) { return i.id; }).join(), 'n,d,c,b,a', 'anchored above d: over d on screen');
+  eq(RM.viewItems(sN, {}).map(function (i) { return i.id; }).join(), 'a,b,c,n,d', 'and right before d in key order');
+})();
 var sView = mkState([
   { num: 1, feature: 'late', phaseId: 'p1', startDay: 10, durDays: 5 },
   { num: 2, feature: 'inserted', phaseId: 'p1' },

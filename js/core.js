@@ -1019,21 +1019,68 @@
     }
     return RM.sortByOrder(list);
   };
+  // Every keyed list of a document keyed and sorted (items, each item's
+  // stories, phases, team, costs): rows spliced in keyless this session get a
+  // key interpolated from their array neighbours. The app runs it at the end
+  // of every commit, so no keyless row ever reaches a save, a shard or a peer.
+  RM.ensureAllOrder = function (state) {
+    if (!state) return state;
+    ['phases', 'team', 'costs'].forEach(function (k) { if (Array.isArray(state[k])) RM.ensureOrder(state[k]); });
+    if (Array.isArray(state.items)) {
+      state.items.forEach(function (it) { if (it && Array.isArray(it.stories)) RM.ensureOrder(it.stories); });
+      RM.ensureOrder(state.items);
+    }
+    return state;
+  };
+  // The array is the truth, the keys follow: entries whose key breaks the
+  // array's key sequence (or have none) get a key between their neighbours.
+  // For code that reorders whole arrays (the assistant's path ops) before
+  // normalizeState would sort them back by the old keys.
+  RM.rekeyInSequence = function (list) {
+    var prevKey = null;
+    (list || []).forEach(function (x, i) {
+      var k = orderKey(x.order);
+      if (!k || (prevKey != null && k <= prevKey)) {
+        var nextKey = null;
+        for (var j = i + 1; j < list.length && nextKey == null; j++) {
+          var kj = orderKey(list[j].order);
+          if (kj && (prevKey == null || kj > prevKey)) nextKey = kj;
+        }
+        k = RM.orderBetween(prevKey, nextKey);
+      }
+      x.order = k;
+      prevKey = k;
+    });
+    return list;
+  };
+  RM.rekeyAllInSequence = function (state) {
+    if (!state) return state;
+    ['phases', 'team', 'costs'].forEach(function (k) { if (Array.isArray(state[k])) RM.rekeyInSequence(state[k]); });
+    if (Array.isArray(state.items)) {
+      state.items.forEach(function (it) { if (it && Array.isArray(it.stories)) RM.rekeyInSequence(it.stories); });
+      RM.rekeyInSequence(state.items);
+    }
+    return state;
+  };
   // Move `entry` inside `list` to sit before `beforeId` (null = after the
   // last entry that inGroup accepts): ONE order key changes, relative to the
   // new neighbours, and the array mirrors the move for index-based code.
+  // Neighbours are the nearest KEYED peers in array order — a row added this
+  // session has no key until the next commit, and must neither lend a
+  // missing key nor be skipped past (it is keyed later between its own
+  // array neighbours, which then agree with the new key).
   function placeInList(list, entry, beforeId, inGroup) {
-    var peers = RM.sortByOrder(list.filter(function (x) { return x !== entry && inGroup(x); }));
-    var at = -1;
-    peers.forEach(function (x, i) { if (x.id === beforeId) at = i; });
-    var before = at === -1 ? null : peers[at];
-    var prev = at === -1 ? peers[peers.length - 1] : peers[at - 1];
-    entry.order = RM.orderBetween(prev ? prev.order : null, before ? before.order : null);
     var cur = list.indexOf(entry);
     if (cur !== -1) list.splice(cur, 1); // an entry not yet in the list is simply inserted
+    var before = null, i;
+    if (beforeId != null) list.forEach(function (x) { if (x.id === beforeId && inGroup(x)) before = x; });
     var pos = list.length;
     if (before) pos = list.indexOf(before);
-    else for (var i = list.length - 1; i >= 0; i--) if (inGroup(list[i])) { pos = i + 1; break; }
+    else for (i = list.length - 1; i >= 0; i--) if (inGroup(list[i])) { pos = i + 1; break; }
+    var prevKey = null, nextKey = null;
+    for (i = pos - 1; i >= 0 && prevKey == null; i--) if (inGroup(list[i]) && orderKey(list[i].order)) prevKey = orderKey(list[i].order);
+    for (i = pos; i < list.length && nextKey == null; i++) if (inGroup(list[i]) && orderKey(list[i].order)) nextKey = orderKey(list[i].order);
+    entry.order = RM.orderBetween(prevKey, nextKey);
     list.splice(pos, 0, entry);
     return entry;
   }
@@ -4380,8 +4427,15 @@
         if (sa !== sb) return sa - sb;
         return a.i - b.i; // stable
       });
+      // a held row shows at its array slot — or, when holdPos names an
+      // anchor row ({anchor, below}: Insert feature above / below), right
+      // beside that row wherever the start sort put it
       held.forEach(function (h) {
-        mine.splice(Math.min(h.pi, mine.length), 0, { it: h.it });
+        var hp = h.it.holdPos, at = -1;
+        if (hp && typeof hp === 'object' && hp.anchor != null) {
+          mine.forEach(function (x, k) { if (x.it.id === hp.anchor) at = hp.below ? k + 1 : k; });
+        }
+        mine.splice(at !== -1 ? at : Math.min(h.pi, mine.length), 0, { it: h.it });
       });
       mine.forEach(function (x) { out.push(x.it); });
     });

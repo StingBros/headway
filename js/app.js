@@ -669,6 +669,9 @@
     if (undoStack.length > 120) undoStack.shift();
     redoStack.length = 0;
     if (mutate) mutate(state);
+    // rows spliced in without an order key get one from their array
+    // neighbours now, before anything saves, flushes or reorders past them
+    RM.ensureAllOrder(state);
     recordHistory(label, prev);
     afterChange();
     maybeAskName();
@@ -680,6 +683,7 @@
     if (undoStack.length > 120) undoStack.shift();
     redoStack.length = 0;
     state = next;
+    RM.ensureAllOrder(state);
     multiSel = null; // ids from the previous document mean nothing here
     recordHistory(label, prev);
     afterChange();
@@ -8130,16 +8134,13 @@
       }).items[0];
       it.id = newId;
       it.num = RM.nextNum(s);
-      it.holdPos = true;
-      // the held row shows at its array slot inside the phase, so aim that
-      // slot at the anchor's ON-SCREEN position: the new key lands right
-      // above/below the anchor row however the phase is currently sorted.
-      // This leans on RM.sortItemsByStart splicing a holdPos row back in at
-      // its array index — change that and this insert lands in the wrong
-      // place under auto-order without any test failing.
+      // the key lands right beside the anchor in KEY order (what auto-order
+      // off, peers and the saved file read), and holdPos names the anchor so
+      // auto-order shows the held row beside it on screen too
+      it.holdPos = { anchor: itemId, below: offset === 1 };
       var a2 = RM.itemById(s, itemId);
-      var vi = inPhase(viewItemsOf(s), a2.phaseId).indexOf(a2);
-      var before = inPhase(s.items, a2.phaseId)[vi + offset];
+      var keyed = inPhase(RM.sortByOrder(s.items.slice()), a2.phaseId);
+      var before = offset === 1 ? keyed[keyed.indexOf(a2) + 1] : a2;
       s.items.push(it);
       RM.placeItem(s, newId, a2.phaseId, before ? before.id : null);
     });
@@ -8189,7 +8190,8 @@
       t.stories = t.stories || [];
       var anchor = stId ? storyById(t, stId) : null;
       var idx = anchor ? t.stories.indexOf(anchor) + offset : t.stories.length;
-      t.stories.splice(idx, 0, { id: newId, title: '', done: false, num: RM.nextNum(s) });
+      // its own key between its new neighbours (never left for the next load)
+      t.stories.splice(idx, 0, { id: newId, title: '', done: false, num: RM.nextNum(s), order: orderAt(t.stories, idx) });
       expanded[itemId] = true;
       selectedId = itemId;
       selStory = newId;
