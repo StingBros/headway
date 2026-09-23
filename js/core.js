@@ -2582,30 +2582,70 @@
     return u.mult > 0 ? u.mult : 1;
   };
 
-  // the header rows: one per tracked capacity type, each with per-week demand
-  // vs supply. `weeks` keeps the aggregate over the tracked types (validation
-  // and the older readers use it); `rows` is what the header draws.
+  // the stretches capacity is weighed over, as [{w0, w1, num}] (w1
+  // exclusive) covering [0, horizonWeeks): a week each per person; in
+  // story-points mode one per sprint (points are a per-sprint budget), aligned
+  // to the sprint numbering — a partial first or last sprint is clipped to
+  // the horizon. With sprints off, points mode uses two-week blocks from the
+  // timeline start (points then read "per two weeks"). `num` is the sprint
+  // number when sprints are on, else null.
+  RM.capPeriods = function (meta, horizonWeeks) {
+    var H = horizonWeeks != null ? horizonWeeks : meta.numWeeks;
+    var out = [];
+    if (meta.capMode !== 'points') {
+      for (var w = 0; w < H; w++) out.push({ w0: w, w1: w + 1, num: null });
+      return out;
+    }
+    if (!RM.sprintsEnabled(meta)) {
+      var bw = RM.sprintWeeksForPoints(meta);
+      for (var b = 0; b < H; b += bw) out.push({ w0: b, w1: Math.min(H, b + bw), num: null });
+      return out;
+    }
+    var si = RM.sprintInfo(meta);
+    // the sprint boundary at or before week 0
+    var first = si.anchorWeek - Math.ceil(si.anchorWeek / si.wps) * si.wps;
+    for (var s0 = first; s0 < H; s0 += si.wps) {
+      var a = Math.max(0, s0), e = Math.min(H, s0 + si.wps);
+      if (e > a) out.push({ w0: a, w1: e, num: si.firstNum + Math.round((s0 - si.anchorWeek) / si.wps) });
+    }
+    return out;
+  };
+
+  // the header rows: one per tracked capacity type, each with per-PERIOD
+  // demand vs supply (RM.capPeriods: weeks per person, sprints in points
+  // mode). `weeks` keeps the aggregate over the tracked types, one cell per
+  // period despite its name — identical to per-week in per-person mode
+  // (validation and the older readers use it); `rows` is what the header
+  // draws. `periods` lists the stretches, `period` names them.
   RM.capacity = function (state) {
     var meta = state.meta;
     var S = RM.slotsOf(meta);
     var sup = RM.capSupply(state);
     var tracked = RM.trackedCapTypes(state, sup);
+    var periods = RM.capPeriods(meta, meta.numWeeks);
+    var pOf = new Array(meta.numWeeks); // week → period index
+    periods.forEach(function (p, i) { for (var pw = p.w0; pw < p.w1; pw++) pOf[pw] = i; });
     // prototype-free: a capacity type may be named 'constructor'
     var trackedSet = Object.create(null);
     tracked.forEach(function (t) { trackedSet[t] = true; });
     var rows = Object.create(null);
     var weeks = [];
-    for (var w = 0; w < meta.numWeeks; w++) {
-      weeks.push({ demand: 0, supply: 0, over: false, blackout: RM.isBlackoutWeek(meta, w), byType: Object.create(null), items: [] });
-    }
+    var blackW = [];
+    for (var w = 0; w < meta.numWeeks; w++) blackW.push(RM.isBlackoutWeek(meta, w));
+    periods.forEach(function (p) {
+      var allBlack = true;
+      for (var bw = p.w0; bw < p.w1; bw++) if (!blackW[bw]) allBlack = false;
+      weeks.push({ demand: 0, supply: 0, over: false, blackout: allBlack, byType: Object.create(null), items: [] });
+    });
     tracked.forEach(function (t) {
       var arr = [];
-      for (var w2 = 0; w2 < meta.numWeeks; w2++) {
-        var sv = sup.byType[t] ? sup.byType[t][w2] : 0;
-        arr.push({ demand: 0, supply: sv, over: false, blackout: weeks[w2].blackout, items: [] });
-        weeks[w2].supply += sv;
-        weeks[w2].byType[t] = { demand: 0, supply: sv };
-      }
+      periods.forEach(function (p, pi) {
+        var sv = 0;
+        if (sup.byType[t]) for (var w2 = p.w0; w2 < p.w1; w2++) sv += sup.byType[t][w2];
+        arr.push({ demand: 0, supply: sv, over: false, blackout: weeks[pi].blackout, items: [] });
+        weeks[pi].supply += sv;
+        weeks[pi].byType[t] = { demand: 0, supply: sv };
+      });
       rows[t] = arr;
     });
     RM.capUnits(state).forEach(function (u) {
@@ -2617,12 +2657,13 @@
       var row = t && trackedSet[t] ? rows[t] : null;
       var w0 = Math.floor(u.startDay / S), w1 = Math.floor((u.startDay + Math.max(1, u.durDays) - 1) / S);
       for (var wk = Math.max(0, w0); wk <= Math.min(meta.numWeeks - 1, w1); wk++) {
-        var cell = weeks[wk];
-        if (cell.blackout) continue;
+        if (blackW[wk]) continue;
+        var pi2 = pOf[wk];
+        var cell = weeks[pi2];
         if (row) {
           cell.demand += d;
-          row[wk].demand += d;
-          if (row[wk].items.indexOf(u.itemId) === -1) row[wk].items.push(u.itemId);
+          row[pi2].demand += d;
+          if (row[pi2].items.indexOf(u.itemId) === -1) row[pi2].items.push(u.itemId);
         }
         if (cell.items.indexOf(u.itemId) === -1) cell.items.push(u.itemId);
         if (!cell.byType[t]) cell.byType[t] = { demand: 0, supply: 0 };
@@ -2637,7 +2678,8 @@
         if (supplied && cell.over) weeks[w3].over = true;
       });
     });
-    return { weeks: weeks, rows: rows, types: tracked, supplied: sup.types, teamTotal: state.team.length };
+    return { weeks: weeks, rows: rows, types: tracked, supplied: sup.types, teamTotal: state.team.length,
+      periods: periods, period: meta.capMode === 'points' ? 'sprint' : 'week' };
   };
 
   // ------------------------------------------------------------ dependency risk
@@ -2888,21 +2930,23 @@
     function r1(x) { return Math.round(x * 10) / 10; }
     var unitWord = state.meta.capMode === 'points' ? 'points' : 'people';
     if (state.meta.capacityEnabled) {
-      for (var cw = 0; cw < state.meta.numWeeks; cw++) {
-        (function (w) {
-          var d = RM.weekStartDate(state.meta, w);
-          cap.types.forEach(function (t) {
-            var bt = cap.rows[t][w];
-            // an unsupplied tracked type gets CAP_TYPE_UNSUPPLIED instead
-            if (!bt.over || cap.supplied.indexOf(t) === -1) return;
-            global.push({
-              level: 'warn', code: 'OVER_CAP', week: w, capType: t,
-              msg: t + ': ' + r1(bt.demand) + ' ' + unitWord + ' asked, ' + r1(bt.supply) + ' available (week of ' + RM.fmtShort(d) + ')',
-              items: bt.items
-            });
+      // one warning per over period (a week per person, a sprint in points
+      // mode); `week` is the period's first week, where the jump lands
+      cap.periods.forEach(function (p, pi) {
+        var d = RM.weekStartDate(state.meta, p.w0);
+        var when = cap.period === 'week' ? 'week of ' + RM.fmtShort(d)
+          : (p.num != null ? 'Sprint ' + p.num + ', from ' : 'two weeks from ') + RM.fmtShort(d);
+        cap.types.forEach(function (t) {
+          var bt = cap.rows[t][pi];
+          // an unsupplied tracked type gets CAP_TYPE_UNSUPPLIED instead
+          if (!bt.over || cap.supplied.indexOf(t) === -1) return;
+          global.push({
+            level: 'warn', code: 'OVER_CAP', week: p.w0, capType: t,
+            msg: t + ': ' + r1(bt.demand) + ' ' + unitWord + ' asked, ' + r1(bt.supply) + ' available (' + when + ')',
+            items: bt.items
           });
-        })(cw);
-      }
+        });
+      });
       // a type that scheduled work drains but nobody supplies
       var unsupplied = {};
       RM.capUnits(state).forEach(function (u) {
@@ -3003,15 +3047,33 @@
     function constrained(u) {
       return !u.milestone && !!u.capType && tracked.indexOf(u.capType) !== -1 && sup.types.indexOf(u.capType) !== -1;
     }
+    // capacity is weighed per period: a week per person, a sprint in points
+    // mode (RM.capPeriods). `used` stays weekly; fits() sums it per period.
+    var periods = RM.capPeriods(meta, horizonWeeks);
+    var pOf = new Array(horizonWeeks); // week → period index
+    periods.forEach(function (p, i) { for (var w = p.w0; w < p.w1; w++) pOf[w] = i; });
+    var black = new Array(horizonWeeks);
+    for (var bw = 0; bw < horizonWeeks; bw++) black[bw] = RM.isBlackoutWeek(meta, bw, set);
     // prototype-free: a capacity type may be named 'constructor'
     var peaks = Object.create(null); // the peak never changes: compute each type's once
+    var pSup = Object.create(null); // per type: supply summed per period
+    function periodSupply(t) {
+      if (pSup[t]) return pSup[t];
+      pSup[t] = periods.map(function (p) {
+        var v = 0;
+        for (var w = p.w0; w < p.w1; w++) v += sup.byType[t][w];
+        return v;
+      });
+      return pSup[t];
+    }
     return {
       types: sup.types,
       constrained: constrained,
+      // the most one period ever supplies: an ask above it never fits
       peak: function (t) {
         if (peaks[t] != null) return peaks[t];
         var p = 0;
-        for (var w = 0; w < horizonWeeks; w++) if (sup.byType[t][w] > p) p = sup.byType[t][w];
+        periodSupply(t).forEach(function (v) { if (v > p) p = v; });
         peaks[t] = p;
         return p;
       },
@@ -3024,14 +3086,25 @@
           used[u.capType][w] += d;
         }
       },
+      // every period the unit touches must hold what is booked there plus
+      // the unit's share of it (its weekly demand × its working weeks there)
       fits: function (u, startDay, durDays) {
         if (!constrained(u)) return true;
         var d = RM.unitWeekDemand(state, u, startDay, durDays, set);
         var ww = weeksOf(startDay, durDays);
-        for (var w = ww[0]; w <= ww[1]; w++) {
+        var t = u.capType, ps = periodSupply(t), ut = used[t];
+        var w = Math.max(0, ww[0]);
+        while (w <= ww[1]) {
           if (w >= horizonWeeks) return true;
-          if (RM.isBlackoutWeek(meta, w, set)) continue;
-          if (used[u.capType][w] + d > sup.byType[u.capType][w] + 1e-9) return false;
+          var p = periods[pOf[w]];
+          var ask = 0;
+          for (var x = w; x <= ww[1] && x < p.w1; x++) if (!black[x]) ask += d;
+          if (ask > 0) {
+            var booked = 0;
+            for (var y = p.w0; y < p.w1; y++) booked += ut[y];
+            if (booked + ask > ps[pOf[w]] + 1e-9) return false;
+          }
+          w = p.w1;
         }
         return true;
       },

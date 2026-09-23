@@ -230,10 +230,47 @@ var sPts = mkState([
 ], { team: [{ name: 'X', capType: 'Development' }, { name: 'Y', capType: 'Development', points: 6 }] });
 sPts.meta.capMode = 'points';
 var capP = RM.capacity(sPts);
-eq(capP.weeks[0].demand, 4, '8 points over 2 weeks = 4 per week');
-eq(capP.weeks[0].supply, 8, '(10 + 6) points per 2-week sprint = 8 per week');
+eq(capP.period, 'sprint', 'points mode summarizes per sprint');
+eq(capP.periods.slice(0, 2), [{ w0: 0, w1: 2, num: 1 }, { w0: 2, w1: 4, num: 2 }], 'the summary carries its periods');
+eq(capP.weeks.length, capP.periods.length, 'one aggregate cell per period');
+eq(capP.weeks[0].demand, 8, '8 points over the 2-week sprint = 8 in that sprint');
+eq(capP.weeks[0].supply, 16, '(10 + 6) points per 2-week sprint');
+eq(capP.rows.Development[0].demand, 8, 'the type row is per sprint too');
+eq(capP.rows.Development[1].demand, 0, 'nothing asked in sprint 2');
 sPts.meta.weeksPerSprint = 0;
-eq(RM.capacity(sPts).weeks[0].supply, 8, 'sprints off: points are per two weeks');
+var capP0 = RM.capacity(sPts);
+eq(capP0.weeks[0].supply, 16, 'sprints off: points are per two weeks, summed over two-week blocks');
+eq(capP0.periods[0], { w0: 0, w1: 2, num: null }, 'sprints off: the blocks carry no sprint number');
+// per person the summary stays weekly
+var capW = RM.capacity(sCap);
+ok(capW.period === 'week' && capW.periods.length === sCap.meta.numWeeks && capW.weeks.length === sCap.meta.numWeeks,
+  'per-person mode: one period (and cell) per week');
+// a sprint total over supply reads over even when one of its weeks is under;
+// a single week over its share does not, while the sprint holds
+{
+  var sOv = mkState([
+    { num: 1, feature: 'big', startDay: 0, durDays: 5, size: 8, capType: 'Development' },
+    { num: 2, feature: 'small', startDay: 5, durDays: 5, size: 4, capType: 'Development' },
+    { num: 3, feature: 'lone', startDay: 10, durDays: 5, size: 8, capType: 'Development' }
+  ], { team: [{ name: 'X', capType: 'Development', points: 10 }] });
+  sOv.meta.capMode = 'points';
+  var cOv = RM.capacity(sOv);
+  eq(cOv.rows.Development[0].demand, 12, 'sprint 1 asks 8 + 4');
+  eq(cOv.rows.Development[0].supply, 10, 'sprint 1 supplies 10');
+  ok(cOv.rows.Development[0].over && cOv.weeks[0].over, 'week 2 asks 4 of its 5, but the sprint asks 12 of 10: over');
+  eq(cOv.rows.Development[0].items.sort(), [sOv.items[0].id, sOv.items[1].id].sort(), 'the sprint cell lists both items');
+  ok(!cOv.rows.Development[1].over, 'sprint 2: 8 points in its first week is within the sprint\'s 10');
+  var vOv = RM.validate(sOv).global.filter(function (v) { return v.code === 'OVER_CAP'; });
+  eq(vOv.length, 1, 'validation reports once per over sprint');
+  ok(/Sprint 1\b/.test(vOv[0].msg) && vOv[0].week === 0, 'the message names the sprint and points at its first week (' + vOv[0].msg + ')');
+  // a fully blacked-out sprint reads blackout
+  var sBo = mkState([], { team: [{ name: 'X', capType: 'Development', points: 10 }] });
+  sBo.meta.capMode = 'points';
+  var cBo = RM.capacity(sBo);
+  var boIdx = -1;
+  cBo.periods.forEach(function (p, i) { if (p.w0 === 16 && p.w1 === 18) boIdx = i; });
+  ok(boIdx !== -1 && cBo.weeks[boIdx].blackout && cBo.rows.Development[boIdx].blackout, 'a sprint of two holiday weeks is blackout');
+}
 // feature type rolls up from stories when they agree
 var sRoll = mkState([{ num: 1, feature: 'f', capType: 'Development', stories: [{ title: 'a', capType: 'Design' }, { title: 'b', capType: 'Design' }] }]);
 eq(RM.itemCapType(sRoll, sRoll.items[0]), 'Design', 'all stories Design → feature plans as Design');
@@ -245,6 +282,20 @@ ok(vCap.length && /Development/.test(vCap[0].msg), 'OVER_CAP names the type');
 ok(RM.validate(sCap).global.some(function (v) { return v.code === 'CAP_TYPE_UNSUPPLIED' && /Design/.test(v.msg); }), 'CAP_TYPE_UNSUPPLIED for a type nobody supplies');
 
 // ------------------------------------------------------------- capacity fields
+section('capacity periods');
+{
+  var cpTrip = function (ps) { return ps.map(function (p) { return [p.w0, p.w1, p.num]; }); };
+  var mW = JSON.parse(JSON.stringify(META));
+  eq(cpTrip(RM.capPeriods(mW, 4)), [[0, 1, null], [1, 2, null], [2, 3, null], [3, 4, null]], 'per person: one period per week');
+  var mS = JSON.parse(JSON.stringify(META)); mS.capMode = 'points';
+  eq(cpTrip(RM.capPeriods(mS, 5)), [[0, 2, 1], [2, 4, 2], [4, 5, 3]], 'points: one period per sprint, the last one partial');
+  mS.weeksPerSprint = 3; mS.sprintAnchor = '2026-08-03'; mS.sprintAnchorNum = 4; // anchored at week 1
+  eq(cpTrip(RM.capPeriods(mS, 8)), [[0, 1, 3], [1, 4, 4], [4, 7, 5], [7, 8, 6]], 'points: sprints follow the numbering anchor (a partial first sprint)');
+  var mO = JSON.parse(JSON.stringify(META)); mO.capMode = 'points'; mO.weeksPerSprint = 0;
+  eq(cpTrip(RM.capPeriods(mO, 5)), [[0, 2, null], [2, 4, null], [4, 5, null]], 'points with sprints off: two-week blocks from the timeline start');
+  eq(RM.capPeriods(mS).slice(-1)[0].w1, mS.numWeeks, 'horizon defaults to the timeline');
+}
+
 section('capacity fields');
 var sF = RM.normalizeState({
   meta: { timelineStart: '2026-07-27', numWeeks: 8, capLimit: 3, capBasis: 'stories', capUnit: 'points', capacityEnabled: true, capMode: 'points', defaultPoints: 8, capRowTypes: ['Design'] },
@@ -469,7 +520,38 @@ var sPm = autoState([
   { num: 2, feature: 'six', phaseId: 'p1', durDays: 5, size: 6, capType: 'Development' }
 ], [{ name: 'X', capType: 'Development', points: 20 }], { capMode: 'points', sizeScheme: 'points' });
 var Pm = byNum(RM.autoTimeline(sPm, { today: 0 }).state);
-ok(Pm[1].startDay === 0 && Pm[2].startDay === 5, '10 + 6 points in one week exceed 10 per week (20 per 2-week sprint) → serialized');
+ok(Pm[1].startDay === 0 && Pm[2].startDay === 0, '10 + 6 points fit one 20-point sprint, even in the same week');
+var sPm3 = autoState([
+  { num: 1, feature: 'ten', phaseId: 'p1', durDays: 5, size: 10, capType: 'Development' },
+  { num: 2, feature: 'six', phaseId: 'p1', durDays: 5, size: 6, capType: 'Development' },
+  { num: 3, feature: 'six more', phaseId: 'p1', durDays: 5, size: 6, capType: 'Development' }
+], [{ name: 'X', capType: 'Development', points: 20 }], { capMode: 'points', sizeScheme: 'points' });
+eq(byNum(RM.autoTimeline(sPm3, { today: 0 }).state)[3].startDay, 6,
+  '10 + 6 + 6 exceed the 20-point sprint → the third starts once only half of it lands in sprint 1');
+eq(byNum(RM.autoTimeline(sPm3, { today: 0, snap: { feature: 'sprint' } }).state)[3].startDay, 10,
+  'snapped to sprints, the third waits for the next sprint');
+// the ledger checks the sprint, not the week: 8 booked in week 1 leaves 2 of
+// the sprint's 10, so a 4-point story does not fit in week 2 either (week 2
+// alone would give it 5)
+var sPl8 = autoState([
+  { num: 1, feature: 'booked', phaseId: 'p2', startDay: 0, durDays: 5, size: 8, capType: 'Development' },
+  { num: 2, feature: 'four', phaseId: 'p1', durDays: 5, size: 4, capType: 'Development' }
+], [{ name: 'X', capType: 'Development', points: 10 }], { capMode: 'points', sizeScheme: 'points' });
+eq(byNum(RM.autoTimeline(sPl8, { today: 5 }).state)[2].startDay, 6,
+  'week 2 alone has room, but the sprint does not → not at day 5; from day 6 only 2 of its points land in sprint 1');
+eq(byNum(RM.placeUnit(sPl8, sPl8.items[1].id, null, { today: 5 }).state)[2].startDay, 6, 'Place at earliest slot checks the sprint too');
+eq(byNum(RM.placeUnit(sPl8, sPl8.items[1].id, null, { today: 5, snap: { feature: 'sprint' } }).state)[2].startDay, 10,
+  'snapped to sprints, it takes the next sprint');
+// the never-fits guard measures a sprint: 8 points in one week asks more than
+// the week's 5 but the sprint gives 10
+var sBig = autoState([
+  { num: 1, feature: 'eight', phaseId: 'p1', durDays: 5, size: 8, capType: 'Development' },
+  { num: 2, feature: 'two', phaseId: 'p1', durDays: 5, size: 2, capType: 'Development' }
+], [{ name: 'X', capType: 'Development', points: 10 }], { capMode: 'points', sizeScheme: 'points' });
+var rBig = RM.autoTimeline(sBig, { today: 0 });
+var Big = byNum(rBig.state);
+ok(Big[1].startDay === 0 && !rBig.notes.some(function (n) { return /never fits/.test(n); }), '8 points in one week fits a 10-point sprint');
+eq(Big[2].startDay, 0, 'and 2 more fill the sprint exactly');
 // cycles do not hang
 var sCy2 = autoState([
   { num: 1, feature: 'a', phaseId: 'p1', durDays: 5, deps: [2], capType: 'Development' },
