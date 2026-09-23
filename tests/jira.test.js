@@ -418,6 +418,16 @@ JR.apply(plan, client, null).then(function (result) {
   eq(JR.fingerprint(s5), f1, 'milestone edits do not count as sync changes');
   var s4 = RM.clone(state); s4.meta.jira.lastSync = '2026-09-07T00:00:00Z';
   eq(JR.fingerprint(s4), f1, 'sync bookkeeping in meta.jira does not alter the fingerprint');
+  // deps are stored by id now, but the fingerprint hashes their NUMBERS (the
+  // display form) exactly as v1.0.13 did: a doc synced with v1.0.13 still
+  // reads clean after its deps migrate to ids (ac098f73:117 = v1.0.13's own
+  // JR.fingerprint over this document, recorded from c3e8da5)
+  var v113 = RM.normalizeState({ meta: { title: 'T', timelineStart: '2026-07-27', numWeeks: 20 }, phases: [{ id: 'p1', name: 'P' }],
+    items: [{ id: 'a', num: 1, phaseId: 'p1', feature: 'Alpha', jiraKey: 'HW-1', startDay: 0, durDays: 5 },
+      { id: 'b', num: 2, phaseId: 'p1', feature: 'Beta', jiraKey: 'HW-2', deps: [1], stories: [{ id: 's1', num: 3, title: 'one', jiraKey: 'HW-3' }] },
+      { id: 'c', num: 4, phaseId: 'p1', feature: 'Gamma', deps: [2, 1] }] });
+  eq(v113.items[2].deps, ['b', 'a'], 'setup: the v1.0.13 deps migrated to ids');
+  eq(JR.fingerprint(v113), 'ac098f73:117', 'a v1.0.13-shaped doc keeps its v1.0.13 fingerprint after the migration');
   eq(JR.status(state).kind, 'off', 'no credentials on this machine reads as off');
   JR.hasCreds = function () { return true; };
   eq(JR.status(state).kind, 'never', 'credentials + project but no sync yet');

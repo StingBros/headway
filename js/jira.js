@@ -938,11 +938,20 @@
   // sync-relevant changed since the last run
   JR.fingerprint = function (state) {
     var parts = [];
+    // deps are stored by item id; hash their numbers (the display form, and
+    // what v1.0.13 stored) so fingerprints recorded before the move to ids
+    // still match — a legacy numeric dep hashes as itself
+    function depNums(it) {
+      return (it.deps || []).map(function (d) {
+        var dep = RM.itemById(state, d);
+        return dep ? dep.num : d;
+      }).join(',');
+    }
     (state.items || []).forEach(function (it) {
       if (it.milestone) return;
       parts.push([it.num, it.jiraKey || '', it.feature, RM.htmlToText(it.description || ''), it.epic || '', it.workstream || '',
         it.size || '', it.priority || '', it.deadline || '', it.startDay, it.durDays, it.done ? 1 : 0, it.phaseId,
-        (it.deps || []).join(','), (it.assignees || []).join(','), RM.htmlToText(it.enables || ''), RM.htmlToText(it.outOfScope || ''),
+        depNums(it), (it.assignees || []).join(','), RM.htmlToText(it.enables || ''), RM.htmlToText(it.outOfScope || ''),
         RM.htmlToText(it.extDeps || ''), RM.htmlToText(it.notes || ''),
         (it.stories || []).map(function (st) {
           return [st.jiraKey || '', st.title, st.done ? 1 : 0, st.priority || '', st.deadline || '', st.startDay, st.durDays,
