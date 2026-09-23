@@ -3170,16 +3170,33 @@
         release(u);
         return;
       }
-      var started = u.startDay != null && u.startDay <= today;
-      var floor = started ? u.startDay : today;
-      // work already under way keeps its start: the phase floor never drags it forward
-      if (!started && pFloor != null && pFloor > floor) floor = pFloor;
-      if (floor > est) est = floor;
-      // The snap grid (when the caller passed one) moves the start to the next
-      // boundary and buys whole units of work. Work already under way is
-      // exempt: an automatic pass never shoves in-flight work forward (the
-      // explicit Place at earliest slot still snaps it).
+      // Work under way (begun before today) keeps its start and length unless
+      // a dependency now ends after its start or capacity no longer fits it
+      // there (a holiday on its start day is not a reason). Pushed, it moves
+      // minimally on the day grid while it still starts before today; pushed
+      // to today or later it is no longer under way and is placed as new work.
+      var started = u.startDay != null && u.durDays != null && u.startDay < today;
+      var depEnd = est;
       var gridMode = RM.snapModeOf(opts, u.storyId ? 'story' : 'feature');
+      if (started && depEnd <= u.startDay && ledger.fits(u, u.startDay, u.durDays)) {
+        if (RM.applyUnitPlacement(state, u, u.startDay, u.durDays, ledger.set)) out.changed += 1;
+        touchedItems[u.itemId] = true;
+        ledger.book(u, u.startDay, u.durDays, 1);
+        var e0 = u.startDay + u.durDays + (u.storyId ? 0 : RM.stretchSpan(meta, u.startDay + u.durDays, RM.riskEffortDays(state, RM.itemById(state, u.itemId)), ledger.set));
+        endOf[u.id] = e0;
+        if (e0 > maxDay) maxDay = e0;
+        release(u);
+        return;
+      }
+      // new work: never before today nor before its phase begins
+      function newWorkFloor(e) {
+        var f = today;
+        if (pFloor != null && pFloor > f) f = pFloor;
+        return f > e ? f : e;
+      }
+      if (started) { if (u.startDay > est) est = u.startDay; } else est = newWorkFloor(est);
+      // The snap grid (when the caller passed one) moves the start to the next
+      // boundary and buys whole units of work; work under way stays on the day grid.
       var snapMode = started ? 'day' : gridMode;
       var baseWork = RM.unitWorkDays(state, u, ledger.set);
       var work = RM.snapUpDays(meta, baseWork, snapMode);
@@ -3206,12 +3223,12 @@
         return [fs, fd];
       }
       var fit = fitFrom(est, snapMode, work);
-      // started work that capacity pushes off its start is no longer under
-      // way where it lands: it takes the snap grid like any other move (else
-      // the next pass, seeing it in the future, would snap it then)
-      if (started && fit[0] !== u.startDay && gridMode !== snapMode) {
+      // work under way pushed to today or later is new work where it lands:
+      // the snap grid and the phase floor apply (else the next pass, seeing
+      // it in the future, would move it again)
+      if (started && fit[0] >= today) {
         work = RM.snapUpDays(meta, baseWork, gridMode);
-        fit = fitFrom(fit[0], gridMode, work);
+        fit = fitFrom(newWorkFloor(depEnd), gridMode, work);
       }
       s = fit[0]; dur = fit[1];
       if (RM.applyUnitPlacement(state, u, s, dur, ledger.set)) out.changed += 1;
@@ -3247,9 +3264,16 @@
   // The Auto timeline action for one phase, in one go: lay it out (above),
   // then at the Stories level size its features from the span their stories
   // now cover. Sizes are taken AFTER the layout — at the Stories level a
-  // feature's size never steers where its stories go, and sizing from the
-  // placed span makes a second pass a no-op. The app runs this as a dry run
-  // too: changed === 0 means the phase is already in place.
+  // feature's size never steers where its stories go. With opts.autoOrder the
+  // rows are start-sorted after each layout (as the app's auto-order would),
+  // and the layout repeats until a pass moves nothing (at most 5 passes), so
+  // one click settles the phase. The app runs this as its dry run too:
+  // changed === 0 means the phase is already in place.
+  // Counts compare the result with the input: moved = work units (features,
+  // or stories at the Stories level, milestones) whose dates changed — not
+  // the feature hulls rebuilt around moved stories; sized = features whose
+  // size changed; changed = everything that differs (hulls included).
+  RM.AUTO_PHASE_MAX_PASSES = 5;
   RM.autoPhase = function (inputState, phaseId, opts) {
     opts = opts || {};
     var ph = null;
@@ -3259,14 +3283,40 @@
     var o = {};
     Object.keys(opts).forEach(function (k) { o[k] = opts[k]; });
     o.phaseIds = [phaseId];
-    var r = RM.autoTimeline(inputState, o);
-    out.state = r.state; out.moved = r.changed; out.notes = r.notes;
-    out.sized = RM.autoSizeChanges(r.state, phaseId, opts);
-    out.sized.forEach(function (c) {
-      var it = RM.itemById(r.state, c.itemId);
-      if (it) it.size = c.size;
+    var cur = inputState;
+    for (var pass = 0; pass < RM.AUTO_PHASE_MAX_PASSES; pass++) {
+      var r = RM.autoTimeline(cur, o);
+      var sz = RM.autoSizeChanges(r.state, phaseId, opts);
+      sz.forEach(function (c) {
+        var it = RM.itemById(r.state, c.itemId);
+        if (it) it.size = c.size;
+      });
+      if (pass === 0) out.notes = r.notes;
+      var before = opts.autoOrder ? r.state.items.map(function (it) { return it.id; }).join('|') : '';
+      if (opts.autoOrder) RM.sortItemsByStart(r.state);
+      var reordered = opts.autoOrder && r.state.items.map(function (it) { return it.id; }).join('|') !== before;
+      cur = r.state;
+      if (!r.changed && !sz.length && !reordered) break;
+    }
+    out.state = cur;
+    // the tally, input against result
+    var storyLevel = RM.planLevel(inputState) === 'story';
+    function same(a, b) { return a.startDay === b.startDay && a.durDays === b.durDays; }
+    inputState.items.forEach(function (a) {
+      if (a.phaseId !== phaseId) return;
+      var b = RM.itemById(cur, a.id);
+      if (!b) return;
+      if (a.size !== b.size) out.sized.push({ itemId: a.id, size: b.size });
+      var unitsAreStories = storyLevel && !a.milestone && (a.stories || []).length > 0;
+      if (unitsAreStories) {
+        (a.stories || []).forEach(function (sa) {
+          var sb = (b.stories || []).filter(function (x) { return x.id === sa.id; })[0];
+          if (sb && !same(sa, sb)) out.moved += 1;
+        });
+        if (!same(a, b) || (a.riskDays || 0) !== (b.riskDays || 0)) out.changed += 1; // hull
+      } else if (!same(a, b) || (a.riskDays || 0) !== (b.riskDays || 0)) out.moved += 1;
     });
-    out.changed = out.moved + out.sized.length;
+    out.changed += out.moved + out.sized.length;
     return out;
   };
 
@@ -3756,10 +3806,20 @@
   // Where a phase begins for scheduling: its pinned start if it has one,
   // else where its earliest scheduled item already sits (null when the phase
   // is neither pinned nor scheduled — then nothing floors it).
+  // The derived floor reads story bars as well as feature bars: at the
+  // Stories level a feature bar is only the hull of its stories, and a hull
+  // rebuilt after a pass must never lower the floor the next pass sees.
   RM.phaseFloorDay = function (state, phase) {
     if (phase.startDay != null) return phase.startDay;
     var sp = RM.phaseSpan(state, phase);
-    return sp ? sp.lo : null;
+    if (!sp) return null;
+    var lo = sp.lo;
+    RM.itemsInPhase(state, phase.id).forEach(function (it) {
+      (it.stories || []).forEach(function (st) {
+        if (st && st.startDay != null && st.durDays != null && st.startDay < lo) lo = st.startDay;
+      });
+    });
+    return lo;
   };
 
   RM.phaseSpan = function (state, phase) {

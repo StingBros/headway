@@ -2323,7 +2323,7 @@ section('auto timeline sizes');
   eq([apF.stories[0].startDay, apF.stories[1].startDay], [0, 5], 'autoPhase lays the stories out');
   eq(apF.size, 'M', 'and sizes the feature from the span they now cover');
   ok(rAP.moved > 0 && rAP.sized.length === 1, 'it reports the moves and the sizes it wrote');
-  eq(rAP.changed, rAP.moved + rAP.sized.length, 'changed counts both');
+  eq(rAP.changed, rAP.moved + rAP.sized.length + 1, 'changed counts the moves, the sizes and the rebuilt feature hull');
   eq(f1(sAP).size, 'XL', 'the input state is left untouched');
   // dry-run equivalence: a second pass over its own result changes nothing
   var rAP2 = RM.autoPhase(rAP.state, 'p1', { today: 0 });
@@ -2347,6 +2347,33 @@ section('auto timeline sizes');
   eq(RM.itemByNum(rAPL.state, 1).startDay, 20, 'autoPhase leaves the locked item where it is');
   eq(RM.itemByNum(rAPL.state, 2).startDay, 25, 'and puts its dependent after it');
   eq(RM.autoPhase(rAPL.state, 'p1', { today: 0 }).changed, 0, 'then nothing is left to move');
+
+  // (a) at the Stories level the phase floor reads story bars too, so a
+  // feature hull rebuilt after the pass can never lower it
+  var sFlS = autoState([{ num: 1, feature: 'F', phaseId: 'p1', startDay: 20, durDays: 5, capType: 'Development',
+    stories: [{ num: 101, title: 'a', startDay: 12, durDays: 3, capType: 'Development' }] }],
+    [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
+  eq(RM.phaseFloorDay(sFlS, sFlS.phases[0]), 12, 'the derived phase floor is the earliest of story and feature bars');
+
+  // (b) auto-order: the action sorts the rows by start itself and lays out
+  // again until nothing moves, so one click settles
+  var sAO = autoState([
+    { num: 1, feature: 'late', phaseId: 'p1', durDays: 5, capType: 'Development', deps: [3] },
+    { num: 2, feature: 'mid', phaseId: 'p1', durDays: 5, capType: 'Development' },
+    { num: 3, feature: 'first', phaseId: 'p1', durDays: 5, capType: 'Development' }
+  ], [{ name: 'Solo', capType: 'Development' }]);
+  var rAO = RM.autoPhase(sAO, 'p1', { today: 0, autoOrder: true });
+  var aoStarts = rAO.state.items.filter(function (i) { return i.phaseId === 'p1'; }).map(function (i) { return i.startDay; });
+  eq(aoStarts, aoStarts.slice().sort(function (a, b) { return a - b; }), 'with autoOrder the rows come back in start order');
+  eq(RM.autoPhase(rAO.state, 'p1', { today: 0, autoOrder: true }).changed, 0, 'and a second click finds nothing to do');
+  eq(rAO.moved, 3, 'moved counts the three units once each, however many passes it took');
+
+  // moved counts units, not the feature hulls rebuilt around them
+  var sMvS = autoState([{ num: 1, feature: 'F', phaseId: 'p1', startDay: 0, durDays: 5, capType: 'Development', stories: [
+    { num: 101, title: 'a', startDay: 0, durDays: 5, capType: 'Development' },
+    { num: 102, title: 'b', startDay: 0, durDays: 5, capType: 'Development' }] }],
+    [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
+  eq(RM.autoPhase(sMvS, 'p1', { today: 0 }).moved, 1, 'one story moved reads as one, not story + hull');
 }
 
 // -------------------------------------------- snapped placement
@@ -2384,6 +2411,33 @@ section('snapped placement');
   var pushed = RM.itemByNum(rPush.state, 2);
   eq([pushed.startDay, pushed.durDays], [15, 5], 'begun work pushed by capacity lands on the week grid with whole weeks');
   eq(RM.autoTimeline(rPush.state, wk).changed, 0, 'and a second pass leaves it there');
+  // (c) …and when it is pushed to today or later it is new work: the phase floor holds it too
+  var phPin30b = [{ id: 'p1', name: 'Alpha', bucket: false, startDay: 20 }, { id: 'p3', name: 'Next', bucket: true }];
+  ['day', 'week'].forEach(function (m) {
+    var sPin = autoState([
+      { num: 1, feature: 'busy', phaseId: 'p1', startDay: 0, durDays: 15, locked: true, capType: 'Development' },
+      { num: 2, feature: 'begun', phaseId: 'p1', startDay: 5, durDays: 3, capType: 'Development' }
+    ], [{ name: 'Solo', capType: 'Development' }], null, phPin30b);
+    var oPin = { today: 10, snap: { feature: m, story: 'day' } };
+    var rPin = RM.autoPhase(sPin, 'p1', oPin);
+    eq(RM.itemByNum(rPin.state, 2).startDay, 20, 'begun work pushed past today lands at its phase floor (' + m + ' snap)');
+    eq(RM.autoPhase(rPin.state, 'p1', oPin).changed, 0, 'and one click settles it (' + m + ' snap)');
+  });
+  // (4) a holiday on an in-flight start is not a reason to move it
+  ['day', 'sprint'].forEach(function (m) {
+    // two heads: the holiday week's 0.8 × 2 supply still covers it, so only the day itself is in question
+    var sHol = autoState([{ num: 1, feature: 'begun', phaseId: 'p1', startDay: 5, durDays: 3, capType: 'Development' }],
+      [{ name: 'X', capType: 'Development' }, { name: 'Y', capType: 'Development' }], { holidays: ['2026-08-03'] });
+    var hb = RM.itemByNum(RM.autoTimeline(sHol, { phaseIds: ['p1'], today: 6, snap: { feature: m, story: 'day' } }).state, 1);
+    eq([hb.startDay, hb.durDays], [5, 3], 'in-flight work starting on a holiday keeps its start and length (' + m + ' snap)');
+  });
+  // a dependency that now ends later pushes in-flight work, minimally while it is still before today
+  var sDepIn = autoState([
+    { num: 1, feature: 'dep', phaseId: 'p1', startDay: 0, durDays: 4, locked: true, capType: '' },
+    { num: 2, feature: 'begun', phaseId: 'p1', startDay: 2, durDays: 3, capType: '', deps: [1] }
+  ], [{ name: 'X', capType: 'Development' }, { name: 'Y', capType: 'Development' }]);
+  var dIn = RM.itemByNum(RM.autoTimeline(sDepIn, { phaseIds: ['p1'], today: 10, snap: { feature: 'week', story: 'day' } }).state, 2);
+  eq([dIn.startDay, dIn.durDays], [4, 3], 'pushed but still before today: day grid, same length');
   var sPl = snapSt();
   var stId = sPl.items[0].stories[0].id;
   var rPl = RM.placeUnit(sPl, sPl.items[0].id, stId, { today: 2, snap: { story: 'week', feature: 'week' } });
