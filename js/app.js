@@ -11070,11 +11070,17 @@
         memberColsHtml(m) +
         // one or the other: the × seat multiplier in per-person mode, points
         // per sprint in story-points mode — never both
-        (state.meta.capacityEnabled && state.meta.capMode !== 'points'
+        // untyped people supply nothing: a quiet prompt to give them a type
+        // instead (their seat and points are kept for when they get one)
+        (state.meta.capacityEnabled && !m.capType
+          ? '<span class="res-cap res-untyped" tabindex="0" role="button" data-runtyped="' + m.id +
+            '" title="No capacity type — supplies nothing. Click to set one">set type</span>'
+          : '') +
+        (state.meta.capacityEnabled && m.capType && state.meta.capMode !== 'points'
           ? '<span class="res-cap" tabindex="0" role="button" data-rcap="' + m.id +
             '" title="Capacity at full-time hours">' + fmtPe(m.capacity != null ? m.capacity : 1) + '×</span>'
           : '') +
-        (state.meta.capacityEnabled && state.meta.capMode === 'points'
+        (state.meta.capacityEnabled && m.capType && state.meta.capMode === 'points'
           ? '<span class="res-cap res-pts' + (m.points == null ? ' dflt' : '') + '" tabindex="0" role="button" data-rpts="' + m.id +
             '" title="Story points per sprint (blank = document default)">' + fmtPe(RM.memberPoints(state, m)) + ' pt</span>'
           : '') +
@@ -11529,6 +11535,19 @@
       if (ev.key === 'Enter') finish(true);
       if (ev.key === 'Escape') finish(false);
     });
+  });
+
+  // an untyped person's placeholder opens the capacity-type picker
+  resGrid.addEventListener('click', function (e) {
+    var chip = e.target.closest('[data-runtyped]');
+    if (chip) openMemberCapDropdown(chip, chip.dataset.runtyped);
+  });
+  resGrid.addEventListener('keydown', function (e) {
+    var chip = e.target.closest && e.target.closest('[data-runtyped]');
+    if (chip && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault();
+      openMemberCapDropdown(chip, chip.dataset.runtyped);
+    }
   });
 
   // rate-card / workstream chips → the SAME dropdowns as the budgeting rows

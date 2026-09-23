@@ -802,9 +802,11 @@ ok(doc.querySelectorAll('#resGrid .rh').length === 48, 'hour cells for every wee
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
 }
 
-// capacity factor: editable, feeds availability
+// capacity factor: editable, feeds availability (typed people only — an
+// untyped person supplies nothing and shows a "set type" prompt instead)
 {
-  const capChip = doc.querySelector('#resGrid [data-rcap]');
+  window.HeadwayApp.ai.commit('type first person', (s) => { s.team[0].capType = s.capTypes[0]; });
+  const capChip = doc.querySelector('#resGrid .rrow[data-mid="' + state().team[0].id + '"] [data-rcap]');
   ok(!!capChip, 'resource rows show a capacity column');
   click(capChip);
   const capInp = doc.querySelector('#resGrid [data-rcap] input');
@@ -4356,12 +4358,33 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
       'a feature whose stories all share a type shows it dimmed as inherited');
     undo();
     // story points mode: the Resources rows gain a points column
-    window.HeadwayApp.ai.commit('points mode', (s) => { s.meta.capMode = 'points'; });
-    ok(!!doc.querySelector('#resGrid .rrow[data-mid] .res-pts[data-rpts]'), 'story-points mode gives each Resources row a points column');
+    window.HeadwayApp.ai.commit('points mode', (s) => { s.meta.capMode = 'points'; s.team[0].capType = 'Development'; });
+    ok(!!doc.querySelector('#resGrid .rrow[data-mid] .res-pts[data-rpts]'), 'story-points mode gives each typed Resources row a points column');
     ok(!doc.querySelector('#resGrid .rrow[data-mid] [data-rcap]'), 'and hides the × seat chip — it is points OR the multiplier, never both');
     window.HeadwayApp.ai.commit('person mode', (s) => { s.meta.capMode = 'person'; });
     ok(!!doc.querySelector('#resGrid .rrow[data-mid] [data-rcap]') && !doc.querySelector('#resGrid .res-pts'),
       'per-person mode shows the × seat chip and no points column');
+    // untyped people supply nothing: a "set type" prompt instead of the chips
+    window.HeadwayApp.ai.commit('untyped person', (s) => {
+      s.team[0].capType = ''; s.team[0].capacity = 2; s.team[0].points = 50;
+      if (s.team[1]) s.team[1].capType = 'Development';
+    });
+    const utId = state().team[0].id;
+    const utRow = () => doc.querySelector('#resGrid .rrow[data-mid="' + utId + '"]');
+    const ph = utRow().querySelector('.res-cap.res-untyped');
+    ok(!!ph && /set type/.test(ph.textContent) && ph.getAttribute('tabindex') === '0' && ph.getAttribute('role') === 'button',
+      'an untyped person shows a quiet "set type" placeholder');
+    ok(!utRow().querySelector('[data-rcap]') && !utRow().querySelector('[data-rpts]'), 'and no × seat or points chip');
+    ok(state().team[0].capacity === 2 && state().team[0].points === 50, 'their seat and points are kept');
+    window.HeadwayApp.ai.commit('points for untyped', (s) => { s.meta.capMode = 'points'; });
+    ok(!!utRow().querySelector('.res-untyped') && !utRow().querySelector('[data-rpts]'), 'points mode: still the placeholder, no points chip');
+    undo();
+    click(utRow().querySelector('.res-untyped'));
+    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'the placeholder opens the capacity-type picker');
+    click(menuBtns().find((b) => /Development/.test(b.textContent)));
+    ok(state().team[0].capType === 'Development' && !!utRow().querySelector('[data-rcap]') &&
+      /^2×$/.test(utRow().querySelector('[data-rcap]').textContent.trim()), 'picking a type brings back the kept × seat');
+    undo(); undo();
     undo();
     window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
     ok(!doc.querySelector('#rows .r-cap'), 'no chips with capacity planning off');

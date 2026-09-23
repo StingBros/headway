@@ -1628,6 +1628,7 @@ body[data-view="scoping"] #resPanel { display: none; }
   cursor: text;
 }
 .res-cap:hover { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); }
+.res-cap.res-untyped { font-family: inherit; font-style: italic; color: var(--ink-3); cursor: pointer; white-space: nowrap; }
 .rr-grip { flex: 0 0 16px; }
 .res-type:hover { border-color: var(--blue); color: var(--blue); box-shadow: none; }
 .rlane { position: relative; flex: 0 0 auto; border-bottom: 1px solid var(--line); }
