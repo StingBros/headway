@@ -2546,11 +2546,14 @@
   };
 
   // what a unit asks of its type in each week of a span, as {w0, byWeek}
-  // (byWeek[i] is week w0 + i). Per person: its heads (× multiplier) in
-  // every non-blackout week. Story points: its points follow its working
-  // days — a week carries points × (the unit's working days in it) / (its
-  // working days in all), so a story starting mid-week puts most of its
-  // points where most of its days are; holiday days carry none.
+  // (byWeek[i] is week w0 + i). Both modes weigh by the unit's working days
+  // (holiday days carry none). Per person: heads (× multiplier) × (the
+  // unit's working days in the week ÷ slots per week) — a full week asks a
+  // whole head, a week with a holiday asks 0.8, matching the holiday-scaled
+  // supply, and a two-day tail asks 0.4. Story points: a week carries
+  // points × (the unit's working days in it) / (its working days in all),
+  // so a story starting mid-week puts most of its points where most of its
+  // days are.
   RM.unitDemandByWeek = function (state, u, startDay, durDays, set) {
     var meta = state.meta, S = RM.slotsOf(meta);
     set = set || RM.holidayDaySet(meta);
@@ -2570,7 +2573,11 @@
       return { w0: w0, byWeek: out };
     }
     var heads = u.mult > 0 ? u.mult : 1;
-    for (var w2 = w0; w2 <= w1; w2++) if (!RM.isBlackoutWeek(meta, w2, set)) out[w2 - w0] = heads;
+    for (var d2 = startDay; d2 < startDay + span; d2++) {
+      if (RM.offDay(meta, d2, set)) continue;
+      out[Math.floor(d2 / S) - w0] += 1;
+    }
+    for (var j = 0; j < out.length; j++) out[j] = heads * out[j] / S;
     return { w0: w0, byWeek: out };
   };
 
@@ -3095,7 +3102,8 @@
       periodWord: meta.capMode !== 'points' ? 'a week' : (RM.sprintsEnabled(meta) ? 'a sprint' : 'two weeks'),
       // true when the unit can never fit wherever it starts: the smallest
       // share of it one period must take still exceeds the most any period
-      // ever supplies. Per person that share is its heads. In story points a
+      // ever supplies. Per person that share is its busiest week (heads × the
+      // days it works there ÷ slots). In story points a
       // unit of D working days puts at least ceil(D / 2) of them in one
       // period if D fits two periods; touching three or more it covers a
       // whole period in between (at least lMin working days). Sound, not

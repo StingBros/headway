@@ -363,7 +363,7 @@ eq(RM.workingWeeksInSpan(META, 70, 30, hsSet), RM.workingWeeksInSpan(META, 70, 3
 section('autoTimeline');
 function autoMeta(extra) {
   var m = JSON.parse(JSON.stringify(META));
-  m.holidays = []; m.capacityEnabled = true;
+  m.holidays = []; m.holidaysV2026 = true; m.capacityEnabled = true;
   if (extra) Object.keys(extra).forEach(function (k) { m[k] = extra[k]; });
   return m;
 }
@@ -622,7 +622,8 @@ eq(Big[2].startDay, 0, 'and 2 more fill the sprint exactly');
   var cDw = RM.capacity(sDw);
   eq([cDw.rows.Development[0].demand, cDw.rows.Development[1].demand], [6, 4], 'the sprint cells follow the days');
   sDw.meta.capMode = 'person';
-  eq(RM.unitDemandByWeek(sDw, RM.capUnits(sDw)[0], 7, 5).byWeek, [1, 1], 'per person: one head in each week touched');
+  // per person weighs by working days too (was a whole head in every week touched)
+  eq(RM.unitDemandByWeek(sDw, RM.capUnits(sDw)[0], 7, 5).byWeek, [0.6, 0.4], 'per person: a head × the unit’s share of each week’s days');
   // a holiday day carries no points
   sDw.meta.capMode = 'points'; sDw.meta.holidays = ['2026-08-07']; // Friday of week 2 (day 9)
   eq(RM.unitDemandByWeek(sDw, RM.capUnits(sDw)[0], 7, 6).byWeek, [4, 6], 'a holiday inside the span carries none of the points (2 + 3 working days)');
@@ -2688,7 +2689,7 @@ section('exclude from auto');
   var X = byNum(RM.autoTimeline(sEx, { phaseIds: ['p1'], today: 0 }).state);
   eq([X[1].startDay, X[1].durDays], [20, 5], 'an excluded feature stays put');
   eq(X[2].startDay, 0, 'its unexcluded neighbour still moves');
-  ok(X[3].startDay >= 25, 'a dependent lands after the excluded feature');
+  eq(X[3].startDay, 25, 'a dependent lands right after the excluded feature');
   // …exactly where it lands behind a locked one: the same fixed-unit path
   var sLk = RM.clone(sEx);
   RM.setLocked(RM.itemByNum(sLk, 1), true);
@@ -2742,4 +2743,35 @@ section('exclude from auto');
   eq(RM.autoSizeChanges(sSz, 'p1'), [], 'an excluded feature is not re-sized by Auto');
   RM.itemByNum(sSz, 1).noAuto = false;
   eq(RM.autoSizeChanges(sSz, 'p1').length, 1, 'while an included one would be');
+}
+
+section('holiday weeks, per person');
+{
+  // a solo dev in a week with one holiday supplies 0.8; a 5-day unit that has
+  // only four working days there asks 0.8 of it (heads × its days ÷ 5)
+  var HOL = { holidays: ['2026-08-07'] }; // Friday of week 1 (days 5–9)
+  var solo = [{ name: 'Solo', capType: 'Development' }];
+  var sH1 = autoState([{ num: 1, feature: 'a', phaseId: 'p1', durDays: 5, capType: 'Development' }], solo, HOL);
+  var rH1 = RM.autoTimeline(sH1, { phaseIds: ['p1'], today: 5 }).state;
+  eq(byNum(rH1)[1].startDay, 5, 'a solo dev’s 5-day unit starts in the holiday week');
+  var cH = RM.capacity(rH1);
+  ok(Math.abs(cH.weeks[1].demand - 0.8) < 1e-9 && Math.abs(cH.weeks[1].supply - 0.8) < 1e-9 && !cH.weeks[1].over,
+    'the holiday week reads 0.8 / 0.8 and is not over (got ' + cH.weeks[1].demand + ' / ' + cH.weeks[1].supply + ')');
+  ok(Math.abs(cH.weeks[2].demand - 0.2) < 1e-9, 'the day it spills into the next week asks a fifth of a head there');
+  // two solo-dev units cannot share that week
+  var sH2 = autoState([
+    { num: 1, feature: 'a', phaseId: 'p1', durDays: 5, capType: 'Development' },
+    { num: 2, feature: 'b', phaseId: 'p1', durDays: 5, capType: 'Development' }
+  ], solo, HOL);
+  var H2 = byNum(RM.autoTimeline(sH2, { phaseIds: ['p1'], today: 5 }).state);
+  ok(H2[1].startDay === 5 && H2[2].startDay >= 10, 'a second unit does not fit beside the first (starts ' + H2[2].startDay + ')');
+  ok(!RM.capacity(RM.autoTimeline(sH2, { phaseIds: ['p1'], today: 5 }).state).weeks.some(function (c) { return c.over; }),
+    'and the layout is never over capacity');
+  // the reviewer's repro: the default US holidays (Sep 4 / Sep 7) no longer push work a fortnight
+  var sUS = autoState([{ num: 1, feature: 'a', phaseId: 'p1', durDays: 5, capType: 'Development' }], solo,
+    { holidays: ['2026-09-04', '2026-09-07'] });
+  eq(byNum(RM.autoTimeline(sUS, { phaseIds: ['p1'], today: 25 }).state)[1].startDay, 25, 'work starts in a week with a holiday');
+  // a partial week asks only its share of a head
+  var sPart = autoState([{ num: 1, feature: 'a', phaseId: 'p1', startDay: 3, durDays: 2, capType: 'Development' }], solo);
+  ok(Math.abs(RM.capacity(sPart).weeks[0].demand - 0.4) < 1e-9, 'two days in a week ask 0.4 of a head');
 }
