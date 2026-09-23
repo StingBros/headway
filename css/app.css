@@ -1468,7 +1468,7 @@ body.panning, body.panning * { cursor: grabbing !important; }
 .r-chev svg.lucide, .band-chev svg.lucide { width: 11px; height: 11px; display: block; }
 .p-close svg.lucide { width: 14px; height: 14px; }
 .dep-chip .x svg.lucide, .type-chip button svg.lucide { width: 10px; height: 10px; }
-.r-lock svg.lucide, .bi-lock svg.lucide { width: 10px; height: 10px; }
+.r-lock svg.lucide, .bi-lock svg.lucide, .bi-noauto svg.lucide { width: 10px; height: 10px; }
 .st-del svg.lucide { width: 11px; height: 11px; }
 
 /* risk chip on rows */
