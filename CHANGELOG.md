@@ -9,6 +9,14 @@ Format: short sections, bullets, one bold title per notable change —
 
 ## Unreleased
 
+- **Shared roadmaps**: File → New shared roadmap / Open shared roadmap / Convert to shared folder… keeps a roadmap as a `<Title>.headway` folder of small JSON files that several people edit at once through an ordinary synced folder (OneDrive, SharePoint, Dropbox) — no server. Edits merge field by field; only the same field of the same item edited inside one sync window resolves to the later edit, and both stay in Version history. Every `.xlsx` flow is unchanged; Save becomes Export .xlsx for a shared roadmap (desktop app only).
+- **Plans**: a shared roadmap's plans replace Options — each plan is its own sub-folder; switching is local and creating one writes new files only.
+- **Who else is here**: in a shared roadmap, initials chips mark the rows other people are on, and a toast says when someone else is editing the row you picked. Advisory only.
+- **Import from Excel** (File menu, shared roadmaps): pair a Headway or template-shaped workbook with the open roadmap, preview the counts, then add what is new and fill only fields the roadmap left empty — the shared roadmap wins every disagreement. One undo step.
+- Dependencies point at items by id, not by #number, so renumbering (or two people adding items at once) can never repoint one; older documents convert on open. Rows keep an explicit order key so a reorder touches one row.
+- Auto-order rows by start is a view setting: rows sort by start on screen and the document's own order is left untouched (it no longer re-sorts or dirties a document on open).
+- **Range estimates**: Setup → Sizing → Estimates switches a project from one planned duration to a low / high estimate per feature and story, in working days, story points or hours (with a days-per-unit rate, editable for every unit, days included, for sheets that count 4 days to a week). The Planning bar hatches the low→high stretch on top of the planned bar, the panel gains Low / High fields, the planned duration follows a chosen basis (high or low), and the Roadmap sheet carries `Est. low` / `Est. high` columns. Off by default — single-estimate documents look exactly as before.
+- View → “Estimate ranges” toggles the low→high bands on the Planning bars (range mode only; also under Setup → Preferences → Timeline). Persists per machine like the critical-path highlight.
 - Sprinting: each sprint's total sits at the right edge of its side entry and heading as a larger number; with story-points capacity on (sprints on, numeric story sizes) it reads planned / available points (e.g. `18 / 20`), in red when the sprint is over — never red while a filter hides some of its stories.
 - Sprinting: clicking a sprint in the side list lands on the sprint heading; it used to end up hidden under the sticky filter bar.
 - Resources shows either the × seat multiplier (per-person demand) or points per sprint (story-points demand), never both; in story-points mode a person's points are scaled by their hours only. A seat of 0 still means "supplies nothing" in both modes. The row menu's Capacity… opens whichever of the two the row shows.
@@ -31,8 +39,6 @@ Format: short sections, bullets, one bold title per notable change —
 - Auto timeline and Place at earliest slot never move work before its phase begins (the phase's pinned start, or where its earliest item already sits); work already under way keeps its start unless a dependency or capacity pushes it (a push past today places it as new work, on the snap grid).
 - Story rows in the Planning left pane show a capacity type chip and, in per-person mode, a × multiplier (feature rows too at the Features planning level); both are columns you can hide or reorder. The Resources panel gains a points column in story-points mode.
 - Epic and workstream group rows now stay pinned under their phase band while you scroll, like the phase band itself.
-- Auto-order rows by start now also applies when a document opens.
-- Opening a document whose rows are out of start order (with auto-order on) re-sorts them there and then, says so ("Rows auto-ordered") and leaves the document unsaved.
 - The Auto-schedule dialog is gone; Auto timeline and Place at earliest slot replace it.
 - Flagged rows are tinted light orange in the left pane, darker when selected.
 - The Planning / Scoping left pane no longer shows #numbers on rows (they stay in the panel header, on cards and on sprint rows).
@@ -48,6 +54,7 @@ Format: short sections, bullets, one bold title per notable change —
 - **Planning level** (Setup → Capacity): Features (default) plans capacity on the features and stories need no details; Stories ignores feature weights and durations and plans the work on the stories and their capacity types.
 - **Capacity types**: stories carry a capacity type (what they drain and who can take them) and people carry the type they supply — Development, Design, QA, … by default, editable and reorderable under Setup → Capacity. Story assignee pickers list only the people supplying the story's type. The Budgeting / Resources rows gain a Capacity column.
 - Default roles now lead with Project Manager and Product Manager.
+- Re-importing a workbook no longer overwrites a rich Notes / Enables / Out-of-scope value with a mangled copy when ExcelJS corrupts a surrogate pair in the visible sheet, or when Excel's 32,767-character cell cap truncated it.
 
 ## 1.0.13 — 2026-09-09
 
