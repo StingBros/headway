@@ -8980,8 +8980,9 @@
       } },
       state.meta.capacityEnabled ? { icon: 'zap', label: 'Auto timeline: the \u26a1 button on a phase band', disabled: true, fn: function () {} } : null,
       { sep: true },
-      { icon: 'zoom-in', label: 'Zoom in', kbd: '⌘scroll', fn: function () { zoomBy(1.2); } },
-      { icon: 'zoom-out', label: 'Zoom out', fn: function () { zoomBy(1 / 1.2); } },
+      // the keys work on Planning; ⌘scroll over the timeline zooms too
+      { icon: 'zoom-in', label: 'Zoom in', kbd: '⌘+', title: 'Also ⌘scroll over the timeline', fn: function () { zoomBy(1.2); } },
+      { icon: 'zoom-out', label: 'Zoom out', kbd: '⌘−', title: 'Also ⌘scroll over the timeline', fn: function () { zoomBy(1 / 1.2); } },
       { icon: 'crosshair', label: 'Scroll to today', fn: goToday },
       { sep: true },
     ].concat(themeMenuItems())
@@ -8997,7 +8998,8 @@
     var r = b.getBoundingClientRect();
     var html = '<div class="menu-list">' + items.map(function (m, i) {
       if (m.sep) return '<div class="menu-sep"></div>';
-      return '<button data-mi="' + i + '"' + (m.disabled ? ' disabled' : '') + (m.checked ? ' class="on"' : '') + '>' +
+      return '<button data-mi="' + i + '"' + (m.disabled ? ' disabled' : '') + (m.checked ? ' class="on"' : '') +
+        (m.title ? ' title="' + esc(m.title) + '"' : '') + '>' +
         '<i data-lucide="' + m.icon + '"></i><span>' + m.label + '</span>' +
         (m.kbd ? '<span class="kbd">' + m.kbd + '</span>' : '') +
         (m.checked ? '<i data-lucide="check" class="mi-check"></i>' : '') +
@@ -12244,7 +12246,7 @@
       ui: function () {
         var sel = selectedId ? RM.itemById(state, selectedId) : null;
         return {
-          view: view, selectedNum: sel ? sel.num : null, theme: themePref, snapFeat: snapFeat, snapStory: snapStory,
+          view: view, selectedNum: sel ? sel.num : null, theme: themePref, snapFeat: snapFeat, snapStory: snapStory, weekPx: weekPx,
           deps: depsMode === 'on', crit: showCrit, cap: showCap, autoOrder: autoOrder,
           groupWs: groupWs, groupEpic: groupEpic, autoSave: autoSave, detailMode: detailMode,
           desktop: !!window.HeadwayDesktop, userName: userName()
@@ -12343,6 +12345,13 @@
       return;
     }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+    // ⌘+ / ⌘- (Ctrl on other platforms, numpad too) zoom the Planning
+    // timeline instead of the page; never while a dialog is open
+    if (mod && !e.altKey && view === 'planning' && modalHost.hidden) {
+      var zIn = e.key === '=' || e.key === '+' || e.code === 'NumpadAdd';
+      var zOut = e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract';
+      if (zIn || zOut) { e.preventDefault(); zoomBy(zIn ? 1.2 : 1 / 1.2); return; }
+    }
     if (mod && e.key.toLowerCase() === 'a' && (view === 'planning' || view === 'scoping')) {
       e.preventDefault();
       var all = $$('#rows .row.item').map(function (r) { return r.dataset.id; });

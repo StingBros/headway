@@ -5922,6 +5922,62 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
       ok(state().history.length === hLen, 'and a pass that moves nothing adds no version-history entry');
     });
 }).then(() => {
+  // ⌘+ / ⌘- zoom the Planning timeline (Ctrl on other platforms)
+  window.HeadwayApp.ai.setView('planning');
+  if (doc.activeElement && doc.activeElement.blur) doc.activeElement.blur();
+  // an earlier check can leave a dialog up: Escape closes it
+  if (!doc.querySelector('#modalHost').hidden) window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  const wp = () => window.HeadwayApp.ai.ui().weekPx;
+  const zkey = (k, o, target) => {
+    const ev = new window.KeyboardEvent('keydown', Object.assign({ key: k, metaKey: true, bubbles: true, cancelable: true }, o || {}));
+    (target || window).dispatchEvent(ev);
+    return ev;
+  };
+  ok(typeof wp() === 'number', 'the UI reports the zoom (weekPx)');
+  let w = wp();
+  const evIn = zkey('=');
+  ok(wp() > w, '⌘= zooms the timeline in (' + w + ' → ' + wp() + ')');
+  ok(evIn.defaultPrevented, 'and keeps the browser from page-zooming');
+  w = wp();
+  zkey('-');
+  ok(wp() < w, '⌘- zooms out');
+  w = wp(); zkey('+', { shiftKey: true });
+  ok(wp() > w, '⌘+ (⇧⌘=) zooms in');
+  w = wp(); zkey('_', { shiftKey: true });
+  ok(wp() < w, '⌘_ zooms out');
+  w = wp(); zkey('+', { code: 'NumpadAdd' });
+  ok(wp() > w, 'numpad + zooms in');
+  w = wp(); zkey('-', { code: 'NumpadSubtract' });
+  ok(wp() < w, 'numpad - zooms out');
+  w = wp(); zkey('=', { metaKey: false, ctrlKey: true });
+  ok(wp() > w, 'Ctrl+= works too');
+  w = wp(); zkey('-', { metaKey: false, ctrlKey: true });
+  ok(wp() < w, 'Ctrl+- works too');
+  w = wp(); zkey('=', { metaKey: false });
+  ok(wp() === w, 'a bare = does nothing');
+  const rf = doc.querySelector('#rowFilter');
+  rf.focus();
+  w = wp();
+  const evTyping = zkey('=', null, rf);
+  ok(wp() === w && !evTyping.defaultPrevented, 'ignored while typing in the filter box');
+  rf.blur();
+  click(doc.querySelector('#rows .row.band [data-act="phase-edit"]'));
+  ok(!doc.querySelector('#modalHost').hidden, 'a dialog is open');
+  w = wp();
+  const evModal = zkey('=');
+  ok(wp() === w && !evModal.defaultPrevented, 'ignored while a dialog is open');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  window.HeadwayApp.ai.setView('scoping');
+  w = wp();
+  const evSc = zkey('=');
+  ok(wp() === w && !evSc.defaultPrevented, 'ignored in Scoping');
+  window.HeadwayApp.ai.setView('planning');
+  click(doc.querySelector('.menu-btn[data-menu="view"]'));
+  const zin = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Zoom in/.test(b.textContent));
+  const zout = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Zoom out/.test(b.textContent));
+  ok(!!zin && /⌘\+/.test(zin.textContent) && !!zout && /⌘−/.test(zout.textContent), 'the View menu shows ⌘+ / ⌘− beside Zoom in / out');
+  doc.querySelector('#popover').hidden = true;
+}).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
 }).catch((e) => {
