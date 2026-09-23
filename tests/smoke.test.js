@@ -297,6 +297,12 @@ ok(doc.querySelector('#leftRzLine') !== null, 'full-height left-pane resize line
 }
 ok(!doc.querySelector('#rows .row.item .r-ico'), 'item rows carry no standalone epic-icon slot');
 ok(!doc.querySelector('#rows .row.item .r-epic'), 'item rows carry no epic tag beside the title (the Epic column does)');
+{
+  const bandLeft = doc.querySelector('#rows .row.band .row-left');
+  const acts = bandLeft && bandLeft.lastElementChild;
+  ok(!!acts && acts.classList.contains('band-acts') && !!acts.querySelector('.band-add') && !!acts.querySelector('.band-edit'),
+    'a phase band ends with its action group (+ feature · edit · ⚡) at the right edge');
+}
 
 // ---------------------------------------------------------------- menus
 click(doc.querySelector('[data-menu="file"]'));
