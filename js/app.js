@@ -1030,6 +1030,7 @@
       if (multiSel.length < 2) multiSel = null;
     }
     state = next;
+    stateRev += 1; // the Auto timeline dry runs must see the peer's change
     validation = RM.validate(state);
     noteLocalStamps(now); // fields the peer took no longer differ from the baseline
     rebaseSnapshots(patched);
@@ -1184,6 +1185,7 @@
     selectedId = null;
     multiSel = null;
     state = res.doc;
+    stateRev += 1;
     docSaved = true;
     validation = RM.validate(state);
     saveLocal();

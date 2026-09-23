@@ -1199,6 +1199,35 @@ async function importFlow() {
   const w = boot(null, { localStorage: { 'headway-user-v2': JSON.stringify(FIXER) } });
   ok(!w.HA.menuItems('file').some((m) => /Import from Excel/.test(m.label || '')), 'web build: no Import');
   ok(w.errors.length === 0, 'web build boots clean');
+
+  section('Auto timeline after a peer change: the dry run sees the peer, the click keeps their edit');
+  {
+    const DIR3 = 'C:/Users/me/OneDrive/Capacity.headway';
+    const capDoc = b.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    capDoc.meta.capacityEnabled = true; capDoc.meta.planLevel = 'feature'; capDoc.meta.capMode = 'person';
+    capDoc.team = [{ id: 'solo', name: 'Solo', capType: 'Development', weekHours: {}, capacity: 1 }];
+    const ph = capDoc.phases.find((p) => !p.bucket);
+    const pile = capDoc.items.filter((i) => !i.milestone && i.phaseId === ph.id).slice(0, 3);
+    pile.forEach((i) => { i.locked = false; i.done = false; i.capType = 'Development'; i.capMult = 1; i.startDay = 10; i.durDays = 5; i.deps = []; i.stories = []; });
+    const c3 = b.RB.migrateFromState(capDoc, SEED_USER, T0);
+    const pid3 = c3.headway.plans[0].id;
+    await b.HD.createBundle(DIR3, c3);
+    await b.HA.openBundleDoc(DIR3);
+    await settle();
+    eq(b.info().docKind, 'bundle', 'capacity bundle open');
+    // the render above computed (and memoized) the band's ⚡ dry run
+    const pPath = DIR3 + '/plans/' + pid3 + '/items/' + pile[0].id + '.json';
+    const env = JSON.parse(tauri.files.get(pPath));
+    env.fields.feature = 'Renamed by a peer'; env.fieldsAt.feature = T2; env.updatedAt = T2; env.updatedBy = 'peer-zz999'; env.rev += 1;
+    tauri.files.set(pPath, JSON.stringify(env));
+    await tauri.emitPaths(pPath);
+    eq(b.state().items.find((i) => i.id === pile[0].id).feature, 'Renamed by a peer', 'the peer rename is live');
+    ok(b.HA.ai.autoTimelineNow(ph.id) > 0, 'Auto timeline moves the piled work');
+    eq(b.state().items.find((i) => i.id === pile[0].id).feature, 'Renamed by a peer', 'the Auto timeline commit keeps the peer rename (no stale dry run)');
+    eq(b.HA.ai.autoTimelineNow(ph.id), 0, 'and a second click finds nothing to do');
+    await settle();
+    eq(JSON.parse(tauri.files.get(pPath)).fields.feature, 'Renamed by a peer', 'the flushed shard keeps the peer rename');
+  }
 }
 
 main().catch((e) => {
