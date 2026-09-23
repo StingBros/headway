@@ -25,9 +25,9 @@ function section(name) { console.log('— ' + name); }
 const tick = (n) => new Promise((res) => setTimeout(res, n || 5));
 
 // boot core + bundle + desktop in a bare jsdom against one fake Tauri
-function boot(tauri, extra) {
+function boot(tauri, extra, opts) {
   const dom = new JSDOM(
-    '<!doctype html><html><body><div id="topbar"><div class="tb-right"></div></div>' +
+    '<!doctype html><html><body>' + (opts && opts.noTopbar ? '' : '<div id="topbar"><div class="tb-right"></div></div>') +
     '<span id="docTitle"></span><div id="toasts"></div></body></html>',
     { url: 'http://localhost/index.html', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
@@ -322,6 +322,14 @@ async function main() {
   ok(prevented === true, 'close request is intercepted');
   eq(named('beforeClose').length, closeCalls + 1, 'beforeClose called');
   ok(tauri.log.some((l) => l.op === 'destroy'), 'window destroyed after beforeClose settled');
+  {
+    // a page without the editor header (no #topbar) still lands its flush on close
+    const tNo = makeFakeTauri();
+    const bNo = boot(tNo, [], { noTopbar: true });
+    const preventedNo = await tNo.requestClose();
+    ok(preventedNo === true, 'without #topbar the close request is still intercepted');
+    eq(bNo.named('beforeClose').length, 1, 'and beforeClose still runs');
+  }
 
   section('denied capability surfaces, never masked');
   const t2 = makeFakeTauri({ deny: ['rename'] });

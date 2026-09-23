@@ -936,40 +936,9 @@
   // (and double-click zooms/maximizes, per each platform's convention).
   (function chrome() {
     var isMac = navigator.platform.indexOf('Mac') === 0;
-    var topbar = document.getElementById('topbar');
-    if (!topbar) return;
-
-    // dragging works from header background and passive elements (brand
-    // mark, gaps around the view tabs) — never from actual controls
-    Array.prototype.forEach.call(
-      document.querySelectorAll('#topbar, .tb-brand, .tb-mark, .tb-mark span'),
-      function (el) { el.setAttribute('data-tauri-drag-region', ''); }
-    );
-    document.body.classList.add(isMac ? 'chrome-mac' : 'chrome-win');
-
-    // explicit drag handler — the built-in data-tauri-drag-region listener
-    // has proven unreliable here, so start the drag ourselves. Document-level
-    // so the start page's bar drags too.
     var win = window.__TAURI__.window.getCurrentWindow();
-    document.addEventListener('mousedown', function (e) {
-      if (e.button !== 0) return;
-      var t = e.target;
-      if (!t.hasAttribute || !t.hasAttribute('data-tauri-drag-region')) return;
-      e.preventDefault();
-      if (e.detail >= 2) win.toggleMaximize();
-      else win.startDragging();
-    });
-
-    // macOS native fullscreen hides the traffic lights — body.fullscreen
-    // lets the CSS reclaim their header inset
-    function syncFullscreen() {
-      win.isFullscreen().then(function (fs) {
-        document.body.classList.toggle('fullscreen', fs);
-      }).catch(function () { /* window gone */ });
-    }
-    win.onResized(syncFullscreen);
-    syncFullscreen();
-
+    // the close hook comes first: a page without the editor header must
+    // still land its pending bundle flush before the window goes
     // closing the window (caption ✕, Alt+F4, the red traffic light) — ONE
     // handler, two duties in order:
     //   1. unsaved .xlsx work asks first — app.js owns the Save / Don't save /
@@ -998,6 +967,39 @@
         } else finish();
       });
     }
+    var topbar = document.getElementById('topbar');
+    if (!topbar) return;
+
+    // dragging works from header background and passive elements (brand
+    // mark, gaps around the view tabs) — never from actual controls
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#topbar, .tb-brand, .tb-mark, .tb-mark span'),
+      function (el) { el.setAttribute('data-tauri-drag-region', ''); }
+    );
+    document.body.classList.add(isMac ? 'chrome-mac' : 'chrome-win');
+
+    // explicit drag handler — the built-in data-tauri-drag-region listener
+    // has proven unreliable here, so start the drag ourselves. Document-level
+    // so the start page's bar drags too.
+    document.addEventListener('mousedown', function (e) {
+      if (e.button !== 0) return;
+      var t = e.target;
+      if (!t.hasAttribute || !t.hasAttribute('data-tauri-drag-region')) return;
+      e.preventDefault();
+      if (e.detail >= 2) win.toggleMaximize();
+      else win.startDragging();
+    });
+
+    // macOS native fullscreen hides the traffic lights — body.fullscreen
+    // lets the CSS reclaim their header inset
+    function syncFullscreen() {
+      win.isFullscreen().then(function (fs) {
+        document.body.classList.toggle('fullscreen', fs);
+      }).catch(function () { /* window gone */ });
+    }
+    win.onResized(syncFullscreen);
+    syncFullscreen();
+
     if (isMac) return;
 
     // Windows caption buttons — one set in the editor header, one on the
