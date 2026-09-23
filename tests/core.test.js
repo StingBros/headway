@@ -2598,3 +2598,96 @@ section('snapped placement');
   eq(stP.startDay, 5, 'Place at earliest slot snaps too');
   eq(stP.durDays, 5, 'and rounds the duration up');
 }
+
+section('exclude from auto');
+{
+  // the phase starts on day 0, so its floor never hides what the flag does
+  var PH0 = [{ id: 'p1', name: 'Alpha', bucket: false, startDay: 0 }, { id: 'p3', name: 'Next', bucket: true }];
+  // normalize: a plain boolean on features and stories; Lock wins a clash
+  var nA = mkState([
+    { num: 1, feature: 'a', phaseId: 'p1', noAuto: 1, stories: [{ title: 's', noAuto: 'yes' }, { title: 't' }] },
+    { num: 2, feature: 'b', phaseId: 'p1' },
+    { num: 3, feature: 'c', phaseId: 'p1', noAuto: true, locked: true }
+  ]);
+  eq(RM.itemByNum(nA, 1).noAuto, true, 'normalize: noAuto is a boolean on features');
+  eq(RM.itemByNum(nA, 1).stories[0].noAuto, true, 'normalize: noAuto is a boolean on stories');
+  eq(RM.itemByNum(nA, 1).stories[1].noAuto, false, 'normalize: a story without it reads false');
+  eq(RM.itemByNum(nA, 2).noAuto, false, 'normalize: a feature without it reads false');
+  eq([RM.itemByNum(nA, 3).locked, RM.itemByNum(nA, 3).noAuto], [true, false], 'normalize: both set → Locked wins');
+
+  // the two are mutually exclusive
+  var xA = { locked: true, noAuto: false };
+  RM.setNoAuto(xA, true);
+  eq([xA.locked, xA.noAuto], [false, true], 'setting noAuto clears locked');
+  RM.setLocked(xA, true);
+  eq([xA.locked, xA.noAuto], [true, false], 'setting locked clears noAuto');
+  RM.setLocked(xA, false);
+  eq([xA.locked, xA.noAuto], [false, false], 'unlocking leaves noAuto off');
+  var xS = { title: 's' };
+  RM.setNoAuto(xS, true);
+  ok(xS.noAuto === true && !('locked' in xS), 'a story takes noAuto without growing a lock');
+
+  // scheduler: an excluded feature stays where it sits and books its capacity
+  var sEx = autoState([
+    { num: 1, feature: 'excluded', phaseId: 'p1', startDay: 20, durDays: 5, noAuto: true, capType: 'Development' },
+    { num: 2, feature: 'free', phaseId: 'p1', durDays: 5, capType: 'Development' },
+    { num: 3, feature: 'after', phaseId: 'p1', durDays: 5, capType: 'Development', deps: [1] }
+  ], [{ name: 'Solo', capType: 'Development' }], null, PH0);
+  var X = byNum(RM.autoTimeline(sEx, { phaseIds: ['p1'], today: 0 }).state);
+  eq([X[1].startDay, X[1].durDays], [20, 5], 'an excluded feature stays put');
+  eq(X[2].startDay, 0, 'its unexcluded neighbour still moves');
+  ok(X[3].startDay >= 25, 'a dependent lands after the excluded feature');
+  // …exactly where it lands behind a locked one: the same fixed-unit path
+  var sLk = RM.clone(sEx);
+  RM.setLocked(RM.itemByNum(sLk, 1), true);
+  eq(X[3].startDay, byNum(RM.autoTimeline(sLk, { phaseIds: ['p1'], today: 0 }).state)[3].startDay,
+    'an excluded feature schedules around exactly like a locked one');
+  var sBk = autoState([
+    { num: 1, feature: 'excluded', phaseId: 'p1', startDay: 0, durDays: 5, noAuto: true, capType: 'Development' },
+    { num: 2, feature: 'free', phaseId: 'p1', startDay: 30, durDays: 5, capType: 'Development' }
+  ], [{ name: 'Solo', capType: 'Development' }]);
+  eq(byNum(RM.autoTimeline(sBk, { phaseIds: ['p1'], today: 0 }).state)[2].startDay, 5,
+    'the excluded feature books its capacity: the free one waits for the head');
+  ok(RM.capUnits(sBk).filter(function (u) { return u.itemId === RM.itemByNum(sBk, 1).id; })[0].noAuto === true, 'capUnits carries noAuto');
+
+  // story level: the feature's flag covers its stories; a story's own flag covers just it
+  var sFS = autoState([
+    { num: 1, feature: 'F', phaseId: 'p1', capType: 'Development', noAuto: true,
+      stories: [{ num: 101, title: 'a', startDay: 30, durDays: 3, capType: 'Development' }] },
+    { num: 2, feature: 'G', phaseId: 'p1', capType: 'Development',
+      stories: [{ num: 201, title: 'b', startDay: 40, durDays: 3, capType: 'Development', noAuto: true },
+        { num: 202, title: 'c', startDay: 50, durDays: 2, capType: 'Development' }] }
+  ], [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
+  var FS = byNum(RM.autoTimeline(sFS, { phaseIds: ['p1'], today: 0 }).state);
+  eq(FS[1].stories[0].startDay, 30, 'a feature’s noAuto covers its stories');
+  eq(FS[2].stories[0].startDay, 40, 'a story’s own noAuto keeps it put');
+  ok(FS[2].stories[1].startDay !== 50, 'its unflagged sibling still moves');
+
+  // ⚡ dry run: an excluded feature is never counted
+  var sDry = autoState([{ num: 1, feature: 'excluded', phaseId: 'p1', startDay: 20, durDays: 5, noAuto: true, capType: 'Development' }],
+    [{ name: 'Solo', capType: 'Development' }], null, PH0);
+  eq(RM.autoPhase(sDry, 'p1', { today: 0 }).changed, 0, 'autoPhase leaves an excluded feature alone (nothing to do)');
+  RM.itemByNum(sDry, 1).noAuto = false;
+  ok(RM.autoPhase(sDry, 'p1', { today: 0 }).changed > 0, 'while the same feature, included, would move');
+
+  // Place at earliest slot is a direct command: it still moves an excluded unit (never a locked one)
+  var sPlc = autoState([{ num: 1, feature: 'excluded', phaseId: 'p1', startDay: 20, durDays: 5, noAuto: true, capType: 'Development' }],
+    [{ name: 'Solo', capType: 'Development' }], null, PH0);
+  var rPlc = RM.placeUnit(sPlc, RM.itemByNum(sPlc, 1).id, null, { today: 0 });
+  eq(RM.itemByNum(rPlc.state, 1).startDay, 0, 'placeUnit still moves an excluded feature');
+  RM.setLocked(RM.itemByNum(sPlc, 1), true);
+  var rPlk = RM.placeUnit(sPlc, RM.itemByNum(sPlc, 1).id, null, { today: 0 });
+  eq([rPlk.changed, rPlk.note], [0, 'Locked'], 'but never a locked one');
+  var rPlF = RM.placeUnit(sFS, RM.itemByNum(sFS, 1).id, null, { today: 0 });
+  ok(RM.itemByNum(rPlF.state, 1).stories[0].startDay !== 30, 'placing an excluded feature at story level places its stories');
+
+  // the ⚡ sizing step leaves an excluded feature's size alone too
+  var szMeta = { planLevel: 'story', sizeScheme: 'tshirt', sizeOrder: ['XS', 'S', 'M', 'L', 'XL'],
+    sizeDays: { XS: 2, S: 5, M: 10, L: 20, XL: 40 }, storySizeScheme: 'fibonacci' };
+  var sSz = autoState([{ num: 1, feature: 'F', phaseId: 'p1', capType: 'Development', size: 'XL', noAuto: true,
+    stories: [{ num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' }] }],
+    [{ name: 'Solo', capType: 'Development' }], szMeta);
+  eq(RM.autoSizeChanges(sSz, 'p1'), [], 'an excluded feature is not re-sized by Auto');
+  RM.itemByNum(sSz, 1).noAuto = false;
+  eq(RM.autoSizeChanges(sSz, 'p1').length, 1, 'while an included one would be');
+}
