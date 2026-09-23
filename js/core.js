@@ -2444,8 +2444,10 @@
   // wins. planImport is pure; applyImport mutates (inside commit).
   // teamType is not here: an empty role means "any role" (a real value, not
   // a gap), so a workbook must neither fill it nor count it as a conflict
-  RM.IMPORT_FILL_FIELDS = ['enables', 'outOfScope', 'notes', 'extDeps', 'description', 'ac', 'size', 'risk'];
-  RM.IMPORT_STORY_FILL_FIELDS = ['description', 'ac'];
+  // (an item's capType is never empty after normalize — Development by
+  // default — so it is not a gap either; a story's blank capType is)
+  RM.IMPORT_FILL_FIELDS = ['enables', 'outOfScope', 'notes', 'extDeps', 'description', 'ac', 'size', 'risk', 'estLow', 'estHigh'];
+  RM.IMPORT_STORY_FILL_FIELDS = ['description', 'ac', 'capType', 'estLow', 'estHigh'];
   function normTitle(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase(); }
   // Only an RM.uid-shaped id is identity across documents. Template imports
   // mint low-entropy ids ('ph1', 'tm1', …) on BOTH sides, so pairing those by
@@ -2624,6 +2626,13 @@
   RM.applyImport = function (state, plan) {
     var added = { items: 0, stories: 0, team: 0, phases: 0 }, filled = 0;
     function addType(t) { if (t && state.teamTypes.indexOf(t) === -1) state.teamTypes.push(t); }
+    // a capacity type the workbook brought joins the document's list, as
+    // normalizeState would on the next open
+    function addCapType(t) {
+      if (!t) return;
+      if (!Array.isArray(state.capTypes)) state.capTypes = [];
+      if (state.capTypes.indexOf(t) === -1) state.capTypes.push(t);
+    }
     function fillInto(obj, fields) {
       Object.keys(fields).forEach(function (f) {
         if (!emptyVal(obj[f])) return;
@@ -2644,6 +2653,7 @@
       nm.order = RM.orderAfterAll(state.team);
       state.team.push(nm);
       addType(nm.type);
+      addCapType(nm.capType);
       added.team++;
     });
     (plan.items.add || []).forEach(function (it) {
@@ -2654,6 +2664,8 @@
       RM.ensureOrder(n.stories);
       state.items.push(n);
       addType(n.teamType);
+      addCapType(n.capType);
+      (n.stories || []).forEach(function (st) { addCapType(st.capType); });
       added.items++;
     });
     (plan.stories.add || []).forEach(function (a) {
@@ -2662,6 +2674,7 @@
       var ns = RM.clone(a.story);
       ns.order = RM.orderAfterAll(it.stories);
       it.stories.push(ns);
+      addCapType(ns.capType);
       added.stories++;
     });
     (plan.items.fill || []).forEach(function (f) {
@@ -2673,7 +2686,7 @@
     (plan.stories.fill || []).forEach(function (f) {
       var it = RM.itemById(state, f.itemId);
       var st = it && it.stories.filter(function (s) { return s.id === f.id; })[0];
-      if (st) fillInto(st, f.fields);
+      if (st) { fillInto(st, f.fields); addCapType(st.capType); }
     });
     return { added: added, filled: filled };
   };

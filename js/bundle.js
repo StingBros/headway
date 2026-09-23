@@ -19,7 +19,7 @@
   // normalizeState owns at the top level that is neither an entity list nor
   // left outside the plan (history has its own files; optId/optName/options
   // become plans).
-  RMBundle.META_KEYS = ['meta', 'wsOrder', 'wsColors', 'epicIcons', 'epicColors', 'epicJira', 'epicTypes', 'teamTypes'];
+  RMBundle.META_KEYS = ['meta', 'wsOrder', 'wsColors', 'epicIcons', 'epicColors', 'epicJira', 'epicTypes', 'teamTypes', 'capTypes'];
   // in-memory-only keys — must not count as a change
   RMBundle.VOLATILE_KEYS = ['holdPos', '_idx', 'leadDays'];
   // keys a bundle-backed document carries that a standalone xlsx must not

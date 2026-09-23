@@ -2362,6 +2362,55 @@ eq(planMk.meta.fields.epicJira, { Login: 'HW-1' }, 'epicJira still there');
 var backMk = RM.normalizeState(RB.assembleState(planMk.meta, { items: planMk.items, phases: planMk.phases, team: planMk.team, costs: planMk.costs }));
 eq(backMk.epicTypes, { Login: 'epic' }, 'assembling the plan restores epicTypes');
 
+section('bundle: capacity, scheduling and range fields round-trip');
+// every top-level key normalizeState owns travels in a shard (entity kinds or
+// the meta shard) or is deliberately left outside the plan
+(function () {
+  var sAll = RM.normalizeState({ items: [{ feature: 'a', stories: [{ title: 's' }] }], team: [{ name: 'A' }], costs: [{ name: 'c' }] });
+  var outside = ['history', 'optId', 'optName', 'options'];
+  var loose = Object.keys(sAll).filter(function (k) {
+    return RB.KINDS.indexOf(k) === -1 && RB.META_KEYS.indexOf(k) === -1 && outside.indexOf(k) === -1;
+  });
+  eq(loose, [], 'no top-level key falls outside the bundle (capTypes included)');
+})();
+var sCapB = mkState([
+  { id: 'iCapB', num: 1, feature: 'Typed', phaseId: 'p1', startDay: 0, durDays: 5, capType: 'QA', capMult: 2, locked: true, estLow: 3, estHigh: 8,
+    stories: [{ id: 'sCapB', num: 101, title: 'st', capType: 'Design', capMult: 0.5, estLow: 1, estHigh: 2, startDay: 0, durDays: 2 }] }
+], {
+  team: [{ id: 'tCapB', name: 'Quinn', type: 'Development', capType: 'QA', points: 13, capacity: 0.5 }],
+  capTypes: ['Development', 'QA', 'Design', 'Ops']
+});
+sCapB.meta.capacityEnabled = true; sCapB.meta.planLevel = 'story'; sCapB.meta.capMode = 'points'; sCapB.meta.defaultPoints = 8;
+sCapB.meta.estimateMode = 'range'; sCapB.meta.estimateUnit = 'points'; sCapB.meta.estimateBasis = 'low'; sCapB.meta.daysPerUnit = 0.5;
+sCapB = RM.normalizeState(sCapB);
+var migCapB = RB.migrateFromState(sCapB, 'ann-1', T0);
+var planCapB = migCapB.plans[Object.keys(migCapB.plans)[0]];
+eq(planCapB.meta.fields.capTypes, ['Development', 'QA', 'Design', 'Ops'], 'capTypes rides in the meta shard');
+var backCapB = RB.assembleState(planCapB.meta, { items: planCapB.items, phases: planCapB.phases, team: planCapB.team, costs: planCapB.costs });
+eq(backCapB.capTypes, ['Development', 'QA', 'Design', 'Ops'], 'assembling restores capTypes (order kept, Ops unused but kept)');
+['capacityEnabled', 'planLevel', 'capMode', 'defaultPoints', 'estimateMode', 'estimateUnit', 'estimateBasis', 'daysPerUnit'].forEach(function (k) {
+  eq(backCapB.meta[k], sCapB.meta[k], 'meta.' + k + ' round-trips');
+});
+var itCapB = RM.itemById(backCapB, 'iCapB');
+eq([itCapB.capType, itCapB.capMult, itCapB.locked, itCapB.estLow, itCapB.estHigh], ['QA', 2, true, 3, 8], 'item capType / capMult / locked / estLow / estHigh round-trip');
+var stCapB = itCapB.stories[0];
+eq([stCapB.capType, stCapB.capMult, stCapB.estLow, stCapB.estHigh], ['Design', 0.5, 1, 2], 'story capType / capMult / estLow / estHigh round-trip');
+var tmCapB = backCapB.team.filter(function (m) { return m.id === 'tCapB'; })[0];
+eq([tmCapB.capType, tmCapB.points, tmCapB.capacity], ['QA', 13, 0.5], 'member capType / points / capacity round-trip');
+eq(RB.canonicalize(RB.metaEntity(backCapB)), RB.canonicalize(RB.metaEntity(sCapB)), 'the meta entity is unchanged by the round trip');
+// two peers: one retypes the item, the other changes its multiplier — both land
+var baseEnv = planCapB.items.filter(function (e) { return e.id === 'iCapB'; })[0];
+var peerA = RM.clone(RB.unwrap(baseEnv)); peerA.capType = 'Development';
+var peerB = RM.clone(RB.unwrap(baseEnv)); peerB.capMult = 3; peerB.stories[0].capType = 'QA';
+var mCapB = RB.unwrap(RB.mergeEntity(RB.wrap(peerA, baseEnv, 'ann-1', T1), RB.wrap(peerB, baseEnv, 'bob-2', T2)));
+eq([mCapB.capType, mCapB.capMult, mCapB.stories[0].capType], ['Development', 3, 'QA'], 'concurrent capType and capMult / story capType edits both survive the merge');
+// a capacity-type rename reaches the other machine through the meta shard
+var canonCapB = {};
+RB.diffEntities({}, backCapB).changed.forEach(function (c) { canonCapB[c.kind + '/' + c.id] = c.canon; });
+RM.renameCapType(backCapB, 'QA', 'Quality');
+var dCapB = RB.diffEntities(canonCapB, backCapB).changed.map(function (c) { return c.kind + '/' + c.id; }).sort();
+eq(dCapB, ['items/iCapB', 'meta/meta', 'team/tCapB'], 'a capacity-type rename flushes the meta shard and exactly the rows that carried it');
+
 section('story numbers: settled the same way on every machine');
 // two machines assemble the same shards in a different array order; a story
 // that collides with an older one (uid time) yields, whatever the order
