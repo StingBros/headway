@@ -19,6 +19,31 @@ number. All capacity settings move to their own Setup tab. Story rows in the
 Planning left pane show their capacity type. Second-level group bands (epic /
 workstream) pin under the phase band while scrolling.
 
+## Amendment 2026-09-23 — Auto timeline is a one-shot button
+
+The persistent per-phase Auto flag is removed. `phase.auto` is dropped on
+normalize (older documents lose it silently), and nothing re-runs the
+scheduler on commit or on open (the on-open auto-order pass stays). Instead
+every non-bucket phase band carries a ⚡ button — also in the band context
+menu and the phase dialog footer — that runs `RM.autoPhase(state, phaseId,
+snap)` once, in a single `commit('auto timeline')`: `RM.autoTimeline` for
+that phase (locked units and other phases are booked as fixed, done units
+anchor dependencies without being booked, the phase floor holds), then, at the Stories level, `RM.autoSizeChanges` writes each
+feature's size from the span its sized stories now cover (`RM.autoSizeDays`,
+rounded up to the feature snap). The size is written once; afterwards it is an
+ordinary editable size — `RM.autoSized` and the derived / read-only size
+treatment are gone. The button is disabled when capacity planning is off or
+when a dry run of `RM.autoPhase` changes nothing; the dry run is memoized per
+phase on a state revision counter. `RM.autoTimeline` without `phaseIds` now
+targets every non-bucket phase. One click settles the phase: `RM.autoPhase`
+repeats the layout (start-sorting the rows between passes when auto-order is
+on, `opts.autoOrder`) until a pass moves nothing, at most 5 passes; the derived
+phase floor reads story bars as well as feature bars; work under way (begun
+before today) keeps its start unless a dependency or capacity pushes it —
+still before today it moves minimally on the day grid, pushed to today or
+later it is placed as new work (snap grid, phase floor). Sections 1 (phase `auto`), 4 (Triggers, Phase
+flag UI) and 7 below describe the superseded flag.
+
 ## Non-goals
 
 - No change to the Sprinting, Prioritizing, Budgeting, Reports or Jira views
@@ -340,7 +365,7 @@ One "Unreleased" entry per user-visible change: Auto timeline, Place at
 earliest slot, Setup → Capacity tab, demand modes, capacity row change,
 weekly limit removed, story chips, sticky group bands.
 
-## Amendment — 2026-09-23
+## Amendment 2026-09-23 — every capacity type counts; per-sprint story points
 
 - **No tracked types.** `meta.capRowTypes`, `RM.trackedCapTypes` and the
   Setup → Capacity "Tracked capacity types" checkboxes are gone; every

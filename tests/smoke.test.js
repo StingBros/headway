@@ -4164,7 +4164,6 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     s.meta.capacityEnabled = true; s.meta.planLevel = 'feature'; s.meta.capMode = 'person';
     s.team = [{ id: 'p1', name: 'A', capType: 'Development', weekHours: {}, capacity: 1 }];
     s.items.forEach((i) => { if (!i.milestone) { i.capType = 'Development'; i.capMult = 1; } });
-    s.phases.forEach((p) => { p.auto = false; });
   });
   const capRow = () => doc.querySelectorAll('#hdrCapRows .hdr-cap');
   ok(capRow().length === 1 && capRow()[0].querySelector('.cap-row-lab').textContent === 'Capacity (people)',
@@ -4249,27 +4248,136 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok(doc.querySelectorAll('#hdrCapRows .hdr-cap .cap-cell').length === 48, 'back per person: 48 week cells');
   }
   undo();
-  // auto timeline: a phase flagged Auto re-lays its items on every commit
+  // Auto timeline: a one-shot ⚡ button on every real phase band
   {
+    const zapOf = (pid) => doc.querySelector('#rows .row.band[data-phase="' + pid + '"] .band-zap');
+    const snap0 = JSON.stringify(window.HeadwayApp.ai.state());
+    window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
+    const realPhases = window.HeadwayApp.ai.state().phases.filter((p) => !p.bucket);
+    const bucketPhases = window.HeadwayApp.ai.state().phases.filter((p) => p.bucket);
+    ok(realPhases.every((p) => !!zapOf(p.id)), 'every real phase band has an Auto timeline button');
+    ok(bucketPhases.every((p) => !zapOf(p.id)), 'a backlog bucket has none');
+    ok(realPhases.every((p) => zapOf(p.id).disabled && /capacity planning/.test(zapOf(p.id).getAttribute('title') || zapOf(p.id).dataset.tip || '')),
+      'with capacity planning off every button is disabled and says why');
+    ok(!!zapOf(realPhases[0].id).querySelector('[data-lucide="zap"], svg'), 'the button carries the zap icon');
+    const ph0 = realPhases[0].id;
+    let lockedId = null, lockedStart = null;
     window.HeadwayApp.ai.commit('auto setup', (s) => {
       s.meta.capacityEnabled = true; s.meta.planLevel = 'feature'; s.meta.capMode = 'person';
       s.team = [{ id: 'solo', name: 'Solo', capType: 'Development', weekHours: {}, capacity: 1 }];
-      s.phases[0].auto = true;
       // every feature now carries a capacity type, so park the other phases'
-      // work as done — this check is about what the Auto phase lays out
+      // work as done — this check is about what the phase's button lays out
       s.items.forEach((it) => {
-        if (it.phaseId === s.phases[0].id) { it.locked = false; it.done = false; it.capType = 'Development'; it.capMult = 1; }
+        if (it.phaseId === ph0) { it.locked = false; it.done = false; it.capType = 'Development'; it.capMult = 1; }
         else it.done = true;
       });
+      // one scheduled item is locked: a fixed point the layout works around
+      const lk = s.items.find((it) => it.phaseId === ph0 && !it.milestone && it.startDay != null);
+      lk.locked = true; lockedId = lk.id; lockedStart = lk.startDay;
     });
-    const st = window.HeadwayApp.ai.state();
-    const cap = window.RM.capacity(st);
-    ok(!cap.weeks.some((c) => c.over), 'after the commit no week of the Auto phase is over capacity');
-    ok(/auto/i.test(doc.querySelector('.row.band .band-auto')?.textContent || ''), 'the phase band shows an AUTO tag');
-    // toggling capacity off clears the flag
+    const dry = window.RM.autoPhase(window.HeadwayApp.ai.state(), ph0, { snap: { feature: window.HeadwayApp.ai.ui().snapFeat, story: window.HeadwayApp.ai.ui().snapStory } });
+    ok(dry.changed > 0, 'the seeded phase is out of place (a dry run would move ' + dry.changed + ')');
+    ok(!zapOf(ph0).disabled, 'so its button is enabled');
+    ok(realPhases.slice(1).every((p) => zapOf(p.id).disabled ===
+      (window.RM.autoPhase(window.HeadwayApp.ai.state(), p.id, { snap: { feature: window.HeadwayApp.ai.ui().snapFeat, story: window.HeadwayApp.ai.ui().snapStory } }).changed === 0)),
+      'every other band: disabled exactly when a dry run changes nothing');
+    // the band menu and the phase dialog offer the same action
+    const band0 = doc.querySelector('#rows .row.band[data-phase="' + ph0 + '"]');
+    band0.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    const mAuto = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].find((b) => /Auto timeline/.test(b.textContent));
+    ok(!!mAuto && !mAuto.disabled, 'the band menu has an enabled Auto timeline entry');
+    doc.querySelector('#popover').hidden = true;
+    click(band0.querySelector('[data-act="phase-edit"]'));
+    const dlgAuto = doc.querySelector('#phAutoRun');
+    ok(!!dlgAuto && !dlgAuto.disabled && /Auto timeline/.test(dlgAuto.textContent), 'the phase dialog has an enabled Auto timeline button');
+    ok(!doc.querySelector('#phAuto'), 'and no Auto timeline checkbox any more');
+    click(doc.querySelector('[data-m="x2"]'));
+    // click: one commit lays the phase out
+    const before = JSON.stringify(window.HeadwayApp.ai.state().items);
+    const hLen = window.HeadwayApp.ai.state().history.length;
+    [...doc.querySelectorAll('#toasts .toast')].forEach((t) => t.remove());
+    click(zapOf(ph0));
+    const after = window.HeadwayApp.ai.state();
+    ok(JSON.stringify(after.items) !== before, 'clicking the button moves the phase’s items');
+    ok(!window.RM.capacity(after).weeks.some((c) => c.over), 'after the click no week is over capacity');
+    ok(window.RM.itemById(after, lockedId).startDay === lockedStart, 'the locked item keeps its start');
+    ok(after.history.length === hLen + 1 && after.history[after.history.length - 1].label === 'auto timeline',
+      'the click is one version-history entry, labelled auto timeline');
+    ok([...doc.querySelectorAll('#toasts .toast')].some((t) => /Auto timeline moved \d+ item/.test(t.textContent)), 'and toasts how many items moved');
+    {
+      const was = JSON.parse(before);
+      const nMoved = after.items.filter((b) => { const a = was.find((x) => x.id === b.id); return a && (a.startDay !== b.startDay || a.durDays !== b.durDays); }).length;
+      ok([...doc.querySelectorAll('#toasts .toast')].some((t) => t.textContent.indexOf('moved ' + nMoved + ' item') !== -1),
+        'the toast counts the units that moved (' + nMoved + ')');
+    }
+    ok(zapOf(ph0).disabled && /already in place/.test(zapOf(ph0).getAttribute('title') || zapOf(ph0).dataset.tip || ''),
+      'right after the click the button is disabled: everything is in place');
+    ok(!after.phases.some((p) => 'auto' in p), 'no phase carries an auto flag');
+    undo();
+    ok(JSON.stringify(window.HeadwayApp.ai.state().items) === before, 'one undo restores every item');
+    ok(!zapOf(ph0).disabled, 'and the button is enabled again');
+    // the assistant hook: a named phase, or every real phase
+    ok(window.HeadwayApp.ai.autoTimelineNow(realPhases[0].name) > 0, 'autoTimelineNow runs a phase by name');
+    window.HeadwayApp.ai.autoTimelineNow();
+    ok(realPhases.every((p) => zapOf(p.id).disabled), 'autoTimelineNow() runs every real phase: every button is disabled after');
+    ok(window.HeadwayApp.ai.autoTimelineNow(ph0) === 0, 'and a second run of the same phase changes nothing');
+    // a snap picked in the View menu re-renders the rows: the buttons follow the new snap
+    {
+      const zOld = zapOf(ph0);
+      const curFeat = window.HeadwayApp.ai.ui().snapFeat;
+      const other = curFeat === 'day' ? 'sprint' : 'day';
+      const pickSnap = (mode) => {
+        click(doc.querySelector('.menu-btn[data-menu="view"]'));
+        const want = new RegExp('snap to ' + { day: 'day', week: 'week', sprint: 'sprint' }[mode], 'i');
+        const b = [...doc.querySelectorAll('#popover .menu-list button[data-mi]')].filter((x) => want.test(x.textContent))[0];
+        if (b) click(b);
+        return !!b;
+      };
+      ok(pickSnap(other), 'the View menu offers a feature snap');
+      ok(window.HeadwayApp.ai.ui().snapFeat === other, 'and picking it switches the feature snap');
+      ok(zapOf(ph0) !== zOld, 'the rows re-render, so the band button is rebuilt');
+      const dryO = window.RM.autoPhase(window.HeadwayApp.ai.state(), ph0, { autoOrder: window.HeadwayApp.ai.ui().autoOrder, snap: { feature: other, story: window.HeadwayApp.ai.ui().snapStory } });
+      ok(zapOf(ph0).disabled === (dryO.changed === 0), 'and its disabled state matches a dry run under the new snap');
+      pickSnap(curFeat);
+      ok(window.HeadwayApp.ai.ui().snapFeat === curFeat, 'the snap is back');
+    }
+    // the phase dialog's Auto timeline button saves the dialog's edits first
+    {
+      const st0 = window.HeadwayApp.ai.state();
+      const open = st0.items.filter((i) => i.phaseId === ph0 && !i.milestone && !i.locked && !i.done && i.startDay != null);
+      window.HeadwayApp.ai.commit('overlap', (s) => { s.items.find((i) => i.id === open[1].id).startDay = open[0].startDay; });
+      click(doc.querySelector('#rows .row.band[data-phase="' + ph0 + '"] [data-act="phase-edit"]'));
+      const nameIn = doc.querySelector('#phName');
+      const oldName = nameIn.value;
+      nameIn.value = oldName + ' renamed';
+      const run = doc.querySelector('#phAutoRun');
+      ok(!!run && !run.disabled, 'the dialog button is enabled for an overlapping phase');
+      click(run);
+      const st1 = window.HeadwayApp.ai.state();
+      ok(st1.phases.find((p) => p.id === ph0).name === oldName + ' renamed', 'the dialog\u2019s pending rename was saved, not dropped');
+      ok(st1.history[st1.history.length - 1].label === 'auto timeline', 'and then the action ran');
+      ok(zapOf(ph0).disabled, 'leaving the phase in place');
+      // a unit the roster can never fit is left where it is, and the toast says so
+      window.HeadwayApp.ai.commit('crowd', (s) => {
+        const a = s.items.find((i) => i.id === open[0].id), b = s.items.find((i) => i.id === open[1].id);
+        a.capMult = 3; b.startDay = a.startDay;
+      });
+      [...doc.querySelectorAll('#toasts .toast')].forEach((t) => t.remove());
+      if (!zapOf(ph0).disabled) {
+        click(zapOf(ph0));
+        ok([...doc.querySelectorAll('#toasts .toast')].some((t) => / \u00b7 1 could not be placed/.test(t.textContent)),
+          'the toast says a unit could not be placed');
+      } else ok(false, 'a crowded phase enables the button');
+    }
+    ok(/body\.ro[^{]*\.band-zap/.test(fs.readFileSync(require('path').join(__dirname, '..', 'css', 'app.css'), 'utf8')),
+      'read-only documents hide the Auto timeline button');
+    // editing capacity no longer toasts about a switched-off Auto flag
     window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
-    ok(window.HeadwayApp.ai.state().phases[0].auto === false, 'capacity off clears the Auto flag');
-    undo(); undo();
+    ok(zapOf(ph0).disabled, 'turning capacity planning off disables the button');
+    window.HeadwayApp.ai.commit('restore', (s) => {
+      const d = JSON.parse(snap0);
+      s.meta = d.meta; s.phases = d.phases; s.items = d.items; s.team = d.team;
+    });
   }
   // Place at earliest slot: right-click a feature row
   {
@@ -5320,49 +5428,53 @@ ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'co
   window.HeadwayApp.ai.commit('auto-sized setup', (s) => {
     s.meta.planLevel = 'story';
     s.meta.capacityEnabled = true;
-    s.phases.forEach((p) => { p.auto = p.id === f0.phaseId && !p.bucket; });
     const t = s.items.find(i => i.id === f0.id);
     t.size = 'XL';
     t.stories.forEach((st) => { st.size = null; });
     t.stories[0].size = stSize;
   });
   const ff = () => state().items.find(i => i.id === f0.id);
-  ok(window.RM.autoSized(state(), ff()), 'a feature in an Auto phase with a sized story is auto-sized');
-  ok(ff().size === window.RM.sizeForDays(state(), window.RM.itemSizeDays(state(), ff())),
-    'its size is the nearest label for the span its stories cover, not the hand-picked XL');
+  ok(ff().size === 'XL', 'nothing re-sizes a feature on commit: the hand-picked XL stands');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
   const szA = doc.querySelector('#rows .row.item[data-id="' + f0.id + '"] [data-act="size"]');
-  ok(!!szA && szA.classList.contains('ro'), 'its size chip reads as derived (.ro)');
-  ok(szA.getAttribute('title') === 'Sized from its stories (Auto timeline, Stories level)', 'and the tooltip says where the size comes from');
-  click(szA);
-  ok(!doc.querySelector('#popover .menu-list'), 'clicking the chip opens no size menu');
+  ok(!!szA && !szA.classList.contains('ro'), 'the size chip is an ordinary, editable size');
+  // the Auto timeline button sizes the phase's features from their stories, once
+  const zapF = doc.querySelector('#rows .row.band[data-phase="' + f0.phaseId + '"] .band-zap');
+  ok(!!zapF && !zapF.disabled, 'the feature’s phase has an enabled Auto timeline button');
+  click(zapF);
+  const derived = window.RM.sizeForDays(state(), window.RM.autoSizeDays(state(), ff(), { snap: { feature: 'day' } }));
+  ok(ff().size === derived && derived !== 'XL',
+    'the click sizes the feature from the span its stories cover (' + ff().size + '), not the hand-picked XL');
+  const zapF2 = doc.querySelector('#rows .row.band[data-phase="' + f0.phaseId + '"] .band-zap');
+  ok(zapF2.disabled, 'and right after, the button is disabled');
   window.__headway.selectItem(f0.id);
-  ok(!!doc.querySelector('#panel .p-rollup') && !doc.querySelector('#panel [data-f="size"]'),
-    'the panel shows the derived size instead of the size buttons');
-  const sizeWas = ff().size;
+  ok(!!doc.querySelector('#panel [data-f="size"]'), 'the panel keeps its size buttons: the size stays editable');
   window.HeadwayApp.ai.commit('hand size', (s) => { s.items.find(i => i.id === f0.id).size = 'XS'; });
-  ok(ff().size === sizeWas, 'a hand-written size is re-derived on the next commit');
+  ok(ff().size === 'XS', 'a hand-written size after the click sticks');
+  ok(!doc.querySelector('#rows .row.band[data-phase="' + f0.phaseId + '"] .band-zap').disabled,
+    'and the button offers to re-derive it');
 
-  // a derived size is whatever the bar says: never the mismatch tint, however
-  // much rounding the feature snap adds. A 3-day hull under a week feature
-  // snap derives from 5 days, so the raw comparison would disagree.
+  // a 3-day story under a week feature snap derives from 5 days
   const s3 = window.RM.sizeOrderOf(state(), 'story').find(l => window.RM.sizeDays(state(), l, 'story') === 3);
-  // (locked so the Auto pass leaves the hand-built 3-day hull alone)
   window.HeadwayApp.ai.commit('three-day story', (s) => {
     const t = s.items.find(i => i.id === f0.id);
     t.stories.forEach((st, ix) => {
-      st.size = ix ? null : s3; st.locked = true; st.startDay = 0; st.durDays = ix ? 1 : 3;
+      st.size = ix ? null : s3; st.startDay = 0; st.durDays = ix ? 1 : 3;
     });
   });
-  const rawH = window.RM.itemSizeDays(state(), ff());
-  const roundH = window.RM.itemSizeDays(state(), ff(), { snap: { feature: 'week' } });
+  const rawH = window.RM.autoSizeDays(state(), ff());
+  const roundH = window.RM.autoSizeDays(state(), ff(), { snap: { feature: 'week' } });
   ok(roundH > rawH, 'the week snap rounds the short hull up (' + rawH + ' → ' + roundH + ')');
+  // the click sizes the feature from that rounded span, and a size set from
+  // stories never reads as a size/bar mismatch: the bar is the stories' hull
   window.HeadwayApp.ai.setPref('snapFeat', 'week');
-  window.HeadwayApp.ai.commit('re-derive', (s) => { s.items.find(i => i.id === f0.id).size = 'XS'; });
+  const zapW = doc.querySelector('#rows .row.band[data-phase="' + f0.phaseId + '"] .band-zap');
+  if (zapW && !zapW.disabled) click(zapW);
   const szB = doc.querySelector('#rows .row.item[data-id="' + f0.id + '"] [data-act="size"]');
   ok(!!szB && !szB.classList.contains('custom'),
     'a derived size never reads as a size/bar mismatch under a week feature snap');
   window.HeadwayApp.ai.setPref('snapFeat', 'day');
+
 
   // a story buys whole snap units: 3 days under a week snap stores 5
   window.HeadwayApp.ai.setPref('snapStory', 'week');
@@ -5655,8 +5767,8 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
         'story numbers survive an xlsx round trip');
     });
 }).then(() => {
-  // opening a document runs the auto features: the rows come back in start
-  // order and an Auto phase is laid out under the roster's capacity
+  // opening a document runs auto-order only: the rows come back in start
+  // order, but nothing is laid out until someone clicks Auto timeline
   const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   window.HeadwayApp.ai.setPref('autoOrder', true);
   const doc0 = window.RM.clone(state());
@@ -5664,7 +5776,7 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
   doc0.meta.capRowTypes = ['Design']; // an old document's tracked-type selection
   doc0.team = [{ id: 'solo', name: 'Solo', capType: 'Development', weekHours: {}, capacity: 1 }];
   const autoPh = doc0.phases.find((p) => !p.bucket);
-  autoPh.auto = true;
+  autoPh.auto = true; // an older document's flag: ignored now
   // three features of the Auto phase pile into the same week: the phase floor
   // holds them at that week, so capacity has to spread them forward from it
   const seed = doc0.items.filter((i) => !i.milestone)[0];
@@ -5681,19 +5793,20 @@ tagFilterChecks().then(() => window.RMExcel.exportWorkbook(state())).then((buf) 
     .then((ab) => window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), 'Auto.xlsx'))
     .then(() => {
       const opened = state();
-      ok(opened.phases.find((p) => p.id === autoPh.id).auto === true, 'on open: the Auto flag survived the file');
+      ok(!opened.phases.some((p) => 'auto' in p), 'on open: an old per-phase Auto flag is dropped');
+      ok(window.RM.capacity(opened).weeks.some((c) => c.over), 'on open: nothing is laid out — the piled week is still over capacity');
       ok(opened.meta.capRowTypes === undefined, 'on open: an old capRowTypes selection is dropped');
-      ok(!window.RM.capacity(opened).weeks.some((c) => c.over), 'on open: the Auto phase is laid out, no week over capacity');
       const sorted = window.RM.clone(opened);
       window.RM.sortItemsByStart(sorted);
       ok(sorted.items.map((i) => i.id).join() === opened.items.map((i) => i.id).join(), 'on open: the rows are in start order');
-      ok(window.HeadwayApp.unsavedNow() === true, 'on open: the auto pass leaves the document unsaved');
-      ok(opened.history[opened.history.length - 1].label === 'auto', 'on open: the newest version-history entry is labelled auto');
       const before = JSON.stringify(state().items);
       undo(); // the open cleared the stack — nothing to step back to
-      ok(JSON.stringify(state().items) === before, 'on open: undo cannot step back past the auto pass');
+      ok(JSON.stringify(state().items) === before, 'on open: undo cannot step back past the open');
+      ok(window.HeadwayApp.ai.autoTimelineNow(autoPh.id) > 0, 'Auto timeline on the phase moves the piled work');
+      ok(!window.RM.capacity(state()).weeks.some((c) => c.over), 'and no week is over capacity after');
+      ok(state().history[state().history.length - 1].label === 'auto timeline', 'the newest version-history entry is labelled auto timeline');
       const hLen = state().history.length;
-      ok(window.HeadwayApp.ai.autoTimelineNow() === 0, 'a second pass over a laid-out document moves nothing');
+      ok(window.HeadwayApp.ai.autoTimelineNow(autoPh.id) === 0, 'a second pass over a laid-out phase moves nothing');
       ok(state().history.length === hLen, 'and a pass that moves nothing adds no version-history entry');
     });
 }).then(() => {

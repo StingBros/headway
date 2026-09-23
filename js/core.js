@@ -117,21 +117,8 @@
     return (opts && opts.snap && opts.snap[kind]) || 'day';
   };
 
-  // At the Stories level a feature in an Auto phase takes its size from its
-  // stories: the plan already says when they run, so a hand-picked bucket
-  // would only drift. Needs at least one story whose size has known days.
-  RM.autoSized = function (state, it) {
-    if (!it || it.milestone) return false;
-    if (RM.planLevel(state) !== 'story') return false;
-    if (RM.sizeRollup(state)) return false;   // the rollup scheme derives it already
-    if (!RM.sizingEnabled(state)) return false; // 'none' writes nothing
-    var ph = null;
-    (state.phases || []).forEach(function (p) { if (p.id === it.phaseId) ph = p; });
-    if (!ph || !ph.auto) return false;
-    return (it.stories || []).some(function (st) { return st && RM.sizeDays(state, st.size, 'story') != null; });
-  };
-  // Working days behind an auto-sized feature: the span its scheduled stories
-  // cover — earliest start to latest end, so stories running in parallel do
+  // Working days behind a feature sized from its stories (the Auto timeline
+  // action at the Stories level): the span its scheduled stories cover — earliest start to latest end, so stories running in parallel do
   // NOT add up — else their days summed. Rounded up to the feature snap.
   RM.autoSizeDays = function (state, it, opts) {
     var lo = null, hi = null;
@@ -145,23 +132,39 @@
     if (days == null) return null;
     return RM.snapUpDays(state.meta, days, RM.snapModeOf(opts, 'feature'));
   };
-  // every derived feature size, rewritten; run after any change (normalize +
-  // commit) so the stored field always reads right
-  RM.applySizeRollup = function (state, opts) {
-    var rollup = RM.sizeRollup(state);
+  // the rollup scheme's derived feature sizes, rewritten; run after any
+  // change (normalize + commit) so the stored field always reads right
+  RM.applySizeRollup = function (state) {
+    if (!RM.sizeRollup(state)) return;
     (state.items || []).forEach(function (it) {
       if (!it || it.milestone) return;
-      if (rollup) { it.size = RM.rollupSize(state, it); return; }
-      if (!RM.autoSized(state, it)) return;
-      var d = RM.autoSizeDays(state, it, opts);
-      if (d != null) it.size = RM.sizeForDays(state, d);
+      it.size = RM.rollupSize(state, it);
     });
   };
-  // the working days an item's size stands for (rolled up, derived from the
-  // stories' span, or looked up)
-  RM.itemSizeDays = function (state, it, opts) {
+  // The sizes the Auto timeline action writes for one phase, as
+  // [{ itemId, size }]: at the Stories level every feature with at least one
+  // sized story takes the label nearest the span its stories cover (see
+  // autoSizeDays). One-shot — once written it is an ordinary, editable size.
+  // Only features whose size would actually change are listed.
+  RM.autoSizeChanges = function (state, phaseId, opts) {
+    var out = [];
+    if (RM.planLevel(state) !== 'story') return out;
+    if (RM.sizeRollup(state)) return out;        // the rollup scheme derives it already
+    if (!RM.sizingEnabled(state)) return out;    // 'none' writes nothing
+    (state.items || []).forEach(function (it) {
+      if (!it || it.milestone || it.phaseId !== phaseId) return;
+      var sized = (it.stories || []).some(function (st) { return st && RM.sizeDays(state, st.size, 'story') != null; });
+      if (!sized) return;
+      var d = RM.autoSizeDays(state, it, opts);
+      if (d == null) return;
+      var label = RM.sizeForDays(state, d);
+      if (label != null && label !== it.size) out.push({ itemId: it.id, size: label });
+    });
+    return out;
+  };
+  // the working days an item's size stands for (rolled up, or looked up)
+  RM.itemSizeDays = function (state, it) {
     if (RM.sizeRollup(state)) return RM.rollupDays(state, it);
-    if (RM.autoSized(state, it)) return RM.autoSizeDays(state, it, opts);
     return RM.sizeDays(state, it.size);
   };
   // Features and stories size on SEPARATE scales: features under
@@ -1648,9 +1651,8 @@
         name: p.name || 'Phase',
         description: p.description || '',
         bucket: !!p.bucket,
-        // Auto timeline: items follow dependencies under the roster's
-        // capacity. Needs capacity planning; buckets are never auto
-        auto: !!p.auto && !!m.capacityEnabled && !p.bucket,
+        // (an older document's per-phase `auto` flag is dropped here: Auto
+        // timeline is a one-shot action on the phase band now)
         collapsed: !!p.collapsed,
         startDay: ps,
         endDay: pe
@@ -3199,9 +3201,10 @@
     return changed;
   };
 
-  // Lay out the Auto phases: dependency order, earliest start from today (or
-  // the unit's own start once begun), under the typed weekly ledger. Fixed
-  // units (other phases, locked, done, dependency-free milestones) pre-book.
+  // Lay out phases (opts.phaseIds, else every non-bucket phase): dependency
+  // order, earliest start from today (or the unit's own start once begun),
+  // under the typed weekly ledger. Fixed units (other phases, locked, done,
+  // dependency-free milestones) pre-book.
   RM.autoTimeline = function (inputState, opts) {
     opts = opts || {};
     var state = RM.clone(inputState);
@@ -3212,8 +3215,10 @@
     var targets = {};
     var phaseIdx = {};
     state.phases.forEach(function (p, i) { phaseIdx[p.id] = i; });
-    (opts.phaseIds || state.phases.filter(function (p) { return p.auto && !p.bucket; }).map(function (p) { return p.id; }))
-      .forEach(function (id) { targets[id] = true; });
+    var bucketIds = {};
+    state.phases.forEach(function (p) { if (p.bucket) bucketIds[p.id] = true; });
+    (opts.phaseIds || state.phases.map(function (p) { return p.id; }))
+      .forEach(function (id) { if (!bucketIds[id]) targets[id] = true; });
     if (!Object.keys(targets).length) return out;
     var today = opts.today != null ? opts.today : RM.todayDay(meta);
     var HORIZON = meta.numWeeks + 104;
@@ -3283,30 +3288,59 @@
         release(u);
         return;
       }
-      var started = u.startDay != null && u.startDay <= today;
-      var floor = started ? u.startDay : today;
-      // work already under way keeps its start: the phase floor never drags it forward
-      if (!started && pFloor != null && pFloor > floor) floor = pFloor;
-      if (floor > est) est = floor;
+      // Work under way (begun before today) keeps its start and length unless
+      // a dependency now ends after its start or capacity no longer fits it
+      // there (a holiday on its start day is not a reason). Pushed, it moves
+      // minimally on the day grid while it still starts before today; pushed
+      // to today or later it is no longer under way and is placed as new work.
+      var started = u.startDay != null && u.durDays != null && u.startDay < today;
+      var depEnd = est;
+      var gridMode = RM.snapModeOf(opts, u.storyId ? 'story' : 'feature');
+      if (started && depEnd <= u.startDay && ledger.fits(u, u.startDay, u.durDays)) {
+        if (RM.applyUnitPlacement(state, u, u.startDay, u.durDays, ledger.set)) out.changed += 1;
+        touchedItems[u.itemId] = true;
+        ledger.book(u, u.startDay, u.durDays, 1);
+        var e0 = u.startDay + u.durDays + (u.storyId ? 0 : RM.stretchSpan(meta, u.startDay + u.durDays, RM.riskEffortDays(state, RM.itemById(state, u.itemId)), ledger.set));
+        endOf[u.id] = e0;
+        if (e0 > maxDay) maxDay = e0;
+        release(u);
+        return;
+      }
+      // new work: never before today nor before its phase begins
+      function newWorkFloor(e) {
+        var f = today;
+        if (pFloor != null && pFloor > f) f = pFloor;
+        return f > e ? f : e;
+      }
+      if (started) { if (u.startDay > est) est = u.startDay; } else est = newWorkFloor(est);
       // The snap grid (when the caller passed one) moves the start to the next
-      // boundary and buys whole units of work. Work already under way is
-      // exempt: an automatic pass never shoves in-flight work forward (the
-      // explicit Place at earliest slot still snaps it).
-      var snapMode = started ? 'day' : RM.snapModeOf(opts, u.storyId ? 'story' : 'feature');
-      var work = RM.snapUpDays(meta, RM.unitWorkDays(state, u, ledger.set), snapMode);
+      // boundary and buys whole units of work; work under way stays on the day grid.
+      var snapMode = started ? 'day' : gridMode;
+      var baseWork = RM.unitWorkDays(state, u, ledger.set);
+      var work = RM.snapUpDays(meta, baseWork, snapMode);
       var s = RM.snapUpDay(meta, est, snapMode);
       var dur = RM.stretchSpan(meta, s, work, ledger.set);
-      // search for the first slot that fits; none (the ask can never fit, or
-      // the search reaches the horizon) leaves the unit where it is
-      var fitAt = null;
-      if (!ledger.neverFits(u, s, dur)) {
-        var guard = 0;
+      // the first slot that fits from `start` on the `mode` grid; null when
+      // the search reaches the horizon — that slot is never accepted
+      function fitFrom(start, mode, w) {
+        var fs = RM.snapUpDay(meta, start, mode), fd = RM.stretchSpan(meta, fs, w, ledger.set), guard = 0;
         while (guard < HORIZON * S) {
-          if (!RM.offDay(meta, s, ledger.set) && ledger.fits(u, s, dur)) { fitAt = s; break; }
-          s = RM.snapUpDay(meta, s + 1, snapMode); dur = RM.stretchSpan(meta, s, work, ledger.set); guard += 1;
+          if (!RM.offDay(meta, fs, ledger.set) && ledger.fits(u, fs, fd)) return [fs, fd];
+          fs = RM.snapUpDay(meta, fs + 1, mode); fd = RM.stretchSpan(meta, fs, w, ledger.set); guard += 1;
         }
+        return null;
       }
-      if (fitAt == null) {
+      var fit = ledger.neverFits(u, s, dur) ? null : fitFrom(est, snapMode, work);
+      // work under way pushed to today or later is new work where it lands:
+      // the snap grid and the phase floor apply (else the next pass, seeing
+      // it in the future, would move it again)
+      if (fit && started && fit[0] >= today) {
+        work = RM.snapUpDays(meta, baseWork, gridMode);
+        fit = fitFrom(newWorkFloor(depEnd), gridMode, work);
+      }
+      // none (the ask can never fit, or the search reaches the horizon)
+      // leaves the unit where it is
+      if (fit == null) {
         var it0 = RM.itemById(state, u.itemId);
         notes.push('#' + it0.num + ' (' + it0.feature + ') asks more ' + u.capType + ' in ' + ledger.periodWord + ' than the roster can ever give, so it never fits — left where it is.');
         // it stays where it is, so it still consumes what it consumes —
@@ -3318,6 +3352,7 @@
         release(u);
         return;
       }
+      s = fit[0]; dur = fit[1];
       if (RM.applyUnitPlacement(state, u, s, dur, ledger.set)) out.changed += 1;
       touchedItems[u.itemId] = true;
       ledger.book(u, s, dur, 1);
@@ -3345,6 +3380,65 @@
       RM.syncEndDate(meta);
       notes.push('Timeline extended to ' + neededWeeks + ' weeks to fit the schedule.');
     }
+    return out;
+  };
+
+  // The Auto timeline action for one phase, in one go: lay it out (above),
+  // then at the Stories level size its features from the span their stories
+  // now cover. Sizes are taken AFTER the layout — at the Stories level a
+  // feature's size never steers where its stories go. With opts.autoOrder the
+  // rows are start-sorted after each layout (as the app's auto-order would),
+  // and the layout repeats until a pass moves nothing (at most 5 passes), so
+  // one click settles the phase. The app runs this as its dry run too:
+  // changed === 0 means the phase is already in place.
+  // Counts compare the result with the input: moved = work units (features,
+  // or stories at the Stories level, milestones) whose dates changed — not
+  // the feature hulls rebuilt around moved stories; sized = features whose
+  // size changed; changed = everything that differs (hulls included).
+  RM.AUTO_PHASE_MAX_PASSES = 5;
+  RM.autoPhase = function (inputState, phaseId, opts) {
+    opts = opts || {};
+    var ph = null;
+    (inputState.phases || []).forEach(function (p) { if (p.id === phaseId) ph = p; });
+    var out = { state: RM.clone(inputState), moved: 0, sized: [], changed: 0, notes: [] };
+    if (!ph || ph.bucket || !inputState.meta.capacityEnabled) return out;
+    var o = {};
+    Object.keys(opts).forEach(function (k) { o[k] = opts[k]; });
+    o.phaseIds = [phaseId];
+    var cur = inputState;
+    for (var pass = 0; pass < RM.AUTO_PHASE_MAX_PASSES; pass++) {
+      var r = RM.autoTimeline(cur, o);
+      var sz = RM.autoSizeChanges(r.state, phaseId, opts);
+      sz.forEach(function (c) {
+        var it = RM.itemById(r.state, c.itemId);
+        if (it) it.size = c.size;
+      });
+      if (pass === 0) out.notes = r.notes;
+      var before = opts.autoOrder ? r.state.items.map(function (it) { return it.id; }).join('|') : '';
+      if (opts.autoOrder) RM.sortItemsByStart(r.state);
+      var reordered = opts.autoOrder && r.state.items.map(function (it) { return it.id; }).join('|') !== before;
+      cur = r.state;
+      if (!r.changed && !sz.length && !reordered) break;
+    }
+    out.state = cur;
+    // the tally, input against result
+    var storyLevel = RM.planLevel(inputState) === 'story';
+    function same(a, b) { return a.startDay === b.startDay && a.durDays === b.durDays; }
+    inputState.items.forEach(function (a) {
+      if (a.phaseId !== phaseId) return;
+      var b = RM.itemById(cur, a.id);
+      if (!b) return;
+      if (a.size !== b.size) out.sized.push({ itemId: a.id, size: b.size });
+      var unitsAreStories = storyLevel && !a.milestone && (a.stories || []).length > 0;
+      if (unitsAreStories) {
+        (a.stories || []).forEach(function (sa) {
+          var sb = (b.stories || []).filter(function (x) { return x.id === sa.id; })[0];
+          if (sb && !same(sa, sb)) out.moved += 1;
+        });
+        if (!same(a, b) || (a.riskDays || 0) !== (b.riskDays || 0)) out.changed += 1; // hull
+      } else if (!same(a, b) || (a.riskDays || 0) !== (b.riskDays || 0)) out.moved += 1;
+    });
+    out.changed += out.moved + out.sized.length;
     return out;
   };
 
@@ -3837,10 +3931,20 @@
   // Where a phase begins for scheduling: its pinned start if it has one,
   // else where its earliest scheduled item already sits (null when the phase
   // is neither pinned nor scheduled — then nothing floors it).
+  // The derived floor reads story bars as well as feature bars: at the
+  // Stories level a feature bar is only the hull of its stories, and a hull
+  // rebuilt after a pass must never lower the floor the next pass sees.
   RM.phaseFloorDay = function (state, phase) {
     if (phase.startDay != null) return phase.startDay;
     var sp = RM.phaseSpan(state, phase);
-    return sp ? sp.lo : null;
+    if (!sp) return null;
+    var lo = sp.lo;
+    RM.itemsInPhase(state, phase.id).forEach(function (it) {
+      (it.stories || []).forEach(function (st) {
+        if (st && st.startDay != null && st.durDays != null && st.startDay < lo) lo = st.startDay;
+      });
+    });
+    return lo;
   };
 
   RM.phaseSpan = function (state, phase) {
