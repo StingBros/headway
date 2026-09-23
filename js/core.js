@@ -117,21 +117,8 @@
     return (opts && opts.snap && opts.snap[kind]) || 'day';
   };
 
-  // At the Stories level a feature in an Auto phase takes its size from its
-  // stories: the plan already says when they run, so a hand-picked bucket
-  // would only drift. Needs at least one story whose size has known days.
-  RM.autoSized = function (state, it) {
-    if (!it || it.milestone) return false;
-    if (RM.planLevel(state) !== 'story') return false;
-    if (RM.sizeRollup(state)) return false;   // the rollup scheme derives it already
-    if (!RM.sizingEnabled(state)) return false; // 'none' writes nothing
-    var ph = null;
-    (state.phases || []).forEach(function (p) { if (p.id === it.phaseId) ph = p; });
-    if (!ph || !ph.auto) return false;
-    return (it.stories || []).some(function (st) { return st && RM.sizeDays(state, st.size, 'story') != null; });
-  };
-  // Working days behind an auto-sized feature: the span its scheduled stories
-  // cover — earliest start to latest end, so stories running in parallel do
+  // Working days behind a feature sized from its stories (the Auto timeline
+  // action at the Stories level): the span its scheduled stories cover — earliest start to latest end, so stories running in parallel do
   // NOT add up — else their days summed. Rounded up to the feature snap.
   RM.autoSizeDays = function (state, it, opts) {
     var lo = null, hi = null;
@@ -145,23 +132,39 @@
     if (days == null) return null;
     return RM.snapUpDays(state.meta, days, RM.snapModeOf(opts, 'feature'));
   };
-  // every derived feature size, rewritten; run after any change (normalize +
-  // commit) so the stored field always reads right
-  RM.applySizeRollup = function (state, opts) {
-    var rollup = RM.sizeRollup(state);
+  // the rollup scheme's derived feature sizes, rewritten; run after any
+  // change (normalize + commit) so the stored field always reads right
+  RM.applySizeRollup = function (state) {
+    if (!RM.sizeRollup(state)) return;
     (state.items || []).forEach(function (it) {
       if (!it || it.milestone) return;
-      if (rollup) { it.size = RM.rollupSize(state, it); return; }
-      if (!RM.autoSized(state, it)) return;
-      var d = RM.autoSizeDays(state, it, opts);
-      if (d != null) it.size = RM.sizeForDays(state, d);
+      it.size = RM.rollupSize(state, it);
     });
   };
-  // the working days an item's size stands for (rolled up, derived from the
-  // stories' span, or looked up)
-  RM.itemSizeDays = function (state, it, opts) {
+  // The sizes the Auto timeline action writes for one phase, as
+  // [{ itemId, size }]: at the Stories level every feature with at least one
+  // sized story takes the label nearest the span its stories cover (see
+  // autoSizeDays). One-shot — once written it is an ordinary, editable size.
+  // Only features whose size would actually change are listed.
+  RM.autoSizeChanges = function (state, phaseId, opts) {
+    var out = [];
+    if (RM.planLevel(state) !== 'story') return out;
+    if (RM.sizeRollup(state)) return out;        // the rollup scheme derives it already
+    if (!RM.sizingEnabled(state)) return out;    // 'none' writes nothing
+    (state.items || []).forEach(function (it) {
+      if (!it || it.milestone || it.phaseId !== phaseId) return;
+      var sized = (it.stories || []).some(function (st) { return st && RM.sizeDays(state, st.size, 'story') != null; });
+      if (!sized) return;
+      var d = RM.autoSizeDays(state, it, opts);
+      if (d == null) return;
+      var label = RM.sizeForDays(state, d);
+      if (label != null && label !== it.size) out.push({ itemId: it.id, size: label });
+    });
+    return out;
+  };
+  // the working days an item's size stands for (rolled up, or looked up)
+  RM.itemSizeDays = function (state, it) {
     if (RM.sizeRollup(state)) return RM.rollupDays(state, it);
-    if (RM.autoSized(state, it)) return RM.autoSizeDays(state, it, opts);
     return RM.sizeDays(state, it.size);
   };
   // Features and stories size on SEPARATE scales: features under
@@ -1683,9 +1686,8 @@
         name: p.name || 'Phase',
         description: p.description || '',
         bucket: !!p.bucket,
-        // Auto timeline: items follow dependencies under the roster's
-        // capacity. Needs capacity planning; buckets are never auto
-        auto: !!p.auto && !!m.capacityEnabled && !p.bucket,
+        // (an older document's per-phase `auto` flag is dropped here: Auto
+        // timeline is a one-shot action on the phase band now)
         collapsed: !!p.collapsed,
         startDay: ps,
         endDay: pe
@@ -3081,9 +3083,10 @@
     return changed;
   };
 
-  // Lay out the Auto phases: dependency order, earliest start from today (or
-  // the unit's own start once begun), under the typed weekly ledger. Fixed
-  // units (other phases, locked, done, dependency-free milestones) pre-book.
+  // Lay out phases (opts.phaseIds, else every non-bucket phase): dependency
+  // order, earliest start from today (or the unit's own start once begun),
+  // under the typed weekly ledger. Fixed units (other phases, locked, done,
+  // dependency-free milestones) pre-book.
   RM.autoTimeline = function (inputState, opts) {
     opts = opts || {};
     var state = RM.clone(inputState);
@@ -3094,8 +3097,10 @@
     var targets = {};
     var phaseIdx = {};
     state.phases.forEach(function (p, i) { phaseIdx[p.id] = i; });
-    (opts.phaseIds || state.phases.filter(function (p) { return p.auto && !p.bucket; }).map(function (p) { return p.id; }))
-      .forEach(function (id) { targets[id] = true; });
+    var bucketIds = {};
+    state.phases.forEach(function (p) { if (p.bucket) bucketIds[p.id] = true; });
+    (opts.phaseIds || state.phases.map(function (p) { return p.id; }))
+      .forEach(function (id) { if (!bucketIds[id]) targets[id] = true; });
     if (!Object.keys(targets).length) return out;
     var today = opts.today != null ? opts.today : RM.todayDay(meta);
     var HORIZON = meta.numWeeks + 104;
@@ -3236,6 +3241,32 @@
       RM.syncEndDate(meta);
       notes.push('Timeline extended to ' + neededWeeks + ' weeks to fit the schedule.');
     }
+    return out;
+  };
+
+  // The Auto timeline action for one phase, in one go: lay it out (above),
+  // then at the Stories level size its features from the span their stories
+  // now cover. Sizes are taken AFTER the layout — at the Stories level a
+  // feature's size never steers where its stories go, and sizing from the
+  // placed span makes a second pass a no-op. The app runs this as a dry run
+  // too: changed === 0 means the phase is already in place.
+  RM.autoPhase = function (inputState, phaseId, opts) {
+    opts = opts || {};
+    var ph = null;
+    (inputState.phases || []).forEach(function (p) { if (p.id === phaseId) ph = p; });
+    var out = { state: RM.clone(inputState), moved: 0, sized: [], changed: 0, notes: [] };
+    if (!ph || ph.bucket || !inputState.meta.capacityEnabled) return out;
+    var o = {};
+    Object.keys(opts).forEach(function (k) { o[k] = opts[k]; });
+    o.phaseIds = [phaseId];
+    var r = RM.autoTimeline(inputState, o);
+    out.state = r.state; out.moved = r.changed; out.notes = r.notes;
+    out.sized = RM.autoSizeChanges(r.state, phaseId, opts);
+    out.sized.forEach(function (c) {
+      var it = RM.itemById(r.state, c.itemId);
+      if (it) it.size = c.size;
+    });
+    out.changed = out.moved + out.sized.length;
     return out;
   };
 

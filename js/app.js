@@ -491,44 +491,59 @@
     h.push(en);
     if (h.length > RM.HISTORY_MAX) h.splice(0, h.length - RM.HISTORY_MAX);
   }
-  function anyAutoPhase() {
-    return !!state.meta.capacityEnabled && state.phases.some(function (p) { return p.auto && !p.bucket; });
+  // bumped whenever `state` changes (commit, replaceState, undo/redo, open):
+  // the cheap key the Auto timeline dry runs are memoized on
+  var stateRev = 0;
+  // Auto timeline (one-shot, per phase): what a click would do right now.
+  // Memoized per phase on the state revision + snap + today, so re-renders
+  // never re-run the scheduler.
+  var AUTO_TL_TIP = 'Auto timeline: move this phase\u2019s items to follow dependencies and capacity';
+  var autoDry = { rev: -1, key: '', byPhase: {} };
+  function autoPhaseDryRun(phaseId) {
+    var key = snapFeat + '|' + snapStory + '|' + RM.todayDay(state.meta);
+    if (autoDry.rev !== stateRev || autoDry.key !== key) autoDry = { rev: stateRev, key: key, byPhase: {} };
+    if (!autoDry.byPhase[phaseId]) autoDry.byPhase[phaseId] = RM.autoPhase(state, phaseId, snapOpts());
+    return autoDry.byPhase[phaseId];
   }
-  // the auto features: rows follow the timeline (auto-order) and Auto phases
-  // follow dependencies + capacity (auto timeline). Runs inside a commit so
-  // the moves share its history entry. Returns the number of moved units.
-  var applyingAuto = false;
-  function applyAutoRules() {
-    if (applyingAuto) return 0;
-    applyingAuto = true;
-    var moved = 0;
-    try {
-      // the flag only lives on a real phase under capacity planning — the same
-      // rule normalize enforces, applied here for edits that skip it
-      state.phases.forEach(function (p) { if (p.auto && (!state.meta.capacityEnabled || p.bucket)) p.auto = false; });
-      if (anyAutoPhase()) {
-        RM.applySizeRollup(state, snapOpts()); // derived sizes size the bars the layout places
-        var r = RM.autoTimeline(state, snapOpts());
-        if (r.changed) { state = r.state; moved = r.changed; }
-      }
-      if (autoOrder && moved) RM.sortItemsByStart(state);
-    } finally { applyingAuto = false; }
-    return moved;
+  // { disabled, tip } for the band button, the band menu entry and the dialog
+  function autoPhaseStatus(phaseId) {
+    if (!state.meta.capacityEnabled) return { disabled: true, tip: 'Turn on capacity planning in Setup \u2192 Capacity' };
+    var ph = state.phases.filter(function (p) { return p.id === phaseId; })[0];
+    if (!ph || ph.bucket) return { disabled: true, tip: 'A backlog bucket is never auto-scheduled' };
+    if (!autoPhaseDryRun(phaseId).changed) return { disabled: true, tip: 'Everything in this phase is already in place' };
+    return { disabled: false, tip: AUTO_TL_TIP };
   }
-  // run the auto rules on their own (nothing else changed): one pass, and an
-  // undo/history entry only when something actually moved
-  function runAutoRulesNow() {
+  // the Auto timeline action: lay the phase out (locked / done work stays put)
+  // and, at the Stories level, size its features from their stories — one
+  // commit, so one undo takes it all back
+  function autoTimelinePhase(phaseId) {
     if (readOnly) { viewOnlyToast(); return 0; }
-    var prev = JSON.stringify(state);
-    var moved = applyAutoRules();
-    if (!moved) return 0;
-    undoStack.push(prev);
-    if (undoStack.length > 120) undoStack.shift();
-    redoStack.length = 0;
-    recordHistory('auto', prev);
-    afterChange();
-    maybeAskName();
-    return moved;
+    var st = autoPhaseStatus(phaseId);
+    if (!state.meta.capacityEnabled) { toast(st.tip, 'err'); return 0; }
+    // the memoized dry run IS the result (the commit bumps the revision, so
+    // the cache never outlives the state it was computed from)
+    var r = autoPhaseDryRun(phaseId);
+    if (!r.changed) { toast('Nothing to move'); return 0; }
+    commit('auto timeline', function (s) {
+      s.items = r.state.items;
+      s.meta = r.state.meta;
+      if (autoOrder && r.moved) RM.sortItemsByStart(s);
+    });
+    var sz = r.sized.length;
+    var szTxt = sz ? 'resized ' + sz + ' ' + lvl('feature').toLowerCase() + (sz === 1 ? '' : 's') : '';
+    toast(r.moved
+      ? 'Auto timeline moved ' + r.moved + ' item' + (r.moved === 1 ? '' : 's') + (sz ? ' and ' + szTxt : '')
+      : 'Auto timeline ' + szTxt);
+    return r.changed;
+  }
+  // every real phase, one after another (the assistant's hook); returns the
+  // number of changes
+  function autoTimelineAll() {
+    var n = 0;
+    state.phases.filter(function (p) { return !p.bucket; }).forEach(function (p) {
+      if (autoPhaseDryRun(p.id).changed) n += autoTimelinePhase(p.id);
+    });
+    return n;
   }
   function commit(label, mutate) {
     if (readOnly) { viewOnlyToast(); return; }
@@ -537,7 +552,6 @@
     if (undoStack.length > 120) undoStack.shift();
     redoStack.length = 0;
     if (mutate) mutate(state);
-    applyAutoRules();
     recordHistory(label, prev);
     afterChange();
     maybeAskName();
@@ -550,7 +564,6 @@
     redoStack.length = 0;
     state = next;
     multiSel = null; // ids from the previous document mean nothing here
-    applyAutoRules();
     recordHistory(label, prev);
     afterChange();
     maybeAskName();
@@ -565,18 +578,17 @@
     redoStack.length = 0;
     docSaved = true;
     sessionEdited = false;
-    // auto features apply on open: order the rows, lay out the Auto phases
+    stateRev += 1;
+    // auto-order applies on open: the rows follow the timeline
     var prevJson = JSON.stringify(state);
     if (autoOrder) RM.sortItemsByStart(state);
-    var moved = applyAutoRules();
     if (JSON.stringify(state) !== prevJson) {
       undoStack.length = 0; redoStack.length = 0;
       recordHistory('auto', prevJson);
       docSaved = false;
       sessionEdited = true;
       // the open left the document unsaved — never silently
-      if (moved) toast('Auto timeline moved ' + moved + ' item' + (moved === 1 ? '' : 's'));
-      else toast('Rows auto-ordered');
+      toast('Rows auto-ordered');
     }
     validation = RM.validate(state);
     saveLocal();
@@ -629,7 +641,8 @@
   function afterChange() {
     docSaved = false;
     sessionEdited = true;
-    RM.applySizeRollup(state, snapOpts()); // derived feature sizes follow their stories
+    stateRev += 1;
+    RM.applySizeRollup(state); // the rollup scheme's feature sizes follow their stories
     validation = RM.validate(state);
     saveLocal();
     render();
@@ -1148,6 +1161,7 @@
     // by flipping it to the one being parked
     if (compareOptId === id) compareOptId = prevId;
     state = next;
+    stateRev += 1;
     docSaved = false;
     sessionEdited = true;
     validation = RM.validate(state);
@@ -4214,9 +4228,13 @@
         '<span class="band-name">' + esc(p.name) + '</span>' +
         '<span class="band-count">' + items.length + '</span>' +
         (p.bucket ? '<span class="band-bucket-tag">backlog</span>' : '') +
-        (p.auto ? '<span class="band-bucket-tag band-auto" title="Auto timeline: items follow dependencies and capacity">auto</span>' : '') +
         '<button class="band-add" data-act="phase-additem" title="' + esc('Add a ' + lvl('feature').toLowerCase() + ' to this phase') + '">+ ' + esc(lvl('feature').toLowerCase()) + '</button>' +
         '<button class="band-edit" data-act="phase-edit" title="Edit phase">edit</button>' +
+        (p.bucket ? '' : (function () {
+          var as = autoPhaseStatus(p.id);
+          return '<button class="band-zap" data-act="phase-auto" title="' + esc(as.tip) + '"' + (as.disabled ? ' disabled' : '') +
+            '><i data-lucide="zap"></i></button>';
+        })()) +
         '</div>' +
         '<div class="row-lane">' + bandLane + '</div>' +
         '</div>');
@@ -4313,7 +4331,7 @@
   function sizeMatches(it) {
     if (!it.size || !isScheduled(it)) return true;
     // a derived size is whatever the bar says it is — never a mismatch
-    if (RM.sizeRollup(state) || RM.autoSized(state, it)) return true;
+    if (RM.sizeRollup(state)) return true;
     var work = RM.workInSpan(state.meta, it.startDay, it.durDays);
     return work === RM.itemSizeDays(state, it, snapOpts());
   }
@@ -4556,14 +4574,9 @@
       (it.epic ? esc(it.epic) : '<i>— none —</i>'), null, 'Epic');
     var typeDd = ddButton('teamType', it.teamType ? esc(it.teamType) : 'Any role', null, 'Which role works this item');
 
-    var sizeAutoP = sizeAuto(it);
     var sizeBtns = RM.sizeRollup(state)
       ? '<span class="p-rollup" title="Sum of the story points">' +
         (it.size ? esc(it.size) + ' pt <small>' + esc(fmtDays(RM.rollupDays(state, it) || 0)) + '</small>' : '<i>no sized ' + esc(lvl('story', true).toLowerCase()) + '</i>') +
-        '</span>'
-      : sizeAutoP
-      ? '<span class="p-rollup" title="' + esc(SIZE_AUTO_TIP) + '">' +
-        (it.size ? esc(it.size) + ' <small>' + esc(fmtDays(RM.itemSizeDays(state, it, snapOpts()) || 0)) + '</small>' : '<i>not sized yet</i>') +
         '</span>'
       : RM.sizeOrderOf(state).map(function (s) {
         return '<button data-f="size" data-v="' + esc(s) + '"' + (it.size === s ? ' class="on"' : '') +
@@ -4732,7 +4745,7 @@
       sec('schedule', it.milestone || !RM.sizingEnabled(state) ? 'Schedule' : 'Size &amp; schedule', '',
         (it.milestone || !RM.sizingEnabled(state) ? '' :
           '<label class="p-lab">Size</label>' +
-          (RM.sizeRollup(state) || sizeAutoP
+          (RM.sizeRollup(state)
             ? '<div style="margin-bottom:8px">' + sizeBtns + '</div>'
             : '<div class="seg" style="margin-bottom:8px">' + sizeBtns +
               '<button data-f="size" data-v=""' + (!it.size ? ' class="on"' : '') + ' title="No size">—</button></div>')) +
@@ -5013,7 +5026,7 @@
     return '<div class="menu-list' + (search ? ' has-search' : '') + '"' + (minW ? ' style="min-width:' + minW + 'px"' : '') + '>' +
       search + items.map(function (m, i) {
         if (m.sep) return '<div class="menu-sep"></div>';
-        return '<button data-mi="' + i + '"' + (m.disabled ? ' disabled' : '') + (m.checked ? ' class="on"' : '') + '>' +
+        return '<button data-mi="' + i + '"' + (m.disabled ? ' disabled' : '') + (m.title ? ' title="' + esc(m.title) + '"' : '') + (m.checked ? ' class="on"' : '') + '>' +
           (m.dot ? '<span class="dd-dot" style="background:' + m.dot + '"></span>' : '') +
           (m.pre || '') +
           (m.icon ? '<i data-lucide="' + esc(m.icon) + '"></i>' : '') +
@@ -6075,6 +6088,8 @@
         });
       } else if (act && act.dataset.act === 'phase-edit') {
         phaseModal(phase.id);
+      } else if (act && act.dataset.act === 'phase-auto') {
+        if (!act.disabled) autoTimelinePhase(phase.id);
       } else if (act && act.dataset.act === 'phase-additem') {
         addFeature(phase.id);
       }
@@ -6394,19 +6409,14 @@
   // set size / risk from the chip dropdowns
   // under the rollup scheme feature sizes derive from the stories: every
   // size editor says so instead of opening
-  // …and at the Stories level an Auto phase's feature takes its size from the
-  // span of its stories: that editor is read-only too
-  var SIZE_AUTO_TIP = 'Sized from its stories (Auto timeline, Stories level)';
-  function sizeAuto(it) { return !!it && !RM.sizeRollup(state) && RM.autoSized(state, it); }
   function sizeLocked(it) {
-    if (sizeAuto(it)) { toast(SIZE_AUTO_TIP); return true; }
     if (!RM.sizeRollup(state)) return false;
     toast(lvl('feature') + ' sizes roll up from ' + lvl('story', true).toLowerCase() + ' \u2014 size the ' + lvl('story', true).toLowerCase() + ' instead');
     return true;
   }
-  function sizeRoCls(it) { return RM.sizeRollup(state) || sizeAuto(it) ? ' ro' : ''; }
-  function sizeChipTitle(it) {
-    return RM.sizeRollup(state) ? 'Size (sum of story points)' : sizeAuto(it) ? SIZE_AUTO_TIP : 'Size';
+  function sizeRoCls() { return RM.sizeRollup(state) ? ' ro' : ''; }
+  function sizeChipTitle() {
+    return RM.sizeRollup(state) ? 'Size (sum of story points)' : 'Size';
   }
   function setItemSize(itemId, sz) {
     if (sizeLocked(RM.itemById(state, itemId))) return;
@@ -6494,12 +6504,9 @@
         (function () {
           var ph = state.phases.filter(function (p) { return p.id === phaseId; })[0];
           if (!ph || ph.bucket) return null;
-          return { icon: 'zap', label: 'Auto timeline', checked: !!ph.auto, disabled: !state.meta.capacityEnabled,
-            fn: function () {
-              var on = !ph.auto;
-              commit('auto timeline', function (s) { s.phases.forEach(function (p) { if (p.id === phaseId) p.auto = on; }); });
-              toast('Auto timeline ' + (on ? 'on — ' + ph.name + ' follows dependencies and capacity' : 'off for ' + ph.name));
-            } };
+          var as = autoPhaseStatus(phaseId);
+          return { icon: 'zap', label: 'Auto timeline', disabled: as.disabled, title: as.tip,
+            fn: function () { autoTimelinePhase(phaseId); } };
         })(),
         { icon: 'trash-2', label: 'Delete phase…', fn: function () { deletePhaseConfirm(phaseId); } }
       ];
@@ -7016,7 +7023,7 @@
       var r = RM.placeUnit(state, itemId, storyId || null, snapOpts());
       // a partial placement still lands what it could — keep it, and say why
       if (r.changed) {
-        if (autoOrder) RM.sortItemsByStart(r.state); // applyAutoRules only sorts an auto pass
+        if (autoOrder) RM.sortItemsByStart(r.state); // commit never re-sorts on its own
         replaceState('place', r.state);
         toast('Placed at the earliest slot' + (r.note ? ' — ' + r.note : ''));
         return;
@@ -8854,7 +8861,7 @@
         else renderTopbar();
         toast('Auto-order ' + (autoOrder ? 'on — rows follow the timeline' : 'off'));
       } },
-      state.meta.capacityEnabled ? { icon: 'zap', label: 'Auto timeline is set per phase (right-click a phase band)', disabled: true, fn: function () {} } : null,
+      state.meta.capacityEnabled ? { icon: 'zap', label: 'Auto timeline: the \u26a1 button on a phase band', disabled: true, fn: function () {} } : null,
       { sep: true },
       { icon: 'zoom-in', label: 'Zoom in', kbd: '⌘scroll', fn: function () { zoomBy(1.2); } },
       { icon: 'zoom-out', label: 'Zoom out', fn: function () { zoomBy(1 / 1.2); } },
@@ -9023,10 +9030,6 @@
       '<div class="m-sec"><label>Description</label><div id="phDescEd">' +
       wysHtml('phdesc', phase ? phase.description : '', 'What this phase delivers\u2026') + '</div></div>' +
       '<div class="m-sec"><label class="p-check"><input type="checkbox" id="phBucket"' + (phase && phase.bucket ? ' checked' : '') + '> Backlog bucket (items parked here aren’t auto-scheduled)</label></div>' +
-      (phase && phase.bucket ? '' :
-        '<div class="m-sec"><label class="p-check' + (state.meta.capacityEnabled ? '' : ' disabled') + '"><input type="checkbox" id="phAuto"' +
-        (phase && phase.auto ? ' checked' : '') + (state.meta.capacityEnabled ? '' : ' disabled') + '> Auto timeline — items follow dependencies and capacity</label>' +
-        (state.meta.capacityEnabled ? '' : '<div class="m-hint">Enable capacity planning in Setup → Capacity first.</div>') + '</div>') +
       '<div class="m-sec"><label>Dates</label><div class="p-grid2">' +
       '<div><label class="p-lab">Start</label><input type="text" readonly class="cal-in" data-cal-clear="Auto" id="phStart" style="width:100%" value="' +
         (phase && phase.startDay != null ? esc(RM.fmtISO(RM.dayToDate(state.meta, phase.startDay))) : '') + '"></div>' +
@@ -9041,6 +9044,10 @@
       (isNew || itemCount > 0 || state.phases.length <= 1 ? '' : '<button id="phDelete" class="danger" style="margin-right:auto">Delete phase</button>') +
       (!isNew && itemCount > 0 ? '<span style="margin-right:auto;font-size:11.5px;color:var(--ink-3);align-self:center">' + itemCount + ' item(s) — move them out to delete</span>' : '') +
       (!isNew && itemCount === 0 && state.phases.length <= 1 ? '<span style="margin-right:auto;font-size:11.5px;color:var(--ink-3);align-self:center">the last phase can’t be deleted</span>' : '') +
+      (isNew || phase.bucket ? '' : (function () {
+        var as = autoPhaseStatus(phase.id);
+        return '<button id="phAutoRun" title="' + esc(as.tip) + '"' + (as.disabled ? ' disabled' : '') + '><i data-lucide="zap"></i> Auto timeline</button>';
+      })()) +
       '<button data-m="x2">Cancel</button><button id="phSave" class="primary">' + (isNew ? 'Add phase' : 'Save') + '</button>' +
       '</div></div>',
       function (host) {
@@ -9050,8 +9057,6 @@
           var name = $('#phName', host).value.trim() || 'Phase';
           var desc = sanitizeHtml($('#phDescEd .wz-ed', host).innerHTML);
           var bucket = $('#phBucket', host).checked;
-          var auto = !bucket && !!state.meta.capacityEnabled && !!($('#phAuto', host) && $('#phAuto', host).checked);
-          var wasAuto = !!(phase && phase.auto);
           function pinDay(val, isEnd) {
             if (!val) return null;
             var d = RM.dateToDay(state.meta, RM.parseISO(val));
@@ -9063,20 +9068,21 @@
           closeModal();
           if (isNew) {
             commit('add phase', function (s) {
-              s.phases.push({ id: RM.uid('p'), name: name, description: desc, bucket: bucket, auto: auto, collapsed: false, startDay: pStart, endDay: pEnd });
+              s.phases.push({ id: RM.uid('p'), name: name, description: desc, bucket: bucket, collapsed: false, startDay: pStart, endDay: pEnd });
             });
           } else {
             commit('edit phase', function (s) {
               s.phases.forEach(function (p) {
                 if (p.id === phaseId) {
-                  p.name = name; p.description = desc; p.bucket = bucket; p.auto = auto;
+                  p.name = name; p.description = desc; p.bucket = bucket;
                   p.startDay = pStart; p.endDay = pEnd;
                 }
               });
             });
           }
-          if (auto && !wasAuto) toast('Auto timeline on for ' + name);
         };
+        var autoRun = $('#phAutoRun', host);
+        if (autoRun) autoRun.onclick = function () { closeModal(); autoTimelinePhase(phaseId); };
         var del = $('#phDelete', host);
         if (del) del.onclick = function () {
           closeModal();
@@ -10185,7 +10191,6 @@
       return '<div class="su-row" data-key="' + ph.id + '">' + grip() +
         '<span class="su-name">' + esc(ph.name) + '</span>' +
         (ph.bucket ? '<span class="band-bucket-tag">backlog</span>' : '') +
-        (ph.auto ? '<span class="band-bucket-tag band-auto" title="Auto timeline: items follow dependencies and capacity">auto</span>' : '') +
         '<span class="band-count">' + count + '</span>' +
         '<button data-suphedit="' + ph.id + '" title="Edit"><i data-lucide="pencil"></i></button>' +
         '<button data-suphdel="' + ph.id + '" class="danger" title="Delete"><i data-lucide="trash-2"></i></button>' +
@@ -10530,12 +10535,8 @@
     var t = e.target;
     if (t.id === 'suCapEnable') {
       var on = t.checked;
-      var hadAuto = state.phases.some(function (p) { return p.auto; }); // normalize clears it below
-      commit('capacity feature', function (s2) {
-        s2.meta.capacityEnabled = on;
-        if (!on) s2.phases.forEach(function (p) { p.auto = false; });
-      });
-      toast('Capacity planning ' + (on ? 'enabled' : 'disabled' + (hadAuto ? ' — Auto timeline switched off' : '')));
+      commit('capacity feature', function (s2) { s2.meta.capacityEnabled = on; });
+      toast('Capacity planning ' + (on ? 'enabled' : 'disabled'));
       return;
     }
     if (t.id === 'suWsEnable') {
@@ -12114,7 +12115,13 @@
         aiActor = true;
         try { commit(label, mutate); } finally { aiActor = false; }
       },
-      autoTimelineNow: function () { return runAutoRulesNow(); },
+      // Auto timeline for one phase (id or name), or every real phase when
+      // none is given; returns the number of changes
+      autoTimelineNow: function (phase) {
+        if (phase == null || phase === '') return autoTimelineAll();
+        var ph = state.phases.filter(function (p) { return p.id === phase || p.name === phase; })[0];
+        return ph && !ph.bucket ? autoTimelinePhase(ph.id) : 0;
+      },
       validation: function () { return validation || RM.validate(state); },
       userName: userName,
       ui: function () {

@@ -265,10 +265,8 @@ eq(sF.items[0].stories[0].capMult, 1, 'story capMult below or at 0 falls back to
 eq(sF.team[0].points, 12, 'member points kept');
 eq(sF.team[1].points, null, 'member points default null');
 eq(RM.memberPoints(sF, sF.team[1]), 8, 'memberPoints falls back to the document default');
-ok(sF.phases[0].auto === true, 'phase auto kept when capacity is on');
-ok(sF.phases[1].auto === false, 'bucket phase can never be auto');
-var sF2 = RM.normalizeState({ meta: { capacityEnabled: false }, phases: [{ id: 'p1', auto: true }], items: [] });
-ok(sF2.phases[0].auto === false, 'phase auto cleared when capacity planning is off');
+// Auto timeline is a one-shot action now: an old document's per-phase flag is dropped
+ok(!('auto' in sF.phases[0]) && !('auto' in sF.phases[1]), 'an old phase.auto flag is dropped on normalize');
 eq(RM.normalizeState({ meta: { defaultPoints: '' }, phases: [{ id: 'p' }], items: [] }).meta.defaultPoints, 10, 'a blank defaultPoints falls back to 10');
 // a capacity type used by a feature follows a rename / removal
 var sCT = RM.normalizeState({ meta: {}, phases: [{ id: 'p' }], items: [{ num: 1, feature: 'f', capType: 'Design' }] });
@@ -320,7 +318,7 @@ function autoMeta(extra) {
 }
 function autoState(items, team, extraMeta, phases) {
   return mkState(items, { meta: autoMeta(extraMeta), team: team || [],
-    phases: phases || [{ id: 'p1', name: 'Alpha', bucket: false, auto: true }, { id: 'p2', name: 'Later', bucket: false, auto: false }, { id: 'p3', name: 'Next', bucket: true }] });
+    phases: phases || [{ id: 'p1', name: 'Alpha', bucket: false }, { id: 'p2', name: 'Later', bucket: false }, { id: 'p3', name: 'Next', bucket: true }] });
 }
 function byNum(st) { var o = {}; st.items.forEach(function (it) { o[it.num] = it; }); return o; }
 // feature level, person mode, one Development head: three features serialize, deps hold
@@ -331,7 +329,7 @@ var sT = autoState([
   { num: 8, feature: 'other phase', phaseId: 'p2', startDay: 40, durDays: 5, capType: 'Development' },
   { num: 9, feature: 'parked', phaseId: 'p3', durDays: 5 }
 ], [{ name: 'Solo', capType: 'Development' }]);
-var rT = RM.autoTimeline(sT, { today: 0 });
+var rT = RM.autoTimeline(sT, { phaseIds: ['p1'], today: 0 });
 var T = byNum(rT.state);
 eq(T[1].startDay, 0, 'first unit starts today');
 eq(T[3].startDay, 5, 'third slides to week 1 (cap 1)');
@@ -340,8 +338,17 @@ eq(T[8].startDay, 40, 'non-auto phase untouched');
 ok(T[9].startDay == null, 'bucket untouched');
 ok(!RM.capacity(rT.state).weeks.some(function (c) { return c.over; }), 'never overallocates');
 eq(RM.autoTimeline(sT, { today: 0, phaseIds: [] }).changed, 0, 'no target phases → nothing changes');
+// no phaseIds: every non-bucket phase is laid out (there is no per-phase flag any more)
+var sTAll = autoState([
+  { num: 1, feature: 'a', phaseId: 'p1', durDays: 5, capType: 'Development' },
+  { num: 2, feature: 'b', phaseId: 'p2', durDays: 5, capType: 'Development' },
+  { num: 3, feature: 'parked', phaseId: 'p3', durDays: 5 }
+], [{ name: 'Solo', capType: 'Development' }]);
+var TAll = byNum(RM.autoTimeline(sTAll, { today: 0 }).state);
+ok(TAll[1].startDay === 0 && TAll[2].startDay === 5, 'without phaseIds every real phase is laid out');
+ok(TAll[3].startDay == null, 'but a bucket never is');
 var sOff = autoState([{ num: 1, feature: 'a', phaseId: 'p1', durDays: 5 }], [], { capacityEnabled: false });
-eq(RM.autoTimeline(sOff, { today: 0 }).changed, 0, 'capacity off → nothing changes');
+eq(RM.autoTimeline(sOff, { phaseIds: ['p1'], today: 0 }).changed, 0, 'capacity off → nothing changes');
 // only TRACKED types are constrained; other work is dependency-only
 function trackState(rowTypes) {
   return autoState([
@@ -349,9 +356,9 @@ function trackState(rowTypes) {
     { num: 2, feature: 'dsn b', phaseId: 'p1', durDays: 5, capType: 'Design' }
   ], [{ name: 'D', capType: 'Development' }, { name: 'S', capType: 'Design' }], { capRowTypes: rowTypes });
 }
-eq(byNum(RM.autoTimeline(trackState(['Development']), { today: 0 }).state)[2].startDay, 0,
+eq(byNum(RM.autoTimeline(trackState(['Development']), { phaseIds: ['p1'], today: 0 }).state)[2].startDay, 0,
   'an untracked type is dependency-only: both Design units start in the same week');
-eq(byNum(RM.autoTimeline(trackState(['Development', 'Design']), { today: 0 }).state)[2].startDay, 5,
+eq(byNum(RM.autoTimeline(trackState(['Development', 'Design']), { phaseIds: ['p1'], today: 0 }).state)[2].startDay, 5,
   'tracking Design makes the second Design unit wait for the week to free up');
 // cap 2: two run together, third waits
 var s2 = autoState([
@@ -359,7 +366,7 @@ var s2 = autoState([
   { num: 2, feature: 'b', phaseId: 'p1', durDays: 5, capType: 'Development' },
   { num: 3, feature: 'c', phaseId: 'p1', durDays: 5, capType: 'Development' }
 ], [{ name: 'X', capType: 'Development' }, { name: 'Y', capType: 'Development' }]);
-var R2 = byNum(RM.autoTimeline(s2, { today: 0 }).state);
+var R2 = byNum(RM.autoTimeline(s2, { phaseIds: ['p1'], today: 0 }).state);
 ok(R2[1].startDay === 0 && R2[2].startDay === 0 && R2[3].startDay === 5, 'cap 2 lets two run at once');
 // locked pre-books; unlocked flows around; the phase floor holds the rest
 var sLk = autoState([
@@ -367,10 +374,18 @@ var sLk = autoState([
   { num: 2, feature: 'water', phaseId: 'p1', durDays: 10, capType: 'Development' },
   { num: 3, feature: 'free', phaseId: 'p1', durDays: 5, capType: '' }
 ], [{ name: 'Solo', capType: 'Development' }]);
-var Lk = byNum(RM.autoTimeline(sLk, { today: 0 }).state);
+var Lk = byNum(RM.autoTimeline(sLk, { phaseIds: ['p1'], today: 0 }).state);
 eq(Lk[1].startDay, 5, 'locked stays');
 eq(Lk[2].startDay, 10, 'a 2-week unit cannot straddle the locked week, so it waits');
 eq(Lk[3].startDay, 20, 'the third unit waits for a free week (the phase floor only rules out weeks before day 5)');
+// a locked item is a fixed point: its dependent is placed after it, the locked dates never move
+var sLkD = autoState([
+  { num: 1, feature: 'anchor', phaseId: 'p1', startDay: 20, durDays: 5, locked: true, capType: 'Development' },
+  { num: 2, feature: 'follows', phaseId: 'p1', startDay: 0, durDays: 5, capType: 'Development', deps: [1] }
+], [{ name: 'X', capType: 'Development' }, { name: 'Y', capType: 'Development' }]);
+var LkD = byNum(RM.autoTimeline(sLkD, { phaseIds: ['p1'], today: 0 }).state);
+eq([LkD[1].startDay, LkD[1].durDays], [20, 5], 'the locked item keeps its start and length');
+eq(LkD[2].startDay, 25, 'and its dependent lands right after it');
 // milestones: dependency-free stays; with deps lands at the dep end
 var sMs = autoState([
   { num: 1, feature: 'work', phaseId: 'p1', durDays: 5, capType: 'Development' },
@@ -378,7 +393,7 @@ var sMs = autoState([
   { num: 3, feature: 'fixed date', phaseId: 'p1', milestone: true, startDay: 30, durDays: 0 },
   { num: 4, feature: 'after gate', phaseId: 'p1', durDays: 5, capType: 'Development', deps: [2] }
 ], [{ name: 'Solo', capType: 'Development' }]);
-var Ms = byNum(RM.autoTimeline(sMs, { today: 0 }).state);
+var Ms = byNum(RM.autoTimeline(sMs, { phaseIds: ['p1'], today: 0 }).state);
 eq(Ms[2].startDay, 5, 'milestone with deps moves to the dep end');
 eq(Ms[3].startDay, 30, 'dependency-free milestone stays');
 eq(Ms[4].startDay, 5, 'dependents may start on the milestone day');
@@ -387,7 +402,7 @@ var sFl = autoState([
   { num: 1, feature: 'in progress', phaseId: 'p1', startDay: 2, durDays: 5, capType: 'Development' },
   { num: 2, feature: 'far future', phaseId: 'p1', startDay: 60, durDays: 5, capType: 'Development' }
 ], [{ name: 'X', capType: 'Development' }, { name: 'Y', capType: 'Development' }]);
-var Fl = byNum(RM.autoTimeline(sFl, { today: 4 }).state);
+var Fl = byNum(RM.autoTimeline(sFl, { phaseIds: ['p1'], today: 4 }).state);
 eq(Fl[1].startDay, 2, 'started work keeps its start');
 eq(Fl[2].startDay, 4, 'future work pulls in to today');
 // holidays stretch, working days preserved
@@ -395,7 +410,7 @@ var sHo = autoState([
   // unscheduled, 10 working days of effort; the floor (today) is day 75
   { num: 1, feature: 'spanner', phaseId: 'p1', durDays: 10, capType: 'Development' }
 ], [{ name: 'Solo', capType: 'Development' }], { holidays: META.holidays });
-var rHo = RM.autoTimeline(sHo, { today: 75 });
+var rHo = RM.autoTimeline(sHo, { phaseIds: ['p1'], today: 75 });
 var Ho = byNum(rHo.state);
 eq(Ho[1].startDay, 75, 'starts at the floor');
 eq(Ho[1].durDays, 20, '10 working days stretch over two blackout weeks');
@@ -404,7 +419,7 @@ eq(RM.workInSpan(rHo.state.meta, Ho[1].startDay, Ho[1].durDays), 10, 'net work p
 var sInf = autoState([
   { num: 1, feature: 'crowd', phaseId: 'p1', startDay: 10, durDays: 5, capType: 'Development', capMult: 3 }
 ], [{ name: 'X', capType: 'Development' }]);
-var rInf = RM.autoTimeline(sInf, { today: 0 });
+var rInf = RM.autoTimeline(sInf, { phaseIds: ['p1'], today: 0 });
 eq(byNum(rInf.state)[1].startDay, 10, 'infeasible unit keeps its start');
 ok(rInf.notes.length === 1 && /never/.test(rInf.notes[0]), 'and explains itself');
 // left where it is means still booked there: later work goes around it
@@ -412,7 +427,7 @@ var sInfB = autoState([
   { num: 1, feature: 'crowd', phaseId: 'p1', startDay: 10, durDays: 5, capType: 'Development', capMult: 3 },
   { num: 2, feature: 'normal', phaseId: 'p1', durDays: 5, capType: 'Development' }
 ], [{ name: 'X', capType: 'Development' }]);
-var InfB = byNum(RM.autoTimeline(sInfB, { today: 10 }).state);
+var InfB = byNum(RM.autoTimeline(sInfB, { phaseIds: ['p1'], today: 10 }).state);
 eq(InfB[1].startDay, 10, 'the infeasible unit keeps week 2');
 eq(InfB[2].startDay, 15, 'and feasible work is not piled onto the week it still occupies');
 // a capacity type named like an Object.prototype key behaves like any other
@@ -420,7 +435,7 @@ var sProto = autoState([
   { num: 1, feature: 'crowd', phaseId: 'p1', startDay: 10, durDays: 5, capType: 'constructor', capMult: 3 },
   { num: 2, feature: 'normal', phaseId: 'p1', durDays: 5, capType: 'constructor' }
 ], [{ name: 'X', capType: 'constructor' }]);
-var rProto = RM.autoTimeline(sProto, { today: 10 });
+var rProto = RM.autoTimeline(sProto, { phaseIds: ['p1'], today: 10 });
 var Proto = byNum(rProto.state);
 eq(Proto[1].startDay, 10, 'an infeasible unit of a type named "constructor" is left where it is');
 ok(rProto.notes.length === 1 && /never/.test(rProto.notes[0]), 'and the never note still fires for it');
@@ -442,7 +457,7 @@ var sSt = autoState([
   ] },
   { num: 2, feature: 'g', phaseId: 'p1', capType: 'Development', deps: [1], stories: [{ num: 201, title: 'd', durDays: 5, capType: 'Development' }] }
 ], [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
-var rSt = RM.autoTimeline(sSt, { today: 0 });
+var rSt = RM.autoTimeline(sSt, { phaseIds: ['p1'], today: 0 });
 var St = byNum(rSt.state);
 var sts = {}; St[1].stories.forEach(function (s) { sts[s.num] = s; });
 eq(sts[101].startDay, 0, 'story a first');
@@ -460,7 +475,7 @@ var sUn = autoState([
     { num: 102, title: 'untyped', durDays: 5, capType: '' }
   ] }
 ], [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
-var Un = RM.itemByNum(RM.autoTimeline(sUn, { today: 0 }).state, 1);
+var Un = RM.itemByNum(RM.autoTimeline(sUn, { phaseIds: ['p1'], today: 0 }).state, 1);
 eq(Un.stories[0].startDay, 0, 'the typed story fills the only Development week there is');
 eq(Un.stories[1].startDay, 0, 'and an untyped story sits right beside it — placed by dependencies only');
 // points mode
@@ -468,40 +483,40 @@ var sPm = autoState([
   { num: 1, feature: 'ten', phaseId: 'p1', durDays: 5, size: 10, capType: 'Development' },
   { num: 2, feature: 'six', phaseId: 'p1', durDays: 5, size: 6, capType: 'Development' }
 ], [{ name: 'X', capType: 'Development', points: 20 }], { capMode: 'points', sizeScheme: 'points' });
-var Pm = byNum(RM.autoTimeline(sPm, { today: 0 }).state);
+var Pm = byNum(RM.autoTimeline(sPm, { phaseIds: ['p1'], today: 0 }).state);
 ok(Pm[1].startDay === 0 && Pm[2].startDay === 5, '10 + 6 points in one week exceed 10 per week (20 per 2-week sprint) → serialized');
 // cycles do not hang
 var sCy2 = autoState([
   { num: 1, feature: 'a', phaseId: 'p1', durDays: 5, deps: [2], capType: 'Development' },
   { num: 2, feature: 'b', phaseId: 'p1', durDays: 5, deps: [1], capType: 'Development' }
 ], [{ name: 'Solo', capType: 'Development' }]);
-var rCy2 = RM.autoTimeline(sCy2, { today: 0 });
+var rCy2 = RM.autoTimeline(sCy2, { phaseIds: ['p1'], today: 0 });
 ok(rCy2.state.items.every(function (it) { return it.startDay != null; }) && rCy2.notes.some(function (n) { return /cycle/.test(n); }), 'cycle members placed, note added');
 // horizon grows
 var sHz = autoState([{ num: 1, feature: 'late', phaseId: 'p1', startDay: 48 * 5 + 5, durDays: 5, capType: 'Development' }], [{ name: 'Solo', capType: 'Development' }]);
-ok(RM.autoTimeline(sHz, { today: 48 * 5 + 5 }).state.meta.numWeeks >= 50, 'timeline extends to fit');
+ok(RM.autoTimeline(sHz, { phaseIds: ['p1'], today: 48 * 5 + 5 }).state.meta.numWeeks >= 50, 'timeline extends to fit');
 // a phase's start is a floor: nothing in it is ever placed before it begins
-var phPin20 = [{ id: 'p1', name: 'Alpha', bucket: false, auto: true, startDay: 20 },
-  { id: 'p2', name: 'Later', bucket: false, auto: false }, { id: 'p3', name: 'Next', bucket: true }];
+var phPin20 = [{ id: 'p1', name: 'Alpha', bucket: false, startDay: 20 },
+  { id: 'p2', name: 'Later', bucket: false }, { id: 'p3', name: 'Next', bucket: true }];
 var sPh1 = autoState([{ num: 1, feature: 'a', phaseId: 'p1', durDays: 5, capType: 'Development' }],
   [{ name: 'Solo', capType: 'Development' }], null, phPin20);
-eq(byNum(RM.autoTimeline(sPh1, { today: 0 }).state)[1].startDay, 20, 'a pinned phase start floors the auto timeline');
+eq(byNum(RM.autoTimeline(sPh1, { phaseIds: ['p1'], today: 0 }).state)[1].startDay, 20, 'a pinned phase start floors the auto timeline');
 var sPh2 = autoState([
   { num: 1, feature: 'anchor', phaseId: 'p1', startDay: 15, durDays: 5, locked: true, capType: 'Development' },
   { num: 2, feature: 'later', phaseId: 'p1', startDay: 40, durDays: 5, capType: 'Development' }
 ], [{ name: 'X', capType: 'Development' }, { name: 'Y', capType: 'Development' }]);
-eq(byNum(RM.autoTimeline(sPh2, { today: 0 }).state)[2].startDay, 15,
+eq(byNum(RM.autoTimeline(sPh2, { phaseIds: ['p1'], today: 0 }).state)[2].startDay, 15,
   'an unpinned phase floors where its earliest item already sits, not at today');
-var phPin2 = [{ id: 'p1', name: 'Alpha', bucket: false, auto: true, startDay: 2 },
-  { id: 'p2', name: 'Later', bucket: false, auto: false }, { id: 'p3', name: 'Next', bucket: true }];
+var phPin2 = [{ id: 'p1', name: 'Alpha', bucket: false, startDay: 2 },
+  { id: 'p2', name: 'Later', bucket: false }, { id: 'p3', name: 'Next', bucket: true }];
 var sPh3 = autoState([{ num: 1, feature: 'a', phaseId: 'p1', durDays: 5, capType: 'Development' }],
   [{ name: 'Solo', capType: 'Development' }], null, phPin2);
-eq(byNum(RM.autoTimeline(sPh3, { today: 10 }).state)[1].startDay, 10, 'a phase pinned before today does not drag work into the past');
-var phPin30 = [{ id: 'p1', name: 'Alpha', bucket: false, auto: true, startDay: 30 },
-  { id: 'p2', name: 'Later', bucket: false, auto: false }, { id: 'p3', name: 'Next', bucket: true }];
+eq(byNum(RM.autoTimeline(sPh3, { phaseIds: ['p1'], today: 10 }).state)[1].startDay, 10, 'a phase pinned before today does not drag work into the past');
+var phPin30 = [{ id: 'p1', name: 'Alpha', bucket: false, startDay: 30 },
+  { id: 'p2', name: 'Later', bucket: false }, { id: 'p3', name: 'Next', bucket: true }];
 var sPh4 = autoState([{ num: 1, feature: 'under way', phaseId: 'p1', startDay: 5, durDays: 5, capType: 'Development' }],
   [{ name: 'Solo', capType: 'Development' }], null, phPin30);
-eq(byNum(RM.autoTimeline(sPh4, { today: 10 }).state)[1].startDay, 5,
+eq(byNum(RM.autoTimeline(sPh4, { phaseIds: ['p1'], today: 10 }).state)[1].startDay, 5,
   'work already under way keeps its start even when its phase is pinned later');
 
 // placeUnit
@@ -579,14 +594,14 @@ eq(rPlM.changed, 0, 'a dependency-free milestone stays put');
 eq(RM.itemByNum(rPlM.state, 1).startDay, 30, 'on its own date');
 ok(/dependencies/.test(rPlM.note || ''), 'and placeUnit says why');
 // placeUnit honours the same phase floor
-var phPin20b = [{ id: 'p1', name: 'Alpha', bucket: false, auto: true },
-  { id: 'p2', name: 'Later', bucket: false, auto: false, startDay: 20 }, { id: 'p3', name: 'Next', bucket: true }];
+var phPin20b = [{ id: 'p1', name: 'Alpha', bucket: false },
+  { id: 'p2', name: 'Later', bucket: false, startDay: 20 }, { id: 'p3', name: 'Next', bucket: true }];
 var sPhP = autoState([{ num: 1, feature: 'a', phaseId: 'p2', startDay: 60, durDays: 5, capType: 'Development' }],
   [{ name: 'Solo', capType: 'Development' }], null, phPin20b);
 eq(RM.itemByNum(RM.placeUnit(sPhP, sPhP.items[0].id, null, { today: 0 }).state, 1).startDay, 20,
   'placeUnit never moves a unit before its phase begins');
-var phPinM30 = [{ id: 'p1', name: 'Alpha', bucket: false, auto: true },
-  { id: 'p2', name: 'Later', bucket: false, auto: false, startDay: 30 }, { id: 'p3', name: 'Next', bucket: true }];
+var phPinM30 = [{ id: 'p1', name: 'Alpha', bucket: false },
+  { id: 'p2', name: 'Later', bucket: false, startDay: 30 }, { id: 'p3', name: 'Next', bucket: true }];
 var sPhM = autoState([
   { num: 1, feature: 'work', phaseId: 'p2', startDay: 0, durDays: 5, capType: 'Development' },
   { num: 2, feature: 'gate', phaseId: 'p2', milestone: true, startDay: 60, durDays: 0, deps: [1] }
@@ -2230,8 +2245,8 @@ section('zero points');
   eq(RM.sizeOrderOf(sZFO).join(','), '0.5,1,2,3,5,8,13', 'an older feature Fibonacci scale gains 0.5 only');
 }
 
-// -------------------------------------------- auto-sized features (Stories level)
-section('auto-sized features');
+// -------------------------------------------- Auto timeline sizes (Stories level)
+section('auto timeline sizes');
 {
   var TSHIRT = { XS: 2, S: 5, M: 10, L: 20, XL: 40 };
   function asMeta(over) {
@@ -2245,66 +2260,93 @@ section('auto-sized features');
       [{ name: 'Solo', capType: 'Development' }], asMeta(over), phases);
   }
   var f1 = function (s) { return RM.itemByNum(s, 1); };
+  function sizeOf(changes, s) {
+    var c = changes.filter(function (x) { return x.itemId === f1(s).id; })[0];
+    return c ? c.size : null;
+  }
 
   // parallel stories don't add up: the size follows the span their bars cover
   var sPar = asState([
     { num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' },
     { num: 102, title: 'b', size: '5', startDay: 0, durDays: 5, capType: 'Development' }
   ]);
-  ok(RM.autoSized(sPar, f1(sPar)), 'a feature in an Auto phase with a sized story is auto-sized');
-  eq(RM.itemSizeDays(sPar, f1(sPar)), 5, 'two parallel 5-day stories span 5 working days');
-  eq(f1(sPar).size, 'S', 'and the derived size is the nearest label (S)');
+  eq(RM.autoSizeDays(sPar, f1(sPar)), 5, 'two parallel 5-day stories span 5 working days');
+  eq(sizeOf(RM.autoSizeChanges(sPar, 'p1'), sPar), 'S', 'and the derived size is the nearest label (S)');
+  eq(f1(sPar).size, 'XL', 'nothing is written until the Auto action applies it — the size stays a hand size');
+  eq(RM.itemSizeDays(sPar, f1(sPar)), 40, 'and itemSizeDays reads the stored size, never a derived one');
 
   var sSeq = asState([
     { num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' },
     { num: 102, title: 'b', size: '5', startDay: 5, durDays: 5, capType: 'Development' }
   ]);
-  eq(RM.itemSizeDays(sSeq, f1(sSeq)), 10, 'two sequential 5-day stories span 10 working days');
-  eq(f1(sSeq).size, 'M', 'which reads as M');
+  eq(sizeOf(RM.autoSizeChanges(sSeq, 'p1'), sSeq), 'M', 'two sequential 5-day stories span 10 working days → M');
 
   // nothing scheduled: fall back to the sized stories added up
   var sUns = asState([
     { num: 101, title: 'a', size: '5', capType: 'Development' },
     { num: 102, title: 'b', size: '5', capType: 'Development' }
   ]);
-  eq(RM.itemSizeDays(sUns, f1(sUns)), 10, 'unscheduled sized stories fall back to their days summed');
-  eq(f1(sUns).size, 'M', 'and size from that sum');
+  eq(sizeOf(RM.autoSizeChanges(sUns, 'p1'), sUns), 'M', 'unscheduled sized stories size from their days summed');
 
-  // (ii) no sized story at all: the hand size stands
+  // no sized story, Features level, another phase, the none / rollup schemes: nothing to write
   var sNo = asState([{ num: 101, title: 'a', startDay: 0, durDays: 5, capType: 'Development' }]);
-  ok(!RM.autoSized(sNo, f1(sNo)), 'no sized story means no auto-sizing');
-  eq(f1(sNo).size, 'XL', 'and the hand size survives');
-
-  // (iii) feature level, or a phase that is not Auto
+  eq(RM.autoSizeChanges(sNo, 'p1'), [], 'no sized story means no size change');
   var sFeat = asState([{ num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' }], { planLevel: 'feature' });
-  ok(!RM.autoSized(sFeat, f1(sFeat)) && f1(sFeat).size === 'XL', 'the Features level keeps the hand size');
-  var sManual = asState([{ num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' }], null,
-    [{ id: 'p1', name: 'Alpha', bucket: false, auto: false }, { id: 'p3', name: 'Next', bucket: true }]);
-  ok(!RM.autoSized(sManual, f1(sManual)) && f1(sManual).size === 'XL', 'a phase without Auto keeps the hand size');
-
-  // (iv) the "none" scheme writes nothing
+  eq(RM.autoSizeChanges(sFeat, 'p1'), [], 'the Features level never sizes from stories');
+  eq(RM.autoSizeChanges(sPar, 'p2'), [], 'only the asked phase is sized');
   var sNone = asState([{ num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' }],
     { sizeScheme: 'none', sizeOrder: [], sizeDays: {} });
-  ok(!RM.autoSized(sNone, f1(sNone)), 'the none scheme is never auto-sized');
+  eq(RM.autoSizeChanges(sNone, 'p1'), [], 'the none scheme is never sized');
+  var sRl = asState([{ num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' }], { sizeScheme: 'rollup' });
+  eq(RM.autoSizeChanges(sRl, 'p1'), [], 'the rollup scheme derives sizes on its own');
+  var sSame = asState([{ num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' }]);
+  f1(sSame).size = 'S';
+  eq(RM.autoSizeChanges(sSame, 'p1'), [], 'a feature already at its derived size is not a change');
 
-  // (v) turning Auto off hands the size back
-  var sOff = asState([{ num: 101, title: 'a', size: '5', startDay: 0, durDays: 5, capType: 'Development' }]);
-  eq(f1(sOff).size, 'S', 'auto-sized while the phase is Auto');
-  sOff.phases[0].auto = false;
-  f1(sOff).size = 'XL';
-  RM.applySizeRollup(sOff);
-  eq(f1(sOff).size, 'XL', 'with Auto off a hand edit sticks');
-
-  // (A) the derived day count rounds UP to the feature snap
+  // the derived day count rounds UP to the feature snap
   var sSnap = asState([{ num: 101, title: 'a', size: '5', startDay: 0, durDays: 6, capType: 'Development' }]);
-  eq(RM.itemSizeDays(sSnap, f1(sSnap)), 6, 'day snap leaves the 6-day hull alone');
-  eq(f1(sSnap).size, 'S', 'and 6 days reads as S');
-  eq(RM.itemSizeDays(sSnap, f1(sSnap), { snap: { feature: 'week' } }), 10, 'week snap rounds the 6-day hull up to 10');
-  RM.applySizeRollup(sSnap, { snap: { feature: 'week' } });
-  eq(f1(sSnap).size, 'M', 'so the feature reads as the two-week label');
+  eq(RM.autoSizeDays(sSnap, f1(sSnap)), 6, 'day snap leaves the 6-day hull alone');
+  eq(sizeOf(RM.autoSizeChanges(sSnap, 'p1'), sSnap), 'S', 'and 6 days reads as S');
+  eq(RM.autoSizeDays(sSnap, f1(sSnap), { snap: { feature: 'week' } }), 10, 'week snap rounds the 6-day hull up to 10');
+  eq(sizeOf(RM.autoSizeChanges(sSnap, 'p1', { snap: { feature: 'week' } }), sSnap), 'M', 'so the feature reads as the two-week label');
   eq(RM.snapUnitDays(sSnap.meta, 'day'), 1, 'snapUnitDays: a day is one slot');
   eq(RM.snapUnitDays(sSnap.meta, 'week'), 5, 'snapUnitDays: a week is the work week');
   eq(RM.snapUnitDays(sSnap.meta, 'sprint'), 10, 'snapUnitDays: a sprint is its weeks');
+
+  // autoPhase: the one-shot action — lay the phase out, then size its features
+  var sAP = asState([
+    { num: 101, title: 'a', size: '5', durDays: 5, capType: 'Development' },
+    { num: 102, title: 'b', size: '5', durDays: 5, capType: 'Development', deps: [101] }
+  ]);
+  var rAP = RM.autoPhase(sAP, 'p1', { today: 0 });
+  var apF = f1(rAP.state);
+  eq([apF.stories[0].startDay, apF.stories[1].startDay], [0, 5], 'autoPhase lays the stories out');
+  eq(apF.size, 'M', 'and sizes the feature from the span they now cover');
+  ok(rAP.moved > 0 && rAP.sized.length === 1, 'it reports the moves and the sizes it wrote');
+  eq(rAP.changed, rAP.moved + rAP.sized.length, 'changed counts both');
+  eq(f1(sAP).size, 'XL', 'the input state is left untouched');
+  // dry-run equivalence: a second pass over its own result changes nothing
+  var rAP2 = RM.autoPhase(rAP.state, 'p1', { today: 0 });
+  eq(rAP2.changed, 0, 'a pass over an already arranged phase changes nothing (the button disables)');
+  // after the action the size is an ordinary hand size again
+  var sHand = RM.clone(rAP.state);
+  f1(sHand).size = 'L';
+  RM.applySizeRollup(sHand);
+  eq(f1(sHand).size, 'L', 'a hand edit after the action sticks');
+  eq(RM.autoPhase(sHand, 'p1', { today: 0 }).changed, 1, 'until the next Auto click, which re-derives it');
+  // capacity off / a bucket phase: nothing
+  var sAPoff = asState([{ num: 101, title: 'a', size: '5', durDays: 5, capType: 'Development' }], { capacityEnabled: false });
+  eq(RM.autoPhase(sAPoff, 'p1', { today: 0 }).changed, 0, 'capacity off → autoPhase changes nothing');
+  eq(RM.autoPhase(sAP, 'p3', { today: 0 }).changed, 0, 'a bucket phase → nothing');
+  // locked items are fixed points under autoPhase too
+  var sAPL = autoState([
+    { num: 1, feature: 'anchor', phaseId: 'p1', startDay: 20, durDays: 5, locked: true, capType: 'Development' },
+    { num: 2, feature: 'follows', phaseId: 'p1', startDay: 0, durDays: 5, capType: 'Development', deps: [1] }
+  ], [{ name: 'X', capType: 'Development' }, { name: 'Y', capType: 'Development' }]);
+  var rAPL = RM.autoPhase(sAPL, 'p1', { today: 0 });
+  eq(RM.itemByNum(rAPL.state, 1).startDay, 20, 'autoPhase leaves the locked item where it is');
+  eq(RM.itemByNum(rAPL.state, 2).startDay, 25, 'and puts its dependent after it');
+  eq(RM.autoPhase(rAPL.state, 'p1', { today: 0 }).changed, 0, 'then nothing is left to move');
 }
 
 // -------------------------------------------- snapped placement
@@ -2315,13 +2357,13 @@ section('snapped placement');
       stories: [{ num: 101, title: 'a', durDays: 3, capType: 'Development' }] }],
       [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
   }
-  var rPlain = RM.autoTimeline(snapSt(), { today: 2 });
+  var rPlain = RM.autoTimeline(snapSt(), { phaseIds: ['p1'], today: 2 });
   eq(RM.itemByNum(rPlain.state, 1).stories[0].startDay, 2, 'without a snap the story starts the day it is ready');
-  var rWeek = RM.autoTimeline(snapSt(), { today: 2, snap: { story: 'week', feature: 'week' } });
+  var rWeek = RM.autoTimeline(snapSt(), { phaseIds: ['p1'], today: 2, snap: { story: 'week', feature: 'week' } });
   var stW = RM.itemByNum(rWeek.state, 1).stories[0];
   eq(stW.startDay, 5, 'week snap pushes a story ready on day 2 to the next week');
   eq(stW.durDays, 5, 'and rounds its 3 days up to a whole week');
-  var rSpr = RM.autoTimeline(snapSt(), { today: 2, snap: { story: 'sprint', feature: 'sprint' } });
+  var rSpr = RM.autoTimeline(snapSt(), { phaseIds: ['p1'], today: 2, snap: { story: 'sprint', feature: 'sprint' } });
   var stS = RM.itemByNum(rSpr.state, 1).stories[0];
   eq(stS.startDay, 10, 'sprint snap lands on the next two-week boundary');
   eq(stS.durDays, 10, 'and fills the sprint');
@@ -2329,15 +2371,8 @@ section('snapped placement');
   var sIn = autoState([{ num: 1, feature: 'F', phaseId: 'p1', capType: 'Development',
     stories: [{ num: 101, title: 'a', startDay: 3, durDays: 5, capType: 'Development' }] }],
     [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
-  var stIn = RM.itemByNum(RM.autoTimeline(sIn, { today: 6, snap: { story: 'week', feature: 'week' } }).state, 1).stories[0];
+  var stIn = RM.itemByNum(RM.autoTimeline(sIn, { phaseIds: ['p1'], today: 6, snap: { story: 'week', feature: 'week' } }).state, 1).stories[0];
   eq([stIn.startDay, stIn.durDays], [3, 5], 'an in-flight story keeps its start and duration under a snap');
-  var sPl = snapSt();
-  var stId = sPl.items[0].stories[0].id;
-  var rPl = RM.placeUnit(sPl, sPl.items[0].id, stId, { today: 2, snap: { story: 'week', feature: 'week' } });
-  var stP = RM.itemByNum(rPl.state, 1).stories[0];
-  eq(stP.startDay, 5, 'Place at earliest slot snaps too');
-  eq(stP.durDays, 5, 'and rounds the duration up');
-}
   // started work that capacity pushes off its start takes the snap where it
   // lands, so a second pass finds nothing left to do
   var sPush = autoState([
@@ -2349,3 +2384,10 @@ section('snapped placement');
   var pushed = RM.itemByNum(rPush.state, 2);
   eq([pushed.startDay, pushed.durDays], [15, 5], 'begun work pushed by capacity lands on the week grid with whole weeks');
   eq(RM.autoTimeline(rPush.state, wk).changed, 0, 'and a second pass leaves it there');
+  var sPl = snapSt();
+  var stId = sPl.items[0].stories[0].id;
+  var rPl = RM.placeUnit(sPl, sPl.items[0].id, stId, { today: 2, snap: { story: 'week', feature: 'week' } });
+  var stP = RM.itemByNum(rPl.state, 1).stories[0];
+  eq(stP.startDay, 5, 'Place at earliest slot snaps too');
+  eq(stP.durDays, 5, 'and rounds the duration up');
+}
