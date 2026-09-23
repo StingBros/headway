@@ -235,7 +235,10 @@
         throw new Error('unknown op "' + op + '" (use set, delete or push)');
       }
     });
-    return { state: RM.normalizeState(next), changes: changes };
+    // a path op that reordered a list (set phases / items / team, delete +
+    // push) is expressed as array order: carry it into the order keys before
+    // normalizeState sorts the arrays back by the old ones
+    return { state: RM.normalizeState(RM.rekeyAllInSequence(next)), changes: changes };
   };
 
   // ------------------------------------------------------------ summaries
@@ -611,19 +614,7 @@
   // The document order is the order keys (normalizeState sorts by them, a
   // shared roadmap syncs them): after the tool reordered a list, re-key the
   // entries that break the key sequence, each between its new neighbours.
-  function rekeyInSequence(list) {
-    var prevKey = null;
-    list.forEach(function (x, i) {
-      if (!x.order || (prevKey != null && x.order <= prevKey)) {
-        var nextKey = null;
-        for (var j = i + 1; j < list.length && nextKey == null; j++) {
-          if (list[j].order && (prevKey == null || list[j].order > prevKey)) nextKey = list[j].order;
-        }
-        x.order = RM.orderBetween(prevKey, nextKey);
-      }
-      prevKey = x.order;
-    });
-  }
+  function rekeyInSequence(list) { RM.rekeyInSequence(list); }
   function applyChanges(s, base, next) {
     Object.keys(next).forEach(function (k) {
       if (k === 'history') return;
@@ -727,7 +718,7 @@
         made.push({ num: it.num, feature: it.feature });
       });
       numberNewStories(next);
-      var norm = RM.normalizeState(next);
+      var norm = RM.normalizeState(RM.rekeyAllInSequence(next));
       return commitState(A, args.label || ('add ' + (made.length === 1 ? '#' + made[0].num + ' ' + made[0].feature : made.length + ' features')), state, norm, { created: made });
     }
     if (name === 'update_items') {
@@ -764,7 +755,7 @@
       });
       numberNewStories(st2);
       var lbl = args.label || (report.length === 1 ? 'edit ' + report[0].target : 'edit ' + report.length + ' items');
-      return commitState(A, lbl, state, RM.normalizeState(st2), { updated: report });
+      return commitState(A, lbl, state, RM.normalizeState(RM.rekeyAllInSequence(st2)), { updated: report });
     }
     if (name === 'update_project') {
       var res = AI.applyOps(state, args.ops);

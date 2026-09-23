@@ -608,6 +608,31 @@ function finish() {
     eq(RM.normalizeState(RM.clone(sS)).items[0].stories.map(function (x) { return x.id; }), ['s3', 's2', 's1'], 'a story reorder by the tool survives a reload');
   }
 
+  console.log('— reorders through runTool stick (keys follow the new order)');
+  {
+    var mkO = function () {
+      return RM.normalizeState({ meta: { title: 'T', timelineStart: '2026-07-27', numWeeks: 20 },
+        phases: [{ id: 'p1', name: 'P1' }, { id: 'p2', name: 'P2' }, { id: 'p3', name: 'P3' }],
+        team: [{ id: 't1', name: 'A' }, { id: 't2', name: 'B' }],
+        items: [{ id: 'a', num: 1, phaseId: 'p1', feature: 'A', stories: [{ id: 's1', title: 'one' }, { id: 's2', title: 'two' }] },
+          { id: 'b', num: 2, phaseId: 'p1', feature: 'B' }, { id: 'c', num: 3, phaseId: 'p1', feature: 'C' }] });
+    };
+    var runO = function (ops) {
+      var st = mkO();
+      var A = { ai: { state: function () { return RM.clone(st); }, hasDoc: function () { return true; },
+        commit: function (l, m) { m(st); RM.ensureAllOrder(st); }, validation: function () { return RM.validate(st); } } };
+      AI.runTool('update_project', { ops: ops }, A);
+      return RM.normalizeState(RM.clone(st));
+    };
+    var ids = function (l) { return l.map(function (x) { return x.id; }).join(); };
+    var s0 = mkO();
+    eq(ids(runO([{ op: 'set', path: 'phases', value: [s0.phases[2], s0.phases[0], s0.phases[1]] }]).phases), 'p3,p1,p2', 'a phase reorder (keyed values) survives a reload');
+    eq(ids(runO([{ op: 'set', path: 'items', value: [s0.items[2], s0.items[0], s0.items[1]] }]).items), 'c,a,b', 'an item reorder survives a reload');
+    eq(ids(runO([{ op: 'set', path: 'items/#1/stories', value: [s0.items[0].stories[1], s0.items[0].stories[0]] }]).items[0].stories), 's2,s1', 'a story reorder survives a reload');
+    eq(ids(runO([{ op: 'set', path: 'team', value: [s0.team[1], s0.team[0]] }]).team), 't2,t1', 'a team reorder survives a reload');
+    eq(ids(runO([{ op: 'delete', path: 'phases/@p1' }, { op: 'push', path: 'phases', value: s0.phases[0] }]).phases), 'p2,p3,p1', 'delete + push moves a phase to the end');
+  }
+
   console.log('— desktop transport');
   {
     // The Tauri http plugin's reqwest trusts only bundled Mozilla roots unless
