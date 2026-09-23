@@ -987,11 +987,11 @@
     if (at === -1) list.push(ent); else list[at] = ent;
     doc[kind] = RM.sortByOrder(list);
   }
-  function dragTouches(id) {
-    if (!drag) return false;
-    if (drag.itemId === id || drag.mid === id || drag.phaseId === id || drag.pid === id) return true;
-    // a group move drags every selected bar along with the one under the pointer
-    return !!drag.group && drag.group.some(function (g) { return g.id === id; });
+  // Any drag holds every peer change until pointer-up: a peer's row landing
+  // mid-drag re-renders the rows under the pointer (row, grip, fill, marquee
+  // and pan drags index the rendered rows), not just the dragged entity's.
+  function dragTouches() {
+    return !!drag;
   }
   // opts.merged: env already IS the disk truth (from flushShards) — skip the
   // merge with our base
@@ -1028,6 +1028,11 @@
       patched.push({ kind: x.kind, id: x.id, entity: truth, delta: delta });
     });
     if (typeof RM.dedupeNums === 'function') RM.dedupeNums(next); // two people minted the same #num
+    // stories draw from the same pool: a peer's story may carry a number one
+    // of ours (or a feature) holds — settle it as a load would
+    if (typeof RM.dedupeStoryNums === 'function') RM.dedupeStoryNums(next);
+    RM.ensureAllOrder(next); // a keyless row from an older writer gets its slot's key
+    RM.applySizeRollup(next); // rolled-up feature sizes follow a peer's story sizes
     if (selectedId && !RM.itemById(next, selectedId)) selectedId = null;
     if (multiSel) { // a peer deleted a selected row: the selection shrinks
       multiSel = multiSel.filter(function (id) { return !!RM.itemById(next, id); });

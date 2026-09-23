@@ -898,6 +898,82 @@ async function fixes() {
     eq(shardWrites(S.tauri, mark).length, 0, 'Sync writes nothing into the deleted plan either');
     mo.disconnect();
   }
+
+  section('R1: a story spliced in keyless gets its key at commit — writer and peer read the same order');
+  {
+    const S = await openFresh('R1');
+    const host = S.b.state().items.find((i) => !i.milestone);
+    S.b.HA.ai.commit('add stories', (s) => {
+      const t = s.items.find((i) => i.id === host.id);
+      t.stories = [{ id: 'sR1a', title: 'a', done: false, num: S.b.RM.nextNum(s) }];
+      t.stories.push({ id: 'sR1b', title: 'b', done: false, num: S.b.RM.nextNum(s) });
+    });
+    const beforeIds = ['sR1a', 'sR1b'];
+    await settle();
+    const baseEnv = S.disk(host.id); // what a peer already holds
+    S.b.HA.ai.commit('add story', (s) => {
+      s.items.find((i) => i.id === host.id).stories.splice(1, 0, { id: 'sR1new', title: 'inserted', done: false, num: S.b.RM.nextNum(s) });
+    });
+    const writer = S.b.state().items.find((i) => i.id === host.id).stories.map((x) => x.id);
+    eq(writer, [beforeIds[0], 'sR1new'].concat(beforeIds.slice(1)), 'the writer shows it second');
+    ok(S.b.state().items.find((i) => i.id === host.id).stories.every((x) => !!x.order), 'every story has a key right after the commit');
+    await settle();
+    const env = S.disk(host.id);
+    ok(env.fields.stories.every((x) => !!x.order), 'the shard carries a key for every story');
+    const peerDoc = S.b.RB.assembleState({ meta: S.b.state().meta }, { items: [S.b.RB.mergeEntity(baseEnv, env)], phases: S.b.state().phases.map((p) => S.b.RB.wrap(p, null, 'u', T0)) });
+    eq(peerDoc.items[0].stories.map((x) => x.id), writer, 'a peer merging the shard into its copy reads the same story order');
+  }
+
+  section('R2: any drag holds peer changes, not just a drag of that row');
+  {
+    const S = await openFresh('R2');
+    const other = [...S.b.doc.querySelectorAll('#rows .bar:not(.ms)[data-bar]')].map((x) => x.getAttribute('data-bar')).find((id) => id !== S.vId);
+    S.b.doc.querySelector('#rows .bar[data-bar="' + other + '"]').dispatchEvent(
+      new S.b.window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, clientX: 50, clientY: 50 }));
+    await S.emitPeer(S.vId, 'notes', 'held while another row drags', isoIn(60000));
+    ok(S.item().notes !== 'held while another row drags', 'not applied while a different row is dragged');
+    eq(S.b.info().deferred, 1, 'held in deferredExternal');
+    S.b.window.dispatchEvent(new S.b.window.MouseEvent('pointerup', { bubbles: true, clientX: 50, clientY: 50 }));
+    ok(await until(() => S.item().notes === 'held while another row drags'), 'applied after pointerup');
+  }
+
+  section('R3: a peer story numbered like one of our features is renumbered on arrival');
+  {
+    const S = await openFresh('R3');
+    const target = S.b.state().items.find((i) => !i.milestone && i.id !== S.vId);
+    const clash = S.item().num;
+    const env = S.disk(target.id);
+    const at = isoIn(60000);
+    env.fields.stories = (env.fields.stories || []).concat([{ id: 'sR3peer', title: 'peer story', done: false, num: clash, order: 'zz' }]);
+    env.fieldsAt['stories.sR3peer'] = at; env.updatedAt = at; env.updatedBy = 'peer-zz999'; env.rev += 1;
+    S.tauri.files.set(S.path(target.id), JSON.stringify(env));
+    await S.tauri.emitPaths(S.path(target.id));
+    const all = [];
+    S.b.state().items.forEach((it) => { all.push(it.num); it.stories.forEach((x) => all.push(x.num)); });
+    ok(S.b.state().items.find((i) => i.id === target.id).stories.some((x) => x.id === 'sR3peer'), 'the peer story arrived');
+    eq(all.filter((n, i) => all.indexOf(n) !== i), [], 'no number is held twice live');
+    eq(S.item().num, clash, 'our feature keeps its number');
+  }
+
+  section('R4: rolled-up feature sizes follow a peer\'s story sizes');
+  {
+    const S = await openFresh('R4');
+    const host = S.b.state().items.find((i) => !i.milestone);
+    S.b.HA.ai.commit('sizing', (s) => {
+      s.meta.sizeScheme = 'rollup';
+      s.items.find((i) => i.id === host.id).stories = [{ id: 'sR4a', title: 'a', size: '1', num: S.b.RM.nextNum(s) }, { id: 'sR4b', title: 'b', size: '1', num: S.b.RM.nextNum(s) + 1 }];
+    });
+    host.stories = [1, 2];
+    await settle();
+    eq(S.b.state().items.find((i) => i.id === host.id).size, String(host.stories.length), 'setup: the size is the story total');
+    const env = S.disk(host.id);
+    const at = isoIn(60000);
+    env.fields.stories = env.fields.stories.map((x, k) => (k === 0 ? Object.assign({}, x, { size: '8' }) : x));
+    env.fieldsAt['stories.' + env.fields.stories[0].id] = at; env.updatedAt = at; env.updatedBy = 'peer-zz999'; env.rev += 1;
+    S.tauri.files.set(S.path(host.id), JSON.stringify(env));
+    await S.tauri.emitPaths(S.path(host.id));
+    eq(S.b.state().items.find((i) => i.id === host.id).size, String(host.stories.length - 1 + 8), 'the feature size follows the peer\'s story size');
+  }
 }
 
 // ---- presence P1–P7: heartbeat file, peers → chips (patched, not rendered),
