@@ -4378,7 +4378,29 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok(state().team[0].capacity === 2 && state().team[0].points === 50, 'their seat and points are kept');
     window.HeadwayApp.ai.commit('points for untyped', (s) => { s.meta.capMode = 'points'; });
     ok(!!utRow().querySelector('.res-untyped') && !utRow().querySelector('[data-rpts]'), 'points mode: still the placeholder, no points chip');
+    const esc = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    const rowMenu = (row, re) => {
+      row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 300 }));
+      return menuBtns().find((b) => re.test(b.textContent));
+    };
+    // right-click → Capacity… reaches the points chip in points mode
+    const t1Row = doc.querySelector('#resGrid .rrow[data-mid="' + state().team[1].id + '"]');
+    click(rowMenu(t1Row, /Capacity/));
+    const ptsInp = doc.querySelector('#resGrid .rrow[data-mid="' + state().team[1].id + '"] [data-rpts] input');
+    ok(!!ptsInp, 'points mode: the row menu\'s Capacity… opens the points editor');
+    if (ptsInp) ptsInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    // … and the type picker for an untyped person
+    click(rowMenu(utRow(), /Capacity/));
+    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'for an untyped person Capacity… opens the type picker');
+    esc();
     undo();
+    // the placeholder answers the keyboard too
+    utRow().querySelector('.res-untyped').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'Enter on the placeholder opens the type picker');
+    esc();
+    utRow().querySelector('.res-untyped').dispatchEvent(new window.KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'and so does Space');
+    esc();
     click(utRow().querySelector('.res-untyped'));
     ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'the placeholder opens the capacity-type picker');
     click(menuBtns().find((b) => /Development/.test(b.textContent)));

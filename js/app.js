@@ -11440,7 +11440,9 @@
         if (chipW) chipW.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       } },
       state.meta.capacityEnabled ? { icon: 'gauge', label: 'Capacity…', fn: function () {
-        var el = resGrid.querySelector('.rrow[data-mid="' + mid + '"] [data-rcap]');
+        // whichever capacity control the row shows: the × seat, the points
+        // per sprint, or an untyped person's "set type" prompt
+        var el = resGrid.querySelector('.rrow[data-mid="' + mid + '"] [data-rcap], .rrow[data-mid="' + mid + '"] [data-rpts], .rrow[data-mid="' + mid + '"] [data-runtyped]');
         if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       } } : null,
       { icon: 'calendar-range', label: 'Start / end dates…', fn: function () { roleDatesPopover(cx, cy, mid); } },
