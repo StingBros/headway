@@ -1588,7 +1588,22 @@ if (!ExcelJS) {
 
   var uiPrefs = { weekPx: 41, view: 'scoping', capType: 'Data Science 🧪', groupEpic: true, expanded: { i1: true } };
   RMExcel.exportWorkbook(st, uiPrefs).then(function (buf) {
-    return RMExcel.importWorkbook(buf).then(function (r1) {
+    return RMExcel.readStateJson(buf).then(function (json) {
+      // an older Headway (v1.0.13 and before) reads the embedded document and
+      // keeps only numeric deps (deps.map(Number).filter(!isNaN)): the xlsx
+      // carries dependency NUMBERS, ids live only in the shared-bundle format
+      var old = JSON.parse(json);
+      var withDeps = st.items.filter(function (it) { return it.deps.length; });
+      ok(withDeps.length > 0, 'setup: the workbook has dependencies');
+      var lost = 0;
+      withDeps.forEach(function (it) {
+        var o = old.items.filter(function (x) { return x.id === it.id; })[0];
+        var v113 = (o.deps || []).map(Number).filter(function (n) { return !isNaN(n); });
+        var want = it.deps.map(function (id) { return RM.itemById(st, id).num; });
+        if (JSON.stringify(v113) !== JSON.stringify(want)) lost++;
+      });
+      eq(lost, 0, 'a workbook written now keeps every dependency under the v1.0.13 read rule');
+    }).then(function () { return RMExcel.importWorkbook(buf); }).then(function (r1) {
       ok(r1.source === 'tool', 'reimport hits the lossless path');
       ok(r1.ui && r1.ui.weekPx === 41 && r1.ui.view === 'scoping' &&
         r1.ui.capType === uiPrefs.capType && r1.ui.groupEpic === true && r1.ui.expanded.i1 === true,

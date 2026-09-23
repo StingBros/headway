@@ -35,7 +35,36 @@
   // The canonical serialized document: the EXACT string exportWorkbook embeds
   // in the hidden sheet (RM.asciiJson: ASCII-only, so ExcelJS chunking can't
   // corrupt it). Two files carry the same document iff these match.
-  RMExcel.stateJsonOf = function (state) { return RM.asciiJson(state); };
+  // Dependencies travel as item NUMBERS in a workbook, as they did through
+  // v1.0.13 (an older Headway keeps only numeric deps and would drop ids);
+  // normalizeState turns them back into ids on load (RM.migrateDepsToIds).
+  // Ids stay the shared-bundle format's business. Parked options too.
+  function depsAsNums(doc) {
+    if (!doc || !Array.isArray(doc.items)) return doc;
+    var out = {};
+    Object.keys(doc).forEach(function (k) { out[k] = doc[k]; });
+    out.items = doc.items.map(function (it) {
+      if (!it || !Array.isArray(it.deps) || !it.deps.length) return it;
+      var c = {};
+      Object.keys(it).forEach(function (k) { c[k] = it[k]; });
+      c.deps = it.deps.map(function (d) {
+        var dep = RM.itemById(doc, d);
+        return dep && dep.num != null ? dep.num : d; // a dangling id stays (validate flags it)
+      });
+      return c;
+    });
+    if (Array.isArray(doc.options)) {
+      out.options = doc.options.map(function (o) {
+        if (!o || !o.doc) return o;
+        var oc = {};
+        Object.keys(o).forEach(function (k) { oc[k] = o[k]; });
+        oc.doc = depsAsNums(o.doc);
+        return oc;
+      });
+    }
+    return out;
+  }
+  RMExcel.stateJsonOf = function (state) { return RM.asciiJson(depsAsNums(state)); };
 
   // The embedded document JSON of a workbook (the string stateJsonOf wrote),
   // or null for foreign/template files with no valid _RoadmapTool sheet.
