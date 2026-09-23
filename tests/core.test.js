@@ -183,7 +183,7 @@ var cap = RM.capacity(sCap);
 eq(cap.weeks[0].demand, 1, 'week 0: one Development unit');
 eq(cap.weeks[1].demand, 4, 'week 1: 1 + 2 (multiplier) Development + 1 Design — every type counts');
 eq(cap.weeks[0].supply, 1.5, 'row supply aggregates all supplied types');
-ok(cap.weeks[1].over, 'week 1 over: 3 asked, 1.5 available');
+ok(cap.weeks[1].over, 'week 1 over: Development asks 3 of its 1.5 (4 asked in all)');
 ok(!cap.weeks[0].over, 'week 0 fits');
 ok(cap.weeks[1].byType.Design.demand === 1 && cap.weeks[1].byType.Design.supply === 0, 'a type nobody supplies is listed with zero supply but never marks over');
 ok(cap.weeks[1].items.indexOf(sCap.items[2].id) !== -1, 'items in flight listed');
