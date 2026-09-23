@@ -583,8 +583,8 @@
     var key = snapFeat + '|' + snapStory + '|' + autoOrder + '|' + RM.todayDay(state.meta);
     if (autoDry.rev !== stateRev || autoDry.key !== key) autoDry = { rev: stateRev, key: key, byPhase: {} };
     if (!autoDry.byPhase[phaseId]) {
-      // auto-order rides along inside the action (it re-sorts between passes),
-      // so the dry run and the click agree
+      // the scheduler ranks rows in the on-screen order (auto-order is a
+      // render-time sort), so the dry run and the click agree with the screen
       var o = snapOpts();
       o.autoOrder = autoOrder;
       autoDry.byPhase[phaseId] = RM.autoPhase(state, phaseId, o);
@@ -696,17 +696,8 @@
     docSaved = true;
     sessionEdited = false;
     stateRev += 1;
-    // auto-order applies on open: the rows follow the timeline
-    var prevJson = JSON.stringify(state);
-    if (autoOrder) RM.sortItemsByStart(state);
-    if (JSON.stringify(state) !== prevJson) {
-      undoStack.length = 0; redoStack.length = 0;
-      recordHistory('auto', prevJson);
-      docSaved = false;
-      sessionEdited = true;
-      // the open left the document unsaved — never silently
-      toast('Rows auto-ordered');
-    }
+    // auto-order is a render-time sort (RM.viewItems): opening never rewrites
+    // the rows, so the document arrives exactly as saved
     validation = RM.validate(state);
     saveLocal();
     render();
@@ -8251,10 +8242,11 @@
     if (storyId && !st) return null;
     return { icon: 'zap', label: 'Place at earliest slot',
       disabled: !!it.locked || !!it.done || !!(st && st.done), fn: function () {
-      var r = RM.placeUnit(state, itemId, storyId || null, snapOpts());
+      var po = snapOpts();
+      po.autoOrder = autoOrder; // fan-out ranks stories' features in on-screen order
+      var r = RM.placeUnit(state, itemId, storyId || null, po);
       // a partial placement still lands what it could — keep it, and say why
       if (r.changed) {
-        if (autoOrder) RM.sortItemsByStart(r.state); // commit never re-sorts on its own
         replaceState('place', r.state);
         toast('Placed at the earliest slot' + (r.note ? ' — ' + r.note : ''));
         return;

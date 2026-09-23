@@ -16,8 +16,9 @@ state = {
             sizeDays: { XS:2, S:5, M:10, L:20, XL:40 } }        // working days per t-shirt size (week scale)
   phases: [ { id, name, description, bucket, collapsed,          // bucket = backlog shelf (Next/Future)
               startDay, endDay } ]                               // optional pinned window (null = auto from items)
-  items:  [ { id, num, phaseId, feature, description, workstream, epic, enables, outOfScope, notes,
-              deps: [num…], depsText: [str…], extDeps,          // explicit deps only ("All above" removed)
+  items:  [ { id, num, order, phaseId, feature, description, workstream, epic, enables, outOfScope, notes,
+              deps: [itemId…], depsText: [str…], extDeps,       // explicit deps only, by item id (legacy nums migrate on load)
+                                                                 // order = base-62 fractional key; normalize sorts by it
               custom: { colKey: text },                          // custom scoping-column values
               size,                                              // t-shirt size
               risk,                                              // severity None/L/M/H (metadata; legacy sizes migrate)
@@ -50,8 +51,10 @@ capacity checks. Legacy whole-week blackouts migrate to five dates on load.
 metadata (shown on chips and in the panel) and adds no padding; `itemEnd = start + durDays`.
 ⌘-dragging a bar cascades the end-change through dependents iteratively — forward pushes move
 each item only as far as its deps' ends require, backward pulls follow clamped by other
-dependencies; locked/done items stop the chain. An auto-order option (default on) stable-sorts
-rows by start day after moves/resizes.
+dependencies; locked/done items stop the chain. An auto-order option (default on) shows rows
+stable-sorted by start day — a render-time sort (`RM.viewItems`); `state.items` keeps its order
+keys, and the scheduler (`RM.autoPhase` / `RM.placeUnit` with `autoOrder`) ranks rows in that
+same on-screen order.
 
 ## Views
 
@@ -75,9 +78,9 @@ rows by start day after moves/resizes.
   with their own timeline sit where it falls, the rest ride "with feature". Rows drag (kind `sprow`)
   onto a sidebar entry or a section (start = that sprint's first day, span kept, stories shifted —
   `RM.moveItemToSprint` / `RM.moveStoryToSprint`) or before another row (`RM.reorderItem`, adopting
-  its phase like a Planning row drop); the order IS `state.items`, so it shows everywhere. A same-
-  section reorder never touches the start; a cross-sprint drop re-sorts by start when auto-order is
-  on, like a bar drag. Rows carry an inline title, epic and size chips, dates and phase; the context
+  its phase like a Planning row drop); the order is the items' order keys, so it shows everywhere. A
+  same-section reorder never touches the start; with auto-order on the rows show by start, like a
+  bar drag. Rows carry an inline title, epic and size chips, dates and phase; the context
   menu offers move / epic / workstream / unschedule / delete; every section ends with Add feature.
   The toolbar filters rows like the Prioritizing board (`sprMatches`): the shared ⌘F text plus
   Phase / Epic / Workstream dropdowns (`sprFPhase` / `sprFEpic` / `sprFWs`, transient, independent
@@ -266,7 +269,7 @@ rows by start day after moves/resizes.
 
 ## Validation (badges on rows + preflight report)
 
-unknown dep number · circular deps · item starts before a dependency's buffered end · scheduled
+unknown dep (an id whose item is gone, or not yet synced) · circular deps · item starts before a dependency's buffered end · scheduled
 item whose dependency is unscheduled · missing size on a scheduled item · headcount exceeding
 roster (total or type) · weekly over-capacity (respects time off) · bar outside the timeline.
 A computed **dependency risk** estimate (none/low/med/high with reasons) shows on each row's

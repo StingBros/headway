@@ -5985,9 +5985,7 @@ tagFilterChecks().then(manualOrderRoundTrip).catch((e) => {
   const edited = state();
   edited.items[0].feature = 'Renamed on disk';
   // the file carries another machine's prefs (Planning view) — ignored on reload
-  // auto-order runs when a document opens and would legitimately dirty a file
-  // whose rows are not in start order — switch it off to judge the reload alone
-  window.HeadwayApp.ai.setPref('autoOrder', false);
+  // (auto-order is a render-time sort: it never dirties a reloaded file)
   return window.RMExcel.exportWorkbook(edited, { view: 'planning' }).then((b1) => b1.arrayBuffer ? b1.arrayBuffer() : b1).then((ab1) =>
     window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab1)), 'Roadmap.xlsx', true)
   ).then(() => {
@@ -6001,7 +5999,6 @@ tagFilterChecks().then(manualOrderRoundTrip).catch((e) => {
     ok(window.HeadwayApp.ai.ui().view === 'scoping', 'disk reload: the view did not change');
     ok(window.HeadwayApp.ai.ui().selectedNum === firstNum, 'disk reload: the selection survived');
     ok(window.HeadwayApp.unsavedNow() === false, 'disk reload: nothing to save');
-    window.HeadwayApp.ai.setPref('autoOrder', true);
     // priority chips and the panel picker carry a color tier class
     const rowIds = [].slice.call(doc.querySelectorAll('#rows .row.item[data-id]')).map((r) => r.dataset.id);
     ok(rowIds.length > 1, 'setup: rows on screen to color');
@@ -6091,8 +6088,9 @@ tagFilterChecks().then(manualOrderRoundTrip).catch((e) => {
         'story numbers survive an xlsx round trip');
     });
 }).then(() => {
-  // opening a document runs auto-order only: the rows come back in start
-  // order, but nothing is laid out until someone clicks Auto timeline
+  // opening a document lays nothing out until someone clicks Auto timeline,
+  // and auto-order is a render-time sort: the rows read in start order on
+  // screen while the document's own order (and saved state) is untouched
   const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   window.HeadwayApp.ai.setPref('autoOrder', true);
   const doc0 = window.RM.clone(state());
@@ -6111,7 +6109,10 @@ tagFilterChecks().then(manualOrderRoundTrip).catch((e) => {
   });
   const piled = doc0.items.filter((i) => !i.milestone).slice(0, 3);
   piled.forEach((it) => { it.phaseId = autoPh.id; it.locked = false; it.done = false; it.capType = 'Development'; it.capMult = 1; it.startDay = 10; it.durDays = 5; it.deps = []; });
-  doc0.items.reverse(); // and the rows arrive out of start order
+  doc0.items.reverse(); // and the rows arrive out of start order —
+  doc0.items.forEach((it) => { delete it.order; }); // keys re-minted in this (reversed) order on open
+  doc0.items.find((i) => i.phaseId === autoPh.id && !i.milestone).startDay = 12; // (still piled, but now first row, latest start)
+  const fileOrder = doc0.items.map((i) => i.id).join();
   return window.RMExcel.exportWorkbook(doc0)
     .then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
     .then((ab) => window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), 'Auto.xlsx'))
@@ -6122,7 +6123,12 @@ tagFilterChecks().then(manualOrderRoundTrip).catch((e) => {
       ok(opened.meta.capRowTypes === undefined, 'on open: an old capRowTypes selection is dropped');
       const sorted = window.RM.clone(opened);
       window.RM.sortItemsByStart(sorted);
-      ok(sorted.items.map((i) => i.id).join() === opened.items.map((i) => i.id).join(), 'on open: the rows are in start order');
+      ok(opened.items.map((i) => i.id).join() === fileOrder && sorted.items.map((i) => i.id).join() !== fileOrder,
+        'on open: the document keeps its own row order (not re-sorted by start)');
+      ok(window.HeadwayApp.unsavedNow() === false, 'on open: auto-order leaves nothing unsaved');
+      const onScreen = [].slice.call(doc.querySelectorAll('#rows .row.item[data-id]')).map((r) => r.dataset.id);
+      const viewOrder = window.RM.viewItems(opened, { autoOrder: true }).map((i) => i.id).filter((id) => onScreen.indexOf(id) !== -1);
+      ok(onScreen.length > 1 && onScreen.join() === viewOrder.join(), 'on open: the rows read in start order on screen');
       const before = JSON.stringify(state().items);
       undo(); // the open cleared the stack — nothing to step back to
       ok(JSON.stringify(state().items) === before, 'on open: undo cannot step back past the open');

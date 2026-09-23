@@ -44,6 +44,20 @@ still before today it moves minimally on the day grid, pushed to today or
 later it is placed as new work (snap grid, phase floor). Sections 1 (phase `auto`), 4 (Triggers, Phase
 flag UI) and 7 below describe the superseded flag.
 
+## Amendment 2026-09-23 — merged with shared bundles (PR #1)
+
+Auto-order is a render-time sort (`RM.viewItems`); `state.items` keeps its
+order keys and is never re-sorted. So the on-open auto-order pass and its
+"Rows auto-ordered" toast are gone (opening never dirties a document), and
+`RM.autoPhase(…, {autoOrder})` no longer start-sorts the rows between passes:
+`RM.capUnits(state, {autoOrder})` ranks units by their row's on-screen
+position (`RM.viewItems`), and the layout repeats until a pass moves nothing
+and leaves that on-screen order unchanged — the same one-click settle, with
+the document's row order untouched. `RM.placeUnit` takes `autoOrder` the same
+way. Dependencies are item ids (`RM.resolveDeps`); story deps stay story
+numbers. In a shared roadmap the dry-run memo's revision also bumps when a
+peer's change or a plan arrives.
+
 ## Non-goals
 
 - No change to the Sprinting, Prioritizing, Budgeting, Reports or Jira views

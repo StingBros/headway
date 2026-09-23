@@ -3041,7 +3041,8 @@ section('auto timeline sizes');
     [{ name: 'Solo', capType: 'Development' }], { planLevel: 'story' });
   eq(RM.phaseFloorDay(sFlS, sFlS.phases[0]), 12, 'the derived phase floor is the earliest of story and feature bars');
 
-  // (b) auto-order: the action sorts the rows by start itself and lays out
+  // (b) auto-order: the scheduler ranks rows in their on-screen start order
+  // (RM.viewItems — the document's row order is never rewritten) and lays out
   // again until nothing moves, so one click settles
   var sAO = autoState([
     { num: 1, feature: 'late', phaseId: 'p1', durDays: 5, capType: 'Development', deps: [3] },
@@ -3049,8 +3050,9 @@ section('auto timeline sizes');
     { num: 3, feature: 'first', phaseId: 'p1', durDays: 5, capType: 'Development' }
   ], [{ name: 'Solo', capType: 'Development' }]);
   var rAO = RM.autoPhase(sAO, 'p1', { today: 0, autoOrder: true });
-  var aoStarts = rAO.state.items.filter(function (i) { return i.phaseId === 'p1'; }).map(function (i) { return i.startDay; });
-  eq(aoStarts, aoStarts.slice().sort(function (a, b) { return a - b; }), 'with autoOrder the rows come back in start order');
+  eq(rAO.state.items.map(function (i) { return i.id; }), sAO.items.map(function (i) { return i.id; }), 'with autoOrder the document row order is left alone');
+  var aoStarts = RM.viewItems(rAO.state, { autoOrder: true }).filter(function (i) { return i.phaseId === 'p1'; }).map(function (i) { return i.startDay; });
+  eq(aoStarts, aoStarts.slice().sort(function (a, b) { return a - b; }), 'and the rows read in start order on screen');
   eq(RM.autoPhase(rAO.state, 'p1', { today: 0, autoOrder: true }).changed, 0, 'and a second click finds nothing to do');
   eq(rAO.moved, 3, 'moved counts the three units once each, however many passes it took');
 

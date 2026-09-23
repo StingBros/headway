@@ -3054,12 +3054,20 @@
 
   // demand units: stories (story level) or features (feature level).
   // Milestones and done things carry no demand and are not units.
-  RM.capUnits = function (state) {
+  // A unit's `order` is its row's place: the array (which mirrors the order
+  // keys), or with opts.autoOrder the on-screen start order RM.viewItems
+  // renders — auto-order never rewrites state.items, so the scheduler ranks
+  // work the way the rows read instead.
+  RM.capUnits = function (state, opts) {
     var storyLevel = RM.planLevel(state) === 'story';
     var units = [];
     var storyUnitByNum = {};
     var unitsByItem = {};
-    state.items.forEach(function (it, idx) {
+    var rowRank = {};
+    (opts && opts.autoOrder ? RM.viewItems(state, { autoOrder: true }) : state.items)
+      .forEach(function (it, i) { rowRank[it.id] = i; });
+    state.items.forEach(function (it) {
+      var idx = rowRank[it.id];
       if (it.milestone) return;
       if (!storyLevel) {
         var u = { id: 'i:' + it.id, itemId: it.id, storyId: null, capType: RM.itemCapType(state, it),
@@ -3089,8 +3097,9 @@
       unitsByItem[it.id] = mine;
     });
     // milestones are units too (zero work) so dependents can chain on them
-    state.items.forEach(function (it, idx) {
+    state.items.forEach(function (it) {
       if (!it.milestone) return;
+      var idx = rowRank[it.id];
       var mu = { id: 'i:' + it.id, itemId: it.id, storyId: null, capType: '', mult: 0, points: 0,
         startDay: it.startDay, durDays: 0, riskDays: 0, deps: [], locked: !!it.locked, done: !!it.done,
         milestone: true, phaseId: it.phaseId, order: [idx, 0] };
@@ -3828,7 +3837,7 @@
     var HORIZON = meta.numWeeks + 104;
     var S = RM.slotsOf(meta);
     var ledger = capLedger(state, HORIZON);
-    var units = RM.capUnits(state);
+    var units = RM.capUnits(state, opts);
     var byId = {};
     units.forEach(function (u) { byId[u.id] = u; });
     // A unit never lands before its phase begins. Measured once, up front, so
@@ -3991,9 +4000,10 @@
   // then at the Stories level size its features from the span their stories
   // now cover. Sizes are taken AFTER the layout — at the Stories level a
   // feature's size never steers where its stories go. With opts.autoOrder the
-  // rows are start-sorted after each layout (as the app's auto-order would),
-  // and the layout repeats until a pass moves nothing (at most 5 passes), so
-  // one click settles the phase. The app runs this as its dry run too:
+  // scheduler ranks rows in their on-screen start order (RM.viewItems — the
+  // document's row order is left alone), and the layout repeats until a pass
+  // moves nothing and leaves that order as it was (at most 5 passes), so one
+  // click settles the phase. The app runs this as its dry run too:
   // changed === 0 means the phase is already in place.
   // Counts compare the result with the input: moved = work units (features,
   // or stories at the Stories level, milestones) whose dates changed — not
@@ -4010,7 +4020,14 @@
     Object.keys(opts).forEach(function (k) { o[k] = opts[k]; });
     o.phaseIds = [phaseId];
     var cur = inputState;
+    // auto-order is a render-time sort (RM.viewItems): state.items is never
+    // rewritten, but the scheduler ranks rows in that on-screen order, so a
+    // pass that changes the start order re-runs under the new ranking
+    function viewKey(s) {
+      return RM.viewItems(s, { autoOrder: true }).map(function (it) { return it.id; }).join('|');
+    }
     for (var pass = 0; pass < RM.AUTO_PHASE_MAX_PASSES; pass++) {
+      var before = opts.autoOrder ? viewKey(cur) : '';
       var r = RM.autoTimeline(cur, o);
       var sz = RM.autoSizeChanges(r.state, phaseId, opts);
       sz.forEach(function (c) {
@@ -4018,9 +4035,7 @@
         if (it) it.size = c.size;
       });
       if (pass === 0) out.notes = r.notes;
-      var before = opts.autoOrder ? r.state.items.map(function (it) { return it.id; }).join('|') : '';
-      if (opts.autoOrder) RM.sortItemsByStart(r.state);
-      var reordered = opts.autoOrder && r.state.items.map(function (it) { return it.id; }).join('|') !== before;
+      var reordered = opts.autoOrder && viewKey(r.state) !== before;
       cur = r.state;
       if (!r.changed && !sz.length && !reordered) break;
     }
@@ -4057,7 +4072,7 @@
     var res = { state: state, changed: 0, note: null };
     var it = RM.itemById(state, itemId);
     if (!it) return res;
-    var units = RM.capUnits(state);
+    var units = RM.capUnits(state, opts);
     var byId = {};
     units.forEach(function (x) { byId[x.id] = x; });
     var targets, fanOut = false;
