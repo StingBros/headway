@@ -12314,9 +12314,48 @@
       '<div class="sp-recents">' +
       ((continueCard + rows) || '<div class="sp-empty">Nothing yet — projects you create or open appear here.</div>') +
       '</div>' +
+      guideHtml() +
       (appVersion() ? '<div class="sp-version"><button class="sp-verbtn" data-sp-notes title="What\u2019s new in this version">Headway ' + esc(appVersion()) + '</button></div>' : '') +
       '</div>';
     if (window.lucide) lucide.createIcons();
+  }
+
+  // ---- start page "How to use" area (js/guide.js). Collapsed by default on a
+  // machine that has opened a project before, open on a fresh one; the last
+  // tab and the open state stick per machine.
+  var GUIDE_KEY = 'headway-guide-v1';
+  function guidePrefs() {
+    var p = null;
+    try { p = JSON.parse(localStorage.getItem(GUIDE_KEY) || 'null'); } catch (e) { p = null; }
+    if (!p || typeof p !== 'object') {
+      var seen = false;
+      try { seen = !!localStorage.getItem(LS_KEY) || (loadRecents() || []).length > 0; } catch (e2) { seen = false; }
+      p = { open: !seen, tab: 'start' };
+    }
+    return p;
+  }
+  function saveGuidePrefs(p) { try { localStorage.setItem(GUIDE_KEY, JSON.stringify(p)); } catch (e) { /* storage optional */ } }
+  function guideHtml() {
+    if (!window.HeadwayGuide) return '';
+    var p = guidePrefs();
+    return HeadwayGuide.html(p.tab, !!p.open);
+  }
+  function guideClick(e) {
+    var tog = e.target.closest('[data-hg-toggle]'), tab = e.target.closest('[data-hg-tab]');
+    if (!tog && !tab) return false;
+    var p = guidePrefs();
+    if (tog) p.open = !p.open;
+    if (tab) { p.tab = tab.dataset.hgTab; p.open = true; }
+    saveGuidePrefs(p);
+    var host = $('[data-hg]');
+    if (host) {
+      var wrap = document.createElement('div');
+      wrap.innerHTML = HeadwayGuide.html(p.tab, !!p.open);
+      host.replaceWith(wrap.firstChild);
+      if (window.lucide) lucide.createIcons();
+      if (tab) { var b = $('[data-hg-tab="' + p.tab + '"]'); if (b) b.focus(); }
+    }
+    return true;
   }
 
   // app version for the start page footer (desktop only — the browser build
@@ -12425,6 +12464,7 @@
     if (e.target.closest('[data-sp-settings]')) { personalSettingsModal(); return; }
     if (e.target.closest('[data-sp-update]')) { updateButtonClick(); return; }
     if (e.target.closest('[data-sp-notes]')) { openReleaseNotes(); return; }
+    if (guideClick(e)) return;
   });
   $('#startPage').addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ') return;

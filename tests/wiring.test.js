@@ -43,7 +43,7 @@ const T0 = '2026-09-01T10:00:00.000Z';
 const T2 = '2026-09-01T10:10:00.000Z';
 const DIR = 'C:/Users/me/OneDrive/Roadmap.headway';
 const SEED_USER = 'seed-user-00000';
-const SCRIPTS = ['js/core.js', 'js/bundle.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/app.js'];
+const SCRIPTS = ['js/core.js', 'js/bundle.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/guide.js', 'js/app.js'];
 
 // the full index.html in jsdom; tauri = a fake from fake-tauri.js, or null for
 // the browser build (no desktop.js, no __TAURI__)

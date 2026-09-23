@@ -8,6 +8,7 @@ Format: short sections, bullets, one bold title per notable change —
 `**Feature title**: a short, impactful description and use case.`
 
 ## Unreleased
+- Start page: a collapsible **How to use Headway** area (js/guide.js) — a five-step start, one line per view, the keyboard shortcuts and a features & ideas list; open by default on a fresh machine, the last tab remembered.
 - View → “Estimate ranges” toggles the low→high bands on the Planning bars (range mode only; also under Setup → Preferences → Timeline). Persists per machine like the critical-path highlight.
 - Range estimates: the min/max band now hatches the low→high stretch on top of the bar (it was drawn behind it, so under the default "high" basis it was invisible), and the working-days-per-unit rate is editable for every unit, days included, for sheets that count 4 days to a week.
 

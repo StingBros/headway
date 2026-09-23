@@ -45,7 +45,7 @@ window.addEventListener('error', (e) => errors.push(e.message));
   window.localStorage.setItem('headway-v1', JSON.stringify(seeded));
 }
 
-for (const f of ['js/core.js', 'js/bundle.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/app.js']) {
+for (const f of ['js/core.js', 'js/bundle.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/guide.js', 'js/app.js']) {
   try {
     window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   } catch (e) {
@@ -148,6 +148,26 @@ ok(!doc.querySelector('#startBody [data-sp-notes]') && !doc.querySelector('#star
 
   delete window.HeadwayDesktop;
   window.HeadwayApp.renderStartPage();
+}
+
+// ---- "How to use Headway" area (js/guide.js): collapsed on a machine with a
+// session, opens to four tabs, remembers the tab, folds back
+{
+  const hg = () => doc.querySelector('#startBody [data-hg]');
+  ok(!!hg() && !hg().classList.contains('open'), 'start page carries the How-to area, collapsed when a session exists');
+  click(hg().querySelector('[data-hg-toggle]'));
+  ok(hg().classList.contains('open') && hg().querySelectorAll('[data-hg-tab]').length === 4 && hg().querySelectorAll('.hg-steps li').length === 5,
+    'opening it shows four tabs and the five Start-here steps');
+  click(hg().querySelector('[data-hg-tab="keys"]'));
+  ok(hg().querySelector('[data-hg-body="keys"]') && hg().querySelectorAll('.hg-key kbd.kbd').length > 20,
+    'the Shortcuts tab lists the keys as <kbd> chips (' + hg().querySelectorAll('.hg-key kbd.kbd').length + ')');
+  ok((window.localStorage.getItem('headway-guide-v1') || '').includes('"tab":"keys"'), 'the chosen tab is remembered per machine');
+  click(hg().querySelector('[data-hg-tab="ideas"]'));
+  ok(hg().querySelectorAll('.hg-card').length >= 10 && /Range estimates/.test(hg().textContent), 'Features & ideas covers the range estimates');
+  click(hg().querySelector('[data-hg-toggle]'));
+  ok(!hg().classList.contains('open') && !hg().querySelector('.hg-body'), 'the header folds it back');
+  window.HeadwayApp.renderStartPage();
+  ok(!doc.querySelector('#startBody [data-hg]').classList.contains('open'), 'a re-render keeps it folded');
 }
 
 const contBtn = doc.querySelector('#startBody [data-sp-continue]');
@@ -3160,7 +3180,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   w2.ExcelJS = ExcelJS;
   w2.localStorage.setItem('headway-v1', window.localStorage.getItem('headway-v1'));
   w2.localStorage.setItem('headway-ui-v1', window.localStorage.getItem('headway-ui-v1'));
-  for (const f of ['js/core.js', 'js/bundle.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/app.js']) {
+  for (const f of ['js/core.js', 'js/bundle.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/guide.js', 'js/app.js']) {
     w2.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   }
   const d2 = w2.document;
@@ -3177,7 +3197,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   const dom3 = new JSDOM(html, { url: 'http://localhost/roadmapping/index.html', runScripts: 'outside-only', pretendToBeVisual: true });
   dom3.window.ExcelJS = ExcelJS;
   dom3.window.localStorage.setItem('headway-v1', window.localStorage.getItem('headway-v1'));
-  for (const f of ['js/core.js', 'js/bundle.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/app.js']) {
+  for (const f of ['js/core.js', 'js/bundle.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/guide.js', 'js/app.js']) {
     dom3.window.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   }
   dom3.window.document.querySelector('#startBody [data-sp-continue]')
