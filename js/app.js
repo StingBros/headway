@@ -13236,7 +13236,7 @@
 
   function createProjectOnDisk(st) {
     var fname = ((st.meta.title || '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Roadmap') + '.xlsx';
-    RMExcel.exportWorkbook(st, uiSnapshot()).then(function (blob) {
+    RMExcel.exportWorkbook(st, exportUiSnapshot()).then(function (blob) {
       if (window.HeadwayDesktop) {
         // the file must exist before the project does — Save dialog first
         return HeadwayDesktop.saveBlob(blob, fname, true).then(function (path) {
@@ -13914,9 +13914,11 @@
     Promise.all(names.map(fetchText)).then(function (texts) {
       var files = {};
       names.forEach(function (n, i) { files[n] = texts[i]; });
-      var ui = uiSnapshot();
+      // like an .xlsx export, a view-only copy never re-links a shared folder
+      var ui = exportUiSnapshot();
       ui.panelOpen = false;
-      var html = buildStandaloneHtml(files['index.html'], files, RM.clone(state), ui);
+      var doc = window.RMBundle ? RMBundle.exportableState(RM.clone(state)) : RM.clone(state);
+      var html = buildStandaloneHtml(files['index.html'], files, doc, ui);
       var blob = new Blob([html], { type: 'text/html' });
       return saveExport({ blob: blob, name: (safeName(state.meta.title) || 'Roadmap') + '.html' }, HTML_KIND);
     }).catch(function (err) { toast('Export failed: ' + (err && err.message || err), 'err'); });
