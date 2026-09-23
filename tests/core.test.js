@@ -2443,7 +2443,8 @@ section('bundle: capacity, scheduling and range fields round-trip');
 })();
 var sCapB = mkState([
   { id: 'iCapB', num: 1, feature: 'Typed', phaseId: 'p1', startDay: 0, durDays: 5, capType: 'QA', capMult: 2, locked: true, estLow: 3, estHigh: 8,
-    stories: [{ id: 'sCapB', num: 101, title: 'st', capType: 'Design', capMult: 0.5, estLow: 1, estHigh: 2, startDay: 0, durDays: 2 }] }
+    stories: [{ id: 'sCapB', num: 101, title: 'st', capType: 'Design', capMult: 0.5, estLow: 1, estHigh: 2, startDay: 0, durDays: 2, noAuto: true }] },
+  { id: 'iNoAuto', num: 2, feature: 'Excluded', phaseId: 'p1', startDay: 5, durDays: 5, capType: 'QA', noAuto: true }
 ], {
   team: [{ id: 'tCapB', name: 'Quinn', type: 'Development', capType: 'QA', points: 13, capacity: 0.5 }],
   capTypes: ['Development', 'QA', 'Design', 'Ops']
@@ -2462,7 +2463,8 @@ eq(backCapB.capTypes, ['Development', 'QA', 'Design', 'Ops'], 'assembling restor
 var itCapB = RM.itemById(backCapB, 'iCapB');
 eq([itCapB.capType, itCapB.capMult, itCapB.locked, itCapB.estLow, itCapB.estHigh], ['QA', 2, true, 3, 8], 'item capType / capMult / locked / estLow / estHigh round-trip');
 var stCapB = itCapB.stories[0];
-eq([stCapB.capType, stCapB.capMult, stCapB.estLow, stCapB.estHigh], ['Design', 0.5, 1, 2], 'story capType / capMult / estLow / estHigh round-trip');
+eq([stCapB.capType, stCapB.capMult, stCapB.estLow, stCapB.estHigh, stCapB.noAuto], ['Design', 0.5, 1, 2, true], 'story capType / capMult / estLow / estHigh / noAuto round-trip');
+eq([RM.itemById(backCapB, 'iNoAuto').noAuto, itCapB.noAuto], [true, false], 'item noAuto round-trips (and a locked item stays not-excluded)');
 var tmCapB = backCapB.team.filter(function (m) { return m.id === 'tCapB'; })[0];
 eq([tmCapB.capType, tmCapB.points, tmCapB.capacity], ['QA', 13, 0.5], 'member capType / points / capacity round-trip');
 eq(RB.canonicalize(RB.metaEntity(backCapB)), RB.canonicalize(RB.metaEntity(sCapB)), 'the meta entity is unchanged by the round trip');
@@ -2477,7 +2479,7 @@ var canonCapB = {};
 RB.diffEntities({}, backCapB).changed.forEach(function (c) { canonCapB[c.kind + '/' + c.id] = c.canon; });
 RM.renameCapType(backCapB, 'QA', 'Quality');
 var dCapB = RB.diffEntities(canonCapB, backCapB).changed.map(function (c) { return c.kind + '/' + c.id; }).sort();
-eq(dCapB, ['items/iCapB', 'meta/meta', 'team/tCapB'], 'a capacity-type rename flushes the meta shard and exactly the rows that carried it');
+eq(dCapB, ['items/iCapB', 'items/iNoAuto', 'meta/meta', 'team/tCapB'], 'a capacity-type rename flushes the meta shard and exactly the rows that carried it');
 
 section('story numbers: settled the same way on every machine');
 // two machines assemble the same shards in a different array order; a story
@@ -2907,6 +2909,29 @@ eq(fDeps && fDeps.fields.depsText, ['#77'], 'the unresolvable numbered dep lands
   var sIm2 = RM.clone(mine); RM.applyImport(sIm2, RM.planImport(mine, theirs2));
   var t2 = sIm2.items[1].stories.filter(function (x) { return x.title === 'T2'; })[0];
   eq(t2.deps.length, 1, 'an unmapped story dep number is dropped');
+})();
+
+// noAuto (Exclude from Auto timeline) fills like an empty field: the
+// workbook's "excluded" lands only where the roadmap has it off, never on a
+// locked feature (the two are exclusive — the roadmap's lock wins), and a
+// workbook that has it off never clears the roadmap's
+(function () {
+  var have = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1', name: 'Now' }], items: [
+    { id: 'iNa000001-1-aaaaa', num: 1, phaseId: 'p1', feature: 'Plain', stories: [{ id: 'sNa000001-1-aaaaa', num: 5, title: 'st' }] },
+    { id: 'iNa000002-1-aaaaa', num: 2, phaseId: 'p1', feature: 'Locked', locked: true },
+    { id: 'iNa000003-1-aaaaa', num: 3, phaseId: 'p1', feature: 'Already out', noAuto: true }] });
+  var want = RM.normalizeState({ meta: RM.clone(META), phases: [{ id: 'p1', name: 'Now' }], items: [
+    { id: 'iNa000001-1-aaaaa', num: 1, phaseId: 'p1', feature: 'Plain', noAuto: true, stories: [{ id: 'sNa000001-1-aaaaa', num: 5, title: 'st', noAuto: true }] },
+    { id: 'iNa000002-1-aaaaa', num: 2, phaseId: 'p1', feature: 'Locked', noAuto: true },
+    { id: 'iNa000003-1-aaaaa', num: 3, phaseId: 'p1', feature: 'Already out', noAuto: false }] });
+  var planNa = RM.planImport(have, want);
+  var sNa = RM.clone(have);
+  RM.applyImport(sNa, planNa);
+  eq(RM.itemById(sNa, 'iNa000001-1-aaaaa').noAuto, true, 'noAuto fills a feature that had it off');
+  eq(RM.itemById(sNa, 'iNa000001-1-aaaaa').stories[0].noAuto, true, 'and a story that had it off');
+  eq([RM.itemById(sNa, 'iNa000002-1-aaaaa').noAuto, RM.itemById(sNa, 'iNa000002-1-aaaaa').locked], [false, true], 'a locked feature stays locked, not excluded');
+  ok(planNa.items.conflicts >= 1, 'the lock-vs-exclude disagreement counts as a conflict');
+  eq(RM.itemById(sNa, 'iNa000003-1-aaaaa').noAuto, true, 'a workbook with it off never clears the roadmap\'s');
 })();
 
 section('jira keys');

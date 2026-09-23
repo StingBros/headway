@@ -2502,6 +2502,11 @@
   // default — so it is not a gap either; a story's blank capType is)
   RM.IMPORT_FILL_FIELDS = ['enables', 'outOfScope', 'notes', 'extDeps', 'description', 'ac', 'size', 'risk', 'estLow', 'estHigh'];
   RM.IMPORT_STORY_FILL_FIELDS = ['description', 'ac', 'capType', 'estLow', 'estHigh'];
+  // on/off flags fill the same way: "off" is the empty value, so the
+  // workbook's "on" lands where the roadmap has it off and a workbook "off"
+  // never clears the roadmap's "on". noAuto never lands on a locked feature
+  // (the two are exclusive — the roadmap's lock wins, counted as a conflict).
+  RM.IMPORT_FLAG_FIELDS = ['noAuto'];
   function normTitle(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase(); }
   // Only an RM.uid-shaped id is identity across documents. Template imports
   // mint low-entropy ids ('ph1', 'tm1', …) on BOTH sides, so pairing those by
@@ -2510,7 +2515,7 @@
     var id = x && x.id != null ? String(x.id) : '';
     return /^[a-z]+[0-9a-z]{6,}-\d+-[0-9a-z]{4,}$/.test(id) ? id : '';
   }
-  function emptyVal(v) { return v == null || v === '' || (Array.isArray(v) && !v.length); }
+  function emptyVal(v) { return v == null || v === '' || v === false || (Array.isArray(v) && !v.length); }
   function sameVal(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
   function sameSet(a, b) { return sameVal((a || []).slice().sort(), (b || []).slice().sort()); }
   // Pair `want` rows with `have` rows, one key function at a time; a key
@@ -2545,6 +2550,11 @@
       if (emptyVal(wv)) return;
       if (emptyVal(hv)) { out[f] = RM.clone(wv); any = true; }
       else if (!sameVal(hv, wv)) counter.conflicts++;
+    });
+    RM.IMPORT_FLAG_FIELDS.forEach(function (f) {
+      if (!want[f] || have[f]) return;
+      if (f === 'noAuto' && have.locked) { counter.conflicts++; return; }
+      out[f] = true; any = true;
     });
     return any ? out : null;
   }
@@ -2714,6 +2724,7 @@
     function fillInto(obj, fields) {
       Object.keys(fields).forEach(function (f) {
         if (!emptyVal(obj[f])) return;
+        if (f === 'noAuto' && obj.locked) return; // locked since the preview: the lock wins
         obj[f] = RM.clone(fields[f]);
         filled++;
       });
