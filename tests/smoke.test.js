@@ -163,7 +163,7 @@ ok(!doc.querySelector('#startBody [data-sp-notes]') && !doc.querySelector('#star
     'the Shortcuts tab lists the keys as <kbd> chips (' + hg().querySelectorAll('.hg-key kbd.kbd').length + ')');
   ok((window.localStorage.getItem('headway-guide-v1') || '').includes('"tab":"keys"'), 'the chosen tab is remembered per machine');
   click(hg().querySelector('[data-hg-tab="ideas"]'));
-  ok(hg().querySelectorAll('.hg-card').length >= 10 && /Range estimates/.test(hg().textContent), 'Features & ideas covers the range estimates');
+  ok(hg().querySelectorAll('.hg-card').length >= 8 && /Range estimates/.test(hg().textContent) && !/Ideas/.test(hg().textContent), 'the Features tab covers the range estimates and carries no ideas section');
   click(hg().querySelector('[data-hg-toggle]'));
   ok(!hg().classList.contains('open') && !hg().querySelector('.hg-body'), 'the header folds it back');
   window.HeadwayApp.renderStartPage();

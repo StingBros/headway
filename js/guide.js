@@ -2,7 +2,7 @@
  * Headway — in-app "How to use" guide.
  *
  * Content for the start page's How-to area: a short tutorial (Start here),
- * one line per view, the keyboard shortcuts and a features & ideas list.
+ * one line per view, the keyboard shortcuts and a features list.
  * Pure data + HTML builders, no DOM access — app.js renders it and wires the
  * tabs. Keep entries short: this is a field guide, not the manual (README.md
  * and DESIGN.md hold the detail).
@@ -30,7 +30,7 @@
     { id: 'start', label: 'Start here', icon: 'rocket' },
     { id: 'views', label: 'Views', icon: 'layout-grid' },
     { id: 'keys', label: 'Shortcuts', icon: 'keyboard' },
-    { id: 'ideas', label: 'Features & ideas', icon: 'lightbulb' }
+    { id: 'ideas', label: 'Features', icon: 'sparkles' }
   ];
 
   // Start here — the one path every new plan takes, in order
@@ -71,12 +71,6 @@
     { t: 'AI assistant', d: '`Mod+J` opens a chat that knows the open plan: ask what slips if a feature moves, or tell it to re-tag, re-phase or re-size — every edit is undoable and logged as “you · AI”.' }
   ];
 
-  var IDEAS = [
-    { t: 'Stakeholder read-out', d: 'View → Collapse all features, Color by epic, Estimate ranges off, then Export → PNG or PowerPoint.' },
-    { t: 'Sprint review', d: 'Sprinting view, Stories level, filter by workstream — walk the list, drag anything that slipped to the next sprint.' },
-    { t: 'What-if', d: 'Plan menu → new plan, move or drop features there, then compare it against the main plan before anyone commits.' },
-    { t: 'Hardening buckets', d: 'Keep hardening and defect work as stories under a bucket feature, prioritised with MoSCoW so the board sorts them, and let musts schedule first.' }
-  ];
 
   function stepsHtml() {
     return '<ol class="hg-steps">' + START.map(function (s) {
@@ -101,18 +95,15 @@
     }).join('') + '</div>' +
     '<div class="hg-note">' + (mac ? '⌘ is Ctrl on Windows.' : 'Ctrl is ⌘ on a Mac.') + ' Shortcuts stay quiet while you are typing in a field.</div>';
   }
-  function ideasHtml() {
-    return cardsHtml(FEATURES) + '<div class="hg-subhd">Ideas</div>' + cardsHtml(IDEAS);
-  }
 
   var G = {};
   G.TABS = TABS;
-  G.START = START; G.VIEWS = VIEWS; G.KEYS = KEYS; G.FEATURES = FEATURES; G.IDEAS = IDEAS;
+  G.START = START; G.VIEWS = VIEWS; G.KEYS = KEYS; G.FEATURES = FEATURES;
   G.mod = MOD;
   G.bodyHtml = function (tab) {
     if (tab === 'views') return cardsHtml(VIEWS);
     if (tab === 'keys') return keysHtml();
-    if (tab === 'ideas') return ideasHtml();
+    if (tab === 'ideas') return cardsHtml(FEATURES);
     return stepsHtml();
   };
   // the whole start-page area: header row (title + collapse), tab strip, body
@@ -121,7 +112,7 @@
     return '<section class="hg' + (open ? ' open' : '') + '" data-hg>' +
       '<button class="hg-hd" data-hg-toggle aria-expanded="' + (open ? 'true' : 'false') + '">' +
       '<i data-lucide="book-open"></i><span>How to use Headway</span>' +
-      '<span class="hg-hd-sub">' + (open ? 'tutorial, views, shortcuts, ideas' : 'a two-minute tour') + '</span>' +
+      '<span class="hg-hd-sub">' + (open ? 'tutorial, views, shortcuts, features' : 'a two-minute tour') + '</span>' +
       '<i data-lucide="' + (open ? 'chevron-up' : 'chevron-down') + '" class="hg-chev"></i></button>' +
       (open
         ? '<div class="hg-tabs" role="tablist">' + TABS.map(function (t) {
