@@ -52,6 +52,7 @@
   var view = 'planning';     // planning (timeline) | scoping (spreadsheet)
   var depsMode = 'on';       // on: selected item's explicit deps + violations + critical path | none
   var showCrit = true;       // orange critical-path highlight (bars + arrows)
+  var showRange = true;      // hatched low→high estimate bands on the bars (range mode only)
   var showCap = true;        // weekly capacity row in the planning header
   var repCollapsed = true;   // bottom Reports drawer starts tucked away
   var leftWBudget = 806;     // frozen left-pane width, budgeting view
@@ -173,7 +174,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioHideUnset: prioHideUnset, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy, docKind: docKind, bundleDir: bundleDir, activePlanId: activePlanId };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showRange: showRange, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioHideUnset: prioHideUnset, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy, docKind: docKind, bundleDir: bundleDir, activePlanId: activePlanId };
   }
   // the snapshot an .xlsx carries: a workbook must never re-link a folder
   function exportUiSnapshot() {
@@ -227,6 +228,7 @@
     scopeColW = ui.scopeColW && typeof ui.scopeColW === 'object' ? ui.scopeColW : {};
     autoOrder = ui.autoOrder !== false; // default true
     showCrit = ui.showCrit !== false;   // default true
+    showRange = ui.showRange !== false; // default true
     showCap = ui.showCap !== false;     // default true
     resPanelH = ui.resPanelH > 40 ? ui.resPanelH : 150;
     panelSec = ui.panelSec && typeof ui.panelSec === 'object' ? ui.panelSec : {};
@@ -4818,7 +4820,7 @@
       var workW = Math.max(6, it.durDays * dayPx());
       var riskW = (it.riskDays || 0) * dayPx();
       var width = workW + riskW;
-      var rsp = RM.rangeEnabled(state) && (it.estLow != null || it.estHigh != null) ? RM.rangeSpans(state, it) : null;
+      var rsp = showRange && RM.rangeEnabled(state) && (it.estLow != null || it.estHigh != null) ? RM.rangeSpans(state, it) : null;
       var rangeHtml = '', rangeTail = 0;
       if (rsp && rsp.highEnd > rsp.lowEnd) {
         // the uncertain stretch (low finish -> high finish) rides OVER the bar as
@@ -9623,6 +9625,11 @@
         saveLocal(); render();
         toast('Critical path highlight ' + (showCrit ? 'on' : 'off'));
       } },
+      RM.rangeEnabled(state) ? { icon: 'chart-gantt', label: 'Estimate ranges', checked: showRange, fn: function () {
+        showRange = !showRange;
+        saveLocal(); render();
+        toast('Estimate ranges ' + (showRange ? 'shown' : 'hidden'));
+      } } : null,
       state.meta.capacityEnabled ? { icon: 'gauge', label: 'Capacity row', checked: showCap, fn: function () {
         showCap = !showCap;
         saveLocal(); render();
@@ -12146,6 +12153,7 @@
       '<div class="m-sec"><label>Timeline</label>' +
       chk('deps', 'Dependency arrows', depsMode === 'on') +
       chk('crit', 'Critical path highlight', showCrit) +
+      (RM.rangeEnabled(state) ? chk('range', 'Estimate ranges (low→high bands)', showRange) : '') +
       chk('cap', 'Capacity row', showCap) +
       chk('autoOrder', 'Auto-order rows by start', autoOrder) +
       '</div>' +
@@ -12180,6 +12188,7 @@
       var on = e.target.checked;
       if (key === 'deps') depsMode = on ? 'on' : 'none';
       else if (key === 'crit') showCrit = on;
+      else if (key === 'range') showRange = on;
       else if (key === 'cap') showCap = on;
       else if (key === 'autoOrder') autoOrder = on; // view-only; render() below re-sorts
       else if (key === 'groupWs') groupWs = on;
@@ -12726,7 +12735,7 @@
         var sel = selectedId ? RM.itemById(state, selectedId) : null;
         return {
           view: view, selectedNum: sel ? sel.num : null, theme: themePref, snapFeat: snapFeat, snapStory: snapStory,
-          deps: depsMode === 'on', crit: showCrit, cap: showCap, autoOrder: autoOrder,
+          deps: depsMode === 'on', crit: showCrit, range: showRange, cap: showCap, autoOrder: autoOrder,
           groupWs: groupWs, groupEpic: groupEpic, autoSave: autoSave, detailMode: detailMode,
           desktop: !!window.HeadwayDesktop, userName: userName()
         };
@@ -12737,6 +12746,7 @@
         if (key === 'snapFeat' || key === 'snapStory') { if (SNAP_MODES.indexOf(val) === -1) return false; setSnapMode(key === 'snapStory' ? 'story' : 'feature', val); }
         else if (key === 'deps') depsMode = val ? 'on' : 'none';
         else if (key === 'crit') showCrit = !!val;
+        else if (key === 'range') showRange = !!val;
         else if (key === 'cap') showCap = !!val;
         else if (key === 'autoOrder') autoOrder = !!val; // view-only; render() below re-sorts
         else if (key === 'groupWs') groupWs = !!val;
