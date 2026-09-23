@@ -41,7 +41,10 @@ async function until(fn, ms) {
 
 const T0 = '2026-09-01T10:00:00.000Z';
 const T2 = '2026-09-01T10:10:00.000Z';
-const DIR = 'C:/Users/me/OneDrive/Roadmap.headway';
+// a project: <Project>/<Project>.headway marker + <Project>/.headway/ data
+const PROJ = 'C:/Users/me/OneDrive/Roadmap';
+const DIR = PROJ + '/.headway';            // bundleDir: every shard lives below here
+const MARKER = PROJ + '/Roadmap.headway';  // what the user opens
 const SEED_USER = 'seed-user-00000';
 const SCRIPTS = ['js/core.js', 'js/bundle.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/app.js'];
 
@@ -123,8 +126,8 @@ async function main() {
   const contents = b.RB.migrateFromState(fixture, SEED_USER, T0);
   const pid = contents.headway.plans[0].id;
   const seedLines = contents.history[SEED_USER].length;
-  await b.HD.createBundle(DIR, contents);
-  await b.HA.openBundleDoc(DIR);
+  await b.HD.createBundle(PROJ, contents);
+  await b.HA.openBundleDoc(MARKER);
   let info = b.info();
   eq(info.docKind, 'bundle', 'docKind is bundle');
   eq(info.bundleDir, DIR, 'bundleDir set');
@@ -142,9 +145,10 @@ async function main() {
   eq(b.HD.userId(), myId, 'desktop shell knows our id');
   eq(JSON.parse(window.localStorage.getItem('headway-user-v2')).id, myId, 'identity persisted');
   const rec0 = JSON.parse(window.localStorage.getItem('headway-recents-v1'));
-  eq([rec0[0].path, rec0[0].kind, rec0[0].title], [DIR, 'bundle', fixture.meta.title], 'recents entry carries kind + live title');
+  eq([rec0[0].path, rec0[0].kind, rec0[0].title], [MARKER, 'bundle', fixture.meta.title], 'recents entry = the marker file, kind + live title');
+  eq(info.bundleMarker, MARKER, 'bundleMarker set');
   const uiSnap = JSON.parse(window.localStorage.getItem('headway-ui-v1'));
-  eq([uiSnap.docKind, uiSnap.bundleDir, uiSnap.activePlanId], ['bundle', DIR, pid], 'ui snapshot carries the session for a reload');
+  eq([uiSnap.docKind, uiSnap.bundleMarker, uiSnap.activePlanId], ['bundle', MARKER, pid], 'ui snapshot carries the session (by marker) for a reload');
   ok(tauri.watching() && tauri.watchOpts().recursive === true, 'recursive watch active');
 
   section('a commit flushes ONLY the changed shard + one history line');
@@ -386,9 +390,8 @@ async function main() {
   tauri.dirs.add('C:/tmp'); // the dialog only returns folders that exist
   let labels = b.menuLabels('file');
   ok(labels.some((l) => /^Export \.xlsx…/.test(l)), 'File menu offers Export .xlsx… in bundle mode');
-  ok(!labels.some((l) => /^Save/.test(l)), '…and no Save / Save as');
+  ok(!labels.some((l) => /^Save(…)?(⌘S)?$/.test(l)), '…and no plain Save');
   ok(!labels.some((l) => /Auto save/.test(l)), 'Auto save hidden');
-  ok(!labels.some((l) => /Convert to shared/.test(l)), 'Convert hidden while already shared');
   b.menuClick('file', /Export \.xlsx…/);
   ok(await until(() => tauri.files.has('C:/tmp/export.xlsx')), 'workbook written where the dialog said — toasts: ' + b.toasts());
   const xbytes = tauri.files.get('C:/tmp/export.xlsx');
@@ -402,78 +405,107 @@ async function main() {
   eq(b.HD.currentPath(), null, 'currentPath untouched by the export');
   eq([b.info().docKind, b.HD.bundleDir()], ['bundle', DIR], 'bundle session untouched');
 
-  section('menus with __TAURI__: the shared-roadmap items');
-  ok(labels.some((l) => /New shared roadmap…/.test(l)) && labels.some((l) => /Open shared roadmap…/.test(l)), 'File: New/Open shared roadmap present');
+  section('menus with __TAURI__: one Open, the legacy convert entry, Save as…');
+  ok(labels.filter((l) => /^Open/.test(l)).length === 2 && labels.some((l) => l === 'Open…') && labels.some((l) => /^Open and Convert Legacy File…/.test(l)),
+    'File: exactly "Open…" and "Open and Convert Legacy File…": ' + labels.join(' / '));
+  ok(!labels.some((l) => /shared roadmap|Convert to shared/.test(l)), 'no "New/Open shared roadmap" or "Convert to shared folder" duplicates');
+  ok(labels.some((l) => /^New project…/.test(l)), 'one New project…');
+  const iExp = labels.findIndex((l) => /^Export \.xlsx…/.test(l)), iSa = labels.findIndex((l) => /^Save as…/.test(l));
+  ok(iExp >= 0 && iSa === iExp + 1, 'Save as… sits right after Save / Export .xlsx…');
   const mac = b.HA.menuItems('macApp').map((m) => m.label || '');
-  ok(mac.some((l) => /New shared roadmap…/.test(l)) && mac.some((l) => /Open shared roadmap…/.test(l)) && mac.some((l) => /Export \.xlsx…/.test(l)), 'macApp list mirrors them');
+  ok(mac.some((l) => l === 'Open…') && mac.some((l) => /Open and Convert Legacy File…/.test(l)) && mac.some((l) => /Export \.xlsx…/.test(l)) &&
+    mac.some((l) => /^Save as…/.test(l)) && !mac.some((l) => /shared roadmap|Convert to shared/.test(l)), 'macApp list mirrors them');
   doc.querySelector('#popover').hidden = true;
 
-  section('open an .xlsx → standalone; Convert to shared folder… → a new bundle');
-  await b.HA.loadBuffer(xbuf, 'Exported.xlsx');
-  await settle();
-  eq(b.info().docKind, 'xlsx', 'an .xlsx is a standalone document');
-  eq(b.HD.bundleDir(), null, 'the bundle session closed');
-  eq(b.state().meta.title, 'Exported', 'title from the file name');
-  labels = b.menuLabels('file');
-  ok(labels.some((l) => /Convert to shared folder…/.test(l)), 'File menu offers Convert for an .xlsx');
-  ok(labels.some((l) => /^Save/.test(l)) && !labels.some((l) => /Export \.xlsx…/.test(l)), 'Save is Save again');
-  nextOpenDir = 'C:/Users/me/OneDrive';
-  b.menuClick('file', /Convert to shared folder…/);
-  const CDIR = 'C:/Users/me/OneDrive/Exported.headway';
-  ok(await until(() => b.info().docKind === 'bundle' && b.info().bundleDir === CDIR), 'converted and opened as a bundle — toasts: ' + b.toasts());
-  ok(tauri.files.has(CDIR + '/headway.json'), 'headway.json written');
+  // toasts auto-dismiss within milliseconds under the compressed timers, so catch them as they are added
+  const seenToasts = [];
+  new window.MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach((n) => { if (n.textContent) seenToasts.push(n.textContent); })))
+    .observe(doc.querySelector('#toasts'), { childList: true });
+
+  section('Open… an .xlsx → converted BESIDE the workbook, which is left untouched');
+  const XL = 'C:/Users/me/OneDrive/Exported.xlsx';
+  tauri.files.set(XL, Uint8Array.from(new Uint8Array(xbytes)));
+  const xlBefore = Buffer.from(tauri.files.get(XL)).toString('base64');
+  nextOpenDir = XL; // the Open dialog returns the workbook
+  b.menuClick('file', /^Open…/);
+  const CPROJ = 'C:/Users/me/OneDrive/Exported', CDIR = CPROJ + '/.headway', CMARK = CPROJ + '/Exported.headway';
+  ok(await until(() => b.info().docKind === 'bundle' && b.info().bundleDir === CDIR), 'converted and opened as a project — toasts: ' + seenToasts.join(' | '));
+  eq(b.info().bundleMarker, CMARK, 'the new marker is the open project');
+  ok(tauri.files.has(CDIR + '/headway.json') && tauri.files.has(CMARK), 'headway.json under .headway/, marker beside it');
+  eq(JSON.parse(tauri.files.get(CMARK)).title, 'Exported', 'marker titled after the workbook');
   const cPid = b.info().activePlanId;
   eq([...tauri.files.keys()].filter((f) => f.indexOf(CDIR + '/plans/' + cPid + '/items/') === 0).length, b.state().items.length, 'one shard per item');
   ok(tauri.files.has(CDIR + '/history/' + myId + '.jsonl'), 'legacy history landed in the converting user\'s file');
   eq(b.state().meta.title, 'Exported', 'same document');
+  eq(Buffer.from(tauri.files.get(XL)).toString('base64'), xlBefore, 'the workbook is byte-for-byte untouched');
+  eq(b.HD.currentPath(), null, 'the workbook was never adopted');
+  ok(seenToasts.some((t) => /Converted to “Exported”/.test(t)), 'toast: Converted to “Exported”');
+  eq(JSON.parse(window.localStorage.getItem('headway-recents-v1'))[0].path, CMARK, 'recents: the new marker, not the workbook');
 
-  section('Convert refuses a folder that already holds a bundle');
-  await b.HA.loadBuffer(xbuf, 'Exported.xlsx');
-  await settle();
-  eq(b.info().docKind, 'xlsx', 'back on the standalone document');
+  section('Open and Convert Legacy File… again → " (2)" beside it');
+  nextOpenDir = XL;
+  b.menuClick('file', /Open and Convert Legacy File…/);
+  const C2 = 'C:/Users/me/OneDrive/Exported (2)';
+  ok(await until(() => b.info().bundleDir === C2 + '/.headway'), 'the second conversion lands in "Exported (2)" — toasts: ' + seenToasts.join(' | '));
+  ok(tauri.files.has(C2 + '/Exported (2).headway'), 'its marker is named after its folder');
+  ok(tauri.files.has(CMARK), 'the first project is left alone');
+  ok(seenToasts.some((t) => /Converted to “Exported \(2\)”/.test(t)), 'toast names the suffixed folder');
+
+  section('an unreadable workbook → error toast, nothing opens, nothing written');
+  tauri.files.set('C:/Users/me/OneDrive/Broken.xlsx', new Uint8Array([1, 2, 3, 4]));
   const filesBefore = [...tauri.files.keys()].sort().join('|');
-  // toasts auto-dismiss within milliseconds under the compressed timers, so catch them as they are added
-  const seenToasts = [];
-  const mo = new window.MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach((n) => { if (n.textContent) seenToasts.push(n.textContent); })));
-  mo.observe(doc.querySelector('#toasts'), { childList: true });
-  nextOpenDir = 'C:/Users/me/OneDrive'; // same parent → Exported.headway already exists
-  b.menuClick('file', /Convert to shared folder…/);
-  ok(await until(() => seenToasts.length > 0), 'a toast appears');
-  mo.disconnect();
-  ok(seenToasts.some((t) => /already exists/.test(t)), 'it says the folder already exists: ' + seenToasts.join(' | '));
-  eq(b.info().docKind, 'xlsx', 'still a standalone document — nothing was opened');
-  eq([...tauri.files.keys()].sort().join('|'), filesBefore, 'not a single file written or changed');
+  const before = b.info().bundleDir;
+  seenToasts.length = 0;
+  await b.HA.openFromPath('C:/Users/me/OneDrive/Broken.xlsx');
+  await settle();
+  ok(seenToasts.some((t) => /Could not convert “Broken\.xlsx”/.test(t)), 'error toast: ' + seenToasts.join(' | '));
+  eq(b.info().bundleDir, before, 'the open project is unchanged');
+  eq([...tauri.files.keys()].sort().join('|'), filesBefore, 'not a single file written');
 
-  section('recents: kind → folder icon; start page has Open shared roadmap…');
-  b.HA.noteRecent('C:/x/Plain.xlsx');
+  section('Open… a marker; a bare marker is refused');
+  nextOpenDir = CMARK;
+  b.menuClick('file', /^Open…/);
+  ok(await until(() => b.info().bundleDir === CDIR), 'Open… on a marker opens that project');
+  tauri.files.set('C:/Users/me/OneDrive/Lonely/Lonely.headway', b.RB.markerText('doc-lonely', 'Lonely'));
+  seenToasts.length = 0;
+  await b.HA.openFromPath('C:/Users/me/OneDrive/Lonely/Lonely.headway');
+  await settle();
+  ok(seenToasts.some((t) => /\.headway folder is missing/.test(t)), 'a marker with no .headway/ beside it is refused: ' + seenToasts.join(' | '));
+  eq(b.info().bundleDir, CDIR, 'and the open project stays');
+
+  section('recents: projects only; start page has ONE Open…');
+  window.localStorage.setItem('headway-recents-v1', JSON.stringify(
+    JSON.parse(window.localStorage.getItem('headway-recents-v1')).concat([{ path: 'C:/x/Plain.xlsx', title: 'Plain', at: 1, kind: 'xlsx' }, { path: 'C:/x/Old.xlsx', title: 'Old', at: 1 }])));
+  b.HA.noteRecent('C:/x/Other.xlsx');
   b.HA.renderStartPage();
   const rows = [...doc.querySelectorAll('#startBody [data-sp-open]')];
-  const bRow = rows.find((r) => r.dataset.spOpen === CDIR);
-  const xRow = rows.find((r) => r.dataset.spOpen === 'C:/x/Plain.xlsx');
-  ok(bRow && bRow.querySelector('i[data-lucide="folder-open"]'), 'a bundle recent shows the folder icon');
-  ok(xRow && xRow.querySelector('i[data-lucide="file-spreadsheet"]'), 'an xlsx recent shows the spreadsheet icon');
-  ok(!!doc.querySelector('#startBody [data-sp-openbundle]'), 'Open shared roadmap… button present (desktop)');
+  ok(rows.length > 0 && rows.every((r) => /\.headway$/.test(r.dataset.spOpen)), 'every recent is a project marker: ' + rows.map((r) => r.dataset.spOpen).join(', '));
+  ok(!rows.some((r) => /\.xlsx$/.test(r.dataset.spOpen)), 'legacy workbook recents are dropped');
+  ok(rows.find((r) => r.dataset.spOpen === CMARK).querySelector('i[data-lucide="folder-open"]'), 'a project recent shows the folder icon');
+  const spOpens = [...doc.querySelectorAll('#startBody .sp-actions button')].filter((x) => /Open/.test(x.textContent));
+  eq(spOpens.length, 1, 'start page: a single Open… button');
+  ok(!doc.querySelector('#startBody [data-sp-openbundle]'), 'no "Open shared roadmap…" button');
 
-  section('New shared roadmap… from the menu');
+  section('New project… creates a project folder');
   nextOpenDir = 'C:/Users/me/OneDrive';
-  b.menuClick('file', /New shared roadmap…/);
-  const nn = doc.querySelector('#modalHost #optNameIn');
+  b.menuClick('file', /^New project…/);
+  const nn = doc.querySelector('#modalHost #npName');
   ok(!!nn, 'asks for a name');
   nn.value = 'Fresh';
-  b.click(doc.querySelector('#modalHost #optNameOk'));
-  const FDIR = 'C:/Users/me/OneDrive/Fresh.headway';
-  ok(await until(() => b.info().bundleDir === FDIR), 'created and opened — toasts: ' + b.toasts());
+  b.click(doc.querySelector('#modalHost #npCreate'));
+  const FPROJ = 'C:/Users/me/OneDrive/Fresh', FDIR = FPROJ + '/.headway', FMARK = FPROJ + '/Fresh.headway';
+  ok(await until(() => b.info().bundleDir === FDIR), 'created and opened — toasts: ' + seenToasts.join(' | '));
   eq(b.state().meta.title, 'Fresh', 'blank roadmap titled from the prompt');
   eq(b.state().items.length, 0, 'empty');
-  ok(tauri.files.has(FDIR + '/headway.json'), 'headway.json written');
+  ok(tauri.files.has(FDIR + '/headway.json') && tauri.files.has(FMARK), 'layout written');
 
   section('resume after a reload (ui snapshot) + beforeClose');
   const ls = {};
   ['headway-v1', 'headway-ui-v1', 'headway-user-v2', 'headway-user-v1', 'headway-recents-v1'].forEach((k) => { const v = window.localStorage.getItem(k); if (v != null) ls[k] = v; });
   const b2 = boot(tauri, { localStorage: ls, sessionStorage: { 'headway-in-editor': '1' } });
   ok(b2.errors.length === 0, 'reload boots clean');
-  ok(await until(() => b2.info().docKind === 'bundle'), 'the folder is re-linked after the reload — toasts: ' + b2.toasts());
-  eq(b2.info().bundleDir, FDIR, 'same folder');
+  ok(await until(() => b2.info().docKind === 'bundle'), 'the project is re-linked after the reload — toasts: ' + b2.toasts());
+  eq([b2.info().bundleDir, b2.info().bundleMarker], [FDIR, FMARK], 'same project');
   eq(b2.info().userId, myId, 'same identity');
   ok(!b2.doc.body.classList.contains('start'), 'editor active (mid-session reload)');
   await b2.HD.writePresence(FDIR, myId, { name: 'Wiring Tester', planId: b2.info().activePlanId, editing: [], ts: 1 });
@@ -488,12 +520,55 @@ async function main() {
   ok(!w.HD, 'no HeadwayDesktop');
   eq(w.info().docKind, 'xlsx', 'a browser never re-links a folder');
   const wl = w.HA.menuItems('file').map((m) => m.label || '');
-  ok(!wl.some((l) => /shared roadmap|Convert to shared|Export \.xlsx/.test(l)), 'File menu has none of the bundle items');
+  ok(!wl.some((l) => /shared roadmap|Convert|Export \.xlsx|^Save as/.test(l)), 'File menu has none of the project items (no Save as…, no legacy convert)');
   ok(wl.some((l) => l === 'Save'), 'Save stays Save');
+  ok(wl.some((l) => l === 'Open project…'), 'the browser keeps its Open project… (a file input)');
   w.HA.renderStartPage();
   ok(!w.doc.querySelector('#startBody [data-sp-openbundle]'), 'no Open shared roadmap… button');
   w.HA.applyExternalEntities([{ kind: 'items', id: 'x', env: { id: 'x', rev: 1, fields: {}, fieldsAt: {} } }]);
   ok(true, 'applyExternalEntities is a no-op outside a bundle');
+
+  section('File → Save as…: copies the open project, switches to the copy');
+  await b.HA.openBundleDoc(CMARK);
+  await settle();
+  eq(b.info().bundleDir, CDIR, 'the converted project is open');
+  const itemsBefore = b.state().items.length;
+  // presence is our own heartbeat (removed as we leave): everything else must stay as it is
+  const origFiles = () => [...tauri.files.keys()].filter((k) => k.indexOf(CPROJ + '/') === 0 && k.indexOf('/presence/') < 0).sort();
+  const origKeys = origFiles();
+  const origSnap = origKeys.map((k) => tauri.files.get(k));
+  nextOpenDir = 'C:/Users/me/Copies';
+  tauri.dirs.add('C:/Users/me/Copies');
+  b.menuClick('file', /^Save as…/);
+  const sa = doc.querySelector('#modalHost #optNameIn');
+  ok(sa && sa.value === 'Exported', 'name prompt prefilled with the current name');
+  sa.value = 'Exported copy';
+  b.click(doc.querySelector('#modalHost #optNameOk'));
+  const SPROJ = 'C:/Users/me/Copies/Exported copy', SMARK = SPROJ + '/Exported copy.headway';
+  ok(await until(() => b.info().bundleDir === SPROJ + '/.headway'), 'switched to the copy — toasts: ' + seenToasts.join(' | '));
+  eq(b.info().bundleMarker, SMARK, 'the copy\'s marker is the open project');
+  eq(b.state().meta.title, 'Exported copy', 'title is the new name');
+  ok(JSON.parse(tauri.files.get(SMARK)).id !== JSON.parse(tauri.files.get(CMARK)).id, 'the copy has a different bundle id');
+  eq(b.state().items.length, itemsBefore, 'every item came along');
+  ok(tauri.files.has(SPROJ + '/.headway/history/' + myId + '.jsonl'), 'history came along');
+  eq(JSON.parse(window.localStorage.getItem('headway-recents-v1'))[0].path, SMARK, 'recents: the copy on top');
+  eq(window.document.title, 'Exported copy — Headway', 'window title follows');
+  const lw = tauri.log.filter((l) => l.op === 'watch').pop();
+  eq(lw && lw.path, SPROJ + '/.headway', 'the watcher follows the copy');
+  await settle(6);
+  const changed = origKeys.filter((k, i) => tauri.files.get(k) !== origSnap[i]);
+  eq(changed, [], 'the original is untouched');
+  eq(origFiles(), origKeys, '…not a file added or removed');
+
+  section('Save as… onto an existing folder is refused');
+  seenToasts.length = 0;
+  const beforeSa = [...tauri.files.keys()].sort().join('|');
+  b.menuClick('file', /^Save as…/);
+  doc.querySelector('#modalHost #optNameIn').value = 'Exported copy';
+  b.click(doc.querySelector('#modalHost #optNameOk'));
+  ok(await until(() => seenToasts.some((t) => /already exists/.test(t))), 'toast: already exists — ' + seenToasts.join(' | '));
+  eq(b.info().bundleMarker, SMARK, 'still on the same project');
+  eq([...tauri.files.keys()].sort().join('|'), beforeSa, 'nothing written');
 
   await fixes();
   await presence();
@@ -512,13 +587,15 @@ async function openFresh(name, tauriOpts) {
   const b = boot(tauri, { localStorage: { 'headway-user-v2': JSON.stringify(FIXER), 'headway-user-v1': FIXER.name } });
   const fixture = b.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
   const contents = b.RB.migrateFromState(fixture, SEED_USER, T0);
-  const dir = 'C:/Users/me/OneDrive/' + name + '.headway';
-  await b.HD.createBundle(dir, contents);
-  await b.HA.openBundleDoc(dir);
+  const proj = 'C:/Users/me/OneDrive/' + name;
+  const dir = proj + '/.headway';
+  const marker = proj + '/' + name + '.headway';
+  await b.HD.createBundle(proj, contents);
+  await b.HA.openBundleDoc(marker);
   const pid = contents.headway.plans[0].id;
   const vId = b.doc.querySelector('#rows .bar:not(.ms)[data-bar]').getAttribute('data-bar');
   const S = {
-    tauri, b, dir, pid, vId, fixture,
+    tauri, b, dir, proj, marker, pid, vId, fixture,
     path: (id, plan) => dir + '/plans/' + (plan || pid) + '/items/' + id + '.json',
     disk: (id, plan) => JSON.parse(tauri.files.get(S.path(id, plan))),
     item: (id) => b.state().items.find((i) => i.id === (id || vId)),
@@ -634,7 +711,7 @@ async function fixes() {
     eq(S.item().feature === 'A1', false, 'the document is Plan B\'s');
   }
 
-  section('F1+F7/T2b+T8: edit during an in-flight flush, then open an .xlsx (openPath) → edit on disk, xlsx watcher alive');
+  section('F1+F7/T2b+T8: edit during an in-flight flush, then Open… an .xlsx → edits on disk in the first project, the converted one watched');
   {
     const S = await openFresh('T2b');
     const blob = await S.b.window.RMExcel.exportWorkbook(S.b.RB.exportableState(S.b.state()), {});
@@ -646,28 +723,26 @@ async function fixes() {
     S.set('feature', 'A1');
     ok(await until(() => st.hit.length > 0), 'flush in flight');
     S.set('notes', 'N2');
-    const opening = S.b.HD.openPath('C:/tmp/Solo.xlsx');
-    // give the workbook import every chance to finish first: the fix holds it
-    // behind the stalled flush, the bug let it adopt the path (and its watcher) early
-    const early = await until(() => S.b.HD.currentPath() != null, 1500);
-    eq(early, false, 'the xlsx open waits for the bundle flush');
-    eq(S.b.info().docKind, 'bundle', 'still the bundle document meanwhile');
+    const opening = S.b.HA.openFromPath('C:/tmp/Solo.xlsx');
+    // give the conversion every chance to finish first: it must wait for the
+    // stalled flush before the document (and the watcher) change
+    const early = await until(() => S.b.info().bundleDir !== S.dir, 1500);
+    eq(early, false, 'the conversion waits for the bundle flush');
+    eq(S.b.info().docKind, 'bundle', 'still the first project meanwhile');
     st.release();
     await opening;
     st.restore();
     await settle();
-    eq(S.b.info().docKind, 'xlsx', 'xlsx open');
-    eq(S.b.HD.currentPath(), 'C:/tmp/Solo.xlsx', 'path adopted');
-    eq(S.b.HD.bundleDir(), null, 'folder left');
+    eq(S.b.info().bundleDir, 'C:/tmp/Solo/.headway', 'the converted project is open');
+    eq(S.b.HD.currentPath(), null, 'no xlsx path adopted');
     const d = S.disk(S.vId);
-    eq([d.fields.feature, d.fields.notes], ['A1', 'N2'], 'both edits on disk under the bundle plan');
-    ok(S.tauri.watching(), 'the xlsx watcher is active after bundle → xlsx');
-    ok(!(S.tauri.watchOpts() || {}).recursive, '…non-recursive (a file watch on the parent)');
+    eq([d.fields.feature, d.fields.notes], ['A1', 'N2'], 'both edits on disk under the first project');
+    ok(S.tauri.watching() && (S.tauri.watchOpts() || {}).recursive, 'a recursive watch is active after the switch');
     const lastWatch = S.tauri.log.filter((l) => l.op === 'watch').pop();
-    eq(lastWatch && lastWatch.path, 'C:/tmp', '…on the file\'s parent folder');
+    eq(lastWatch && lastWatch.path, 'C:/tmp/Solo/.headway', '…on the new project\'s .headway/');
     const ops = S.tauri.log.map((l) => l.op);
-    ok(ops.lastIndexOf('unwatch') < ops.lastIndexOf('watch'), 'no unwatch after the xlsx watch (leave ran first)');
-    eq(S.b.state().meta.title, 'Solo', 'the workbook is the document');
+    ok(ops.lastIndexOf('unwatch') < ops.lastIndexOf('watch'), 'no unwatch after the new watch (leave ran first)');
+    eq(S.b.state().meta.title, 'Solo', 'the converted workbook is the document');
   }
 
   section('F1/T2c: edit during an in-flight flush, then beforeClose → nothing dropped');
@@ -704,7 +779,7 @@ async function fixes() {
     // second session on the same folder: our history file read is held
     const b2 = boot(S.tauri, { localStorage: { 'headway-user-v2': JSON.stringify(FIXER), 'headway-user-v1': FIXER.name } });
     const st = stall(S.tauri, 'readTextFile', (p) => p === hp);
-    await b2.HA.openBundleDoc(S.dir);
+    await b2.HA.openBundleDoc(S.marker);
     ok(await until(() => st.hit.length > 0), 'history read in flight (held)');
     b2.click(b2.doc.querySelector('#rows .row.item[data-id="' + S.vId + '"] .r-num'));
     const setB2 = (f, v) => {
@@ -1194,7 +1269,7 @@ async function presence() {
   await settle(6);
   eq(presenceWrites(S2.tauri).length, mark, 'no presence write after beforeClose');
   // reopening re-arms it (the same id, a fresh file)
-  await S2.b.HA.openBundleDoc(S2.dir);
+  await S2.b.HA.openBundleDoc(S2.marker);
   ok(await until(() => S2.tauri.files.has(own2)), 'reopen writes the heartbeat again');
   eq(S2.b.info().presenceOn, true, 're-armed');
   await S2.b.HA.closeBundleSession();
@@ -1334,7 +1409,7 @@ async function importFlow() {
 
   section('Auto timeline after a peer change: the dry run sees the peer, the click keeps their edit');
   {
-    const DIR3 = 'C:/Users/me/OneDrive/Capacity.headway';
+    const PROJ3 = 'C:/Users/me/OneDrive/Capacity';
     const capDoc = b.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
     capDoc.meta.capacityEnabled = true; capDoc.meta.planLevel = 'feature'; capDoc.meta.capMode = 'person';
     capDoc.team = [{ id: 'solo', name: 'Solo', capType: 'Development', weekHours: {}, capacity: 1 }];
@@ -1343,12 +1418,12 @@ async function importFlow() {
     pile.forEach((i) => { i.locked = false; i.done = false; i.capType = 'Development'; i.capMult = 1; i.startDay = 10; i.durDays = 5; i.deps = []; i.stories = []; });
     const c3 = b.RB.migrateFromState(capDoc, SEED_USER, T0);
     const pid3 = c3.headway.plans[0].id;
-    await b.HD.createBundle(DIR3, c3);
-    await b.HA.openBundleDoc(DIR3);
+    await b.HD.createBundle(PROJ3, c3);
+    await b.HA.openBundleDoc(PROJ3 + '/Capacity.headway');
     await settle();
     eq(b.info().docKind, 'bundle', 'capacity bundle open');
     // the render above computed (and memoized) the band's ⚡ dry run
-    const pPath = DIR3 + '/plans/' + pid3 + '/items/' + pile[0].id + '.json';
+    const pPath = PROJ3 + '/.headway/plans/' + pid3 + '/items/' + pile[0].id + '.json';
     const env = JSON.parse(tauri.files.get(pPath));
     env.fields.feature = 'Renamed by a peer'; env.fieldsAt.feature = T2; env.updatedAt = T2; env.updatedBy = 'peer-zz999'; env.rev += 1;
     tauri.files.set(pPath, JSON.stringify(env));

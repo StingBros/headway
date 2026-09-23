@@ -445,6 +445,15 @@
     return { headway: +o.headway, id: String(o.id), title: o.title == null ? '' : String(o.title) };
   };
 
+  // a plan's meta envelope with meta.title set (Save as… copies); only the
+  // title field is re-stamped, every other field keeps its stamp
+  RMBundle.retitleMeta = function (env, title, userId, nowIso) {
+    var ent = RMBundle.unwrap(env) || { id: 'meta' };
+    ent.meta = isObj(ent.meta) ? ent.meta : {};
+    ent.meta.title = String(title);
+    return RMBundle.wrapMeta(ent, env || null, userId, nowIso);
+  };
+
   if (typeof module !== 'undefined' && module.exports) module.exports = RMBundle;
   root.RMBundle = RMBundle;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -97,7 +97,7 @@
   // ---- shared-bundle (folder) document — pure merge rules in js/bundle.js,
   // filesystem in js/desktop.js; this file wires the two into the editor
   var docKind = 'xlsx';      // 'xlsx' (single file) | 'bundle' (folder of per-entity shards)
-  var bundleDir = null;      // absolute path of the open <Title>.headway folder
+  var bundleDir = null;      // the open project's hidden <Project>/.headway data folder (every shard lives below it)
   var activePlanId = null;   // sub-bundle this machine is viewing (per machine, never shared)
   var planList = [];         // headway.json plans, tombstones included
   var lastCanon = {};        // 'kind/id' → canonical entity string as of the last disk read/write
@@ -116,7 +116,8 @@
   var historyCache = null;   // {userId: [lines]} read from history/
   var historyLoad = null;    // promise: ownLines reconciled with disk (history writes wait on it)
   var historyMemo = null;    // merged, plan-filtered view; dropped on any change
-  var resumeInfo = null;     // {bundleDir, activePlanId} from the ui snapshot, consumed by resumeBundle()
+  var resumeInfo = null;     // {marker, activePlanId} from the ui snapshot, consumed by resumeBundle()
+  var bundleMarker = null;   // <Project>/<Project>.headway of the open project (recents, resume)
   var planDocCache = {};     // planId → assembled state for the Compare overlay
   var planLoading = {};      // planId → true while its readPlan is in flight
   var deferredExternal = []; // peer envelopes held back while a drag touches their entity
@@ -179,12 +180,12 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showRange: showRange, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioHideUnset: prioHideUnset, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColW: plColW, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy, docKind: docKind, bundleDir: bundleDir, activePlanId: activePlanId };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showRange: showRange, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioHideUnset: prioHideUnset, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColW: plColW, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy, docKind: docKind, bundleMarker: bundleMarker, activePlanId: activePlanId };
   }
   // the snapshot an .xlsx carries: a workbook must never re-link a folder
   function exportUiSnapshot() {
     var ui = uiSnapshot();
-    delete ui.docKind; delete ui.bundleDir; delete ui.activePlanId;
+    delete ui.docKind; delete ui.bundleMarker; delete ui.activePlanId;
     return ui;
   }
   var COLOR_MODES = [['workstream', 'Workstream'], ['epic', 'Epic'], ['assignee', 'Assignee'], ['priority', 'Priority'], ['type', 'Item type']];
@@ -267,8 +268,9 @@
     }
     // a folder session is re-linked by resumeBundle() (desktop only), never
     // adopted straight from a snapshot
-    resumeInfo = ui.docKind === 'bundle' && ui.bundleDir
-      ? { bundleDir: ui.bundleDir, activePlanId: ui.activePlanId || null } : null;
+    // (the PR 1 snapshot's bundleDir named a folder layout that is gone)
+    resumeInfo = ui.docKind === 'bundle' && ui.bundleMarker
+      ? { marker: ui.bundleMarker, activePlanId: ui.activePlanId || null } : null;
   }
 
   var localSaveBroken = false;
@@ -1185,6 +1187,7 @@
     clearTimeout(bundleFlushTimer);
     docKind = 'bundle';
     bundleDir = dir;
+    bundleMarker = res.marker || (HeadwayDesktop.markerPath ? HeadwayDesktop.markerPath() : null);
     activePlanId = res.planId;
     planList = RMBundle.mergePlanList([], res.plans || []);
     lastCanon = {}; lastEnv = {};
@@ -1225,7 +1228,7 @@
     validation = RM.validate(state);
     saveLocal();
     startPresence(); // first heartbeat now (selection already cleared), then every PRESENCE_MS
-    noteRecent(dir, 'bundle'); // now that the live title is this document's
+    noteRecent(bundleMarker, 'bundle'); // now that the live title is this document's
     if (opts.stayOnStart) render(); else enterEditor();
     var cur = planEntry(activePlanId);
     var live = livePlans();
@@ -1251,10 +1254,11 @@
     }
     return Promise.resolve();
   }
-  function openBundleDoc(dir, planId) {
+  // marker = <Project>/<Project>.headway
+  function openBundleDoc(marker, planId) {
     if (!window.HeadwayDesktop || !HeadwayDesktop.openBundle) return Promise.resolve(null);
     return settleCurrentDoc().then(function () {
-      return HeadwayDesktop.openBundle(dir, planId || undefined);
+      return HeadwayDesktop.openBundle(marker, planId || undefined);
     }).then(function (res) {
       adoptBundle(res);
       return res;
@@ -1270,7 +1274,7 @@
     resumeInfo = null;
     if (!info || !window.HeadwayDesktop || !HeadwayDesktop.openBundle) return Promise.resolve(null);
     var onStart = document.body.classList.contains('start');
-    return HeadwayDesktop.openBundle(info.bundleDir, info.activePlanId || undefined).then(function (res) {
+    return HeadwayDesktop.openBundle(info.marker, info.activePlanId || undefined).then(function (res) {
       adoptBundle(res, { stayOnStart: onStart });
       return res;
     }, function (err) {
@@ -1289,7 +1293,7 @@
     closing = flushBundle().catch(function () { /* toasted already */ }).then(function () {
       return stopPresence(bundleDir, userId()); // heartbeat off + our file gone before the session forgets the folder
     }).then(function () {
-      docKind = 'xlsx'; bundleDir = null; activePlanId = null; planList = [];
+      docKind = 'xlsx'; bundleDir = null; bundleMarker = null; activePlanId = null; planList = [];
       lastCanon = {}; lastEnv = {}; pendingHistory = []; ownLines = [];
       localAt = {}; localVal = {}; planGone = false;
       historyCache = null; historyMemo = null; historyLoad = null;
@@ -1534,9 +1538,9 @@
   // nothing shared is written
   function switchPlan(id) {
     if (!window.HeadwayDesktop || !bundleDir || id === activePlanId) return Promise.resolve();
-    var dir = bundleDir, prevId = activePlanId;
+    var marker = bundleMarker, prevId = activePlanId;
     return flushBundle().catch(function () { /* toasted */ }).then(function () {
-      return HeadwayDesktop.openBundle(dir, id);
+      return HeadwayDesktop.openBundle(marker, id);
     }).then(function (res) {
       // comparing with the plan being activated: flip the overlay to the one we leave
       var cmp = compareOptId === id ? prevId : compareOptId;
@@ -1630,59 +1634,127 @@
   }
 
   // ---- File menu actions (desktop only — the browser build hides them)
-  function safeFolderName(s) {
-    return String(s || '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Roadmap';
-  }
+  // st becomes a new project folder inside a parent the user picks:
+  // <parent>/<Title>/<Title>.headway + <Title>/.headway/ (" (2)" when the
+  // name is taken — never written into an existing folder), then it opens.
   function createSharedFolder(st, title, doneMsg) {
     if (!window.HeadwayDesktop || !HeadwayDesktop.pickFolder) return Promise.resolve(null);
     return settleCurrentDoc().then(function () {
       return HeadwayDesktop.pickFolder();
     }).then(function (parent) {
       if (!parent) return null;
-      var dir = String(parent).replace(/[\\/]+$/, '') + '/' + safeFolderName(title) + '.headway';
-      var exists = HeadwayDesktop.pathExists ? HeadwayDesktop.pathExists(dir) : Promise.resolve(false);
-      return exists.then(function (there) {
-        if (there) {
-          // never write into an existing bundle: it would silently merge two roadmaps
-          toast('A shared folder “' + safeFolderName(title) + '.headway” already exists there — pick another folder or rename the roadmap', 'err');
-          return null;
-        }
-        var contents = RMBundle.migrateFromState(st, userId(), new Date().toISOString());
-        return HeadwayDesktop.createBundle(dir, contents).then(function () {
-          return openBundleDoc(dir);
-        }).then(function (res) {
-          if (res && doneMsg) toast(doneMsg + ' “' + safeFolderName(title) + '.headway”');
-          return res;
-        });
-      });
+      return createProjectIn(parent, st, doneMsg);
     }).catch(function (err) {
-      toast('Could not create the shared folder: ' + (err && err.message || err), 'err');
+      toast('Could not create the project: ' + (err && err.message || err), 'err');
       return null;
     });
   }
-  function newSharedRoadmap() {
-    promptName('New shared roadmap', 'Roadmap name',
-      'Creates a “name.headway” folder inside the folder you pick next. Put it somewhere synced (OneDrive, SharePoint, Dropbox) and others can open the same roadmap.',
-      '', function (nm) {
-        var st = blankState();
-        st.meta.title = nm;
-        createSharedFolder(st, nm, 'Created shared roadmap');
+  function createProjectIn(parent, st, doneMsg) {
+    var contents = RMBundle.migrateFromState(st, userId(), new Date().toISOString());
+    return HeadwayDesktop.createProject(parent, st.meta.title, contents).then(function (marker) {
+      return openBundleDoc(marker).then(function (res) {
+        if (res && doneMsg) toast(doneMsg + ' “' + projectFolderOf(marker) + '”');
+        return res;
+      });
+    });
+  }
+  // C:/x/Plan (2)/Plan (2).headway → Plan (2)
+  function projectFolderOf(marker) {
+    return String(marker).replace(/[\\/][^\\/]*$/, '').replace(/^.*[\\/]/, '');
+  }
+  // File → Open… / the start page's Open… on the desktop: one picker for a
+  // project marker (<Project>.headway) or a legacy workbook, which converts
+  function openAnyDialog() {
+    if (!window.HeadwayDesktop || !HeadwayDesktop.pickOpenPath) return Promise.resolve(null);
+    return HeadwayDesktop.pickOpenPath().then(function (p) {
+      return p ? openFromPath(p) : null;
+    });
+  }
+  // a marker opens; an .xlsx is converted beside itself and the copy opens
+  function openFromPath(p) {
+    if (/\.xlsx$/i.test(String(p))) {
+      return HeadwayDesktop.readWorkbookAt(p).then(convertLegacy, function (err) {
+        toast('Could not open “' + String(p).replace(/^.*[\\/]/, '') + '”: ' + (err && err.message || err), 'err');
+        return null;
+      });
+    }
+    return openBundleDoc(p).catch(function () { return null; }); // toasted by openBundleDoc
+  }
+  // File → Save as… (desktop): name (prefilled) → parent folder →
+  // <Parent>/<Name>/<Name>.headway + <Name>/.headway/, then the app switches
+  // to it. A project is copied whole (plans, shards, history; no presence;
+  // a NEW docId so the copies never merge); anything else (a session with no
+  // project yet) becomes a new project. An existing target folder is refused.
+  function saveAsProject() {
+    if (!window.HeadwayDesktop || !HeadwayDesktop.pickFolder) return;
+    var bundle = docKind === 'bundle';
+    promptName('Save as', 'Project name',
+      bundle ? 'Copies this project — every plan and its history — into a new folder with this name inside the folder you pick next. The copy is a separate project; this one stays as it is.'
+        : 'Creates a project folder with this name inside the folder you pick next.',
+      (state && state.meta.title) || 'Roadmap', function (nm) {
+        var name = RMBundle.projectName(nm);
+        var parent;
+        settleCurrentDoc().then(function () {
+          return HeadwayDesktop.pickFolder();
+        }).then(function (p) {
+          if (!p) return null;
+          parent = String(p).replace(/[\\/]+$/, '');
+          var target = parent + '/' + name;
+          return HeadwayDesktop.pathExists(target).then(function (there) {
+            if (there) {
+              toast('A folder named “' + name + '” already exists there — pick another name or folder', 'err');
+              return null;
+            }
+            if (bundle && bundleDir) {
+              return HeadwayDesktop.copyProject(bundleDir, target, nm).then(function (marker) {
+                return openBundleDoc(marker);
+              });
+            }
+            var st = RM.clone(state);
+            st.meta.title = nm;
+            var contents = RMBundle.migrateFromState(st, userId(), new Date().toISOString());
+            return HeadwayDesktop.createBundle(target, contents).then(function (marker) {
+              return openBundleDoc(marker);
+            });
+          }).then(function (res) {
+            if (res) toast('Saved as “' + name + '” — now editing the copy');
+            return res;
+          });
+        }).catch(function (err) {
+          toast('Could not save as: ' + (err && err.message || err), 'err');
+        });
       });
   }
-  // the open .xlsx becomes a folder (the workbook itself is left untouched)
-  function convertToShared() {
-    if (docKind === 'bundle') return;
-    var st = RM.clone(state);
-    createSharedFolder(st, st.meta.title, 'Converted to shared roadmap');
-  }
-  function openSharedRoadmap() {
-    if (!window.HeadwayDesktop || !HeadwayDesktop.openBundleDialog) return;
-    settleCurrentDoc().then(function () {
-      return HeadwayDesktop.openBundleDialog();
-    }).then(function (res) {
-      if (res) adoptBundle(res);
+  // File → Open and Convert Legacy File…: an .xlsx picker, same conversion
+  function convertLegacyDialog() {
+    if (!window.HeadwayDesktop || !HeadwayDesktop.pickWorkbook) return Promise.resolve(null);
+    return HeadwayDesktop.pickWorkbook().then(function (pick) {
+      return pick ? convertLegacy(pick) : null;
     }, function (err) {
-      toast('Could not open the shared roadmap: ' + (err && err.message || err), 'err');
+      toast('Could not open: ' + (err && err.message || err), 'err');
+      return null;
+    });
+  }
+  // pick = {path, name, buffer}. The desktop never edits a workbook in place:
+  // the legacy file becomes a project folder BESIDE it (named after its title,
+  // " (2)" on a collision), the workbook is left untouched, the project opens.
+  // An unreadable workbook opens nothing.
+  function convertLegacy(pick) {
+    var parent = String(pick.path).replace(/[\\/][^\\/]*$/, '');
+    var imported;
+    return RMExcel.importWorkbook(pick.buffer).then(function (r) {
+      imported = r;
+    }).then(function () {
+      var st = RM.normalizeState(imported.state);
+      // a legacy desktop workbook's title WAS its file name
+      st.meta.title = titleFromFileName(pick.name);
+      return settleCurrentDoc().then(function () {
+        if (imported.ui) applyUi(imported.ui); // the workbook carries the view prefs too
+        return createProjectIn(parent, st, 'Converted to');
+      });
+    }).catch(function (err) {
+      toast('Could not convert “' + pick.name + '”: ' + (err && err.message || err), 'err');
+      return null;
     });
   }
   // bundle mode: File → Import from Excel… merges a workbook INTO the open
@@ -10027,27 +10099,22 @@
   function menuItems(name) {
     var isMacDesktop = !!window.HeadwayDesktop && navigator.platform.indexOf('Mac') === 0;
     function openProject() {
-      if (window.HeadwayDesktop) HeadwayDesktop.openDialog();
+      if (window.HeadwayDesktop) openAnyDialog();
       else $('#filePick').click();
     }
-    function toggleAutoSave() {
-      autoSave = !autoSave;
-      saveLocal(); renderTopbar();
-      if (autoSave) scheduleAutoSave();
-      toast('Auto save ' + (autoSave ? 'on — writes to the open file' : 'off'));
-    }
-    // shared folders are desktop-only; in a bundle Save becomes an export
-    // and the single-file items (Save as, Auto save, Convert) step aside
+    // the desktop app edits projects (folders) only: one Open for a project
+    // or a legacy .xlsx (which converts), Save is an .xlsx export, Save as…
+    // copies the project. The browser keeps its workbook flow.
     var desk = !!window.HeadwayDesktop;
     var bundle = docKind === 'bundle';
-    var shared = [
-      desk ? { icon: 'folder-plus', nativeIcon: 'Add', label: 'New shared roadmap…', fn: newSharedRoadmap } : null,
-      desk ? { icon: 'folder-open', label: 'Open shared roadmap…', fn: openSharedRoadmap } : null,
-      desk && !bundle ? { icon: 'folder-sync', label: 'Convert to shared folder…', fn: convertToShared } : null
-    ];
+    var openItem = { icon: 'folder-open', label: desk ? 'Open…' : 'Open project…', fn: openProject };
+    var convertItem = desk ? { icon: 'file-input', label: 'Open and Convert Legacy File…', fn: convertLegacyDialog } : null;
     var saveItem = bundle
       ? { icon: 'file-spreadsheet', label: 'Export .xlsx…', fn: exportXlsx }
-      : { icon: 'download', label: 'Save', kbd: '⌘S', fn: function () { $('#btnSave').click(); } };
+      : desk
+        ? { icon: 'download', label: 'Save…', kbd: '⌘S', fn: function () { $('#btnSave').click(); } }
+        : { icon: 'download', label: 'Save', kbd: '⌘S', fn: function () { $('#btnSave').click(); } };
+    var saveAsItem = desk ? { icon: 'save', label: 'Save as…', kbd: '⇧⌘S', fn: saveAsProject } : null;
     // a workbook merged INTO the open shared roadmap (add-only)
     var importItem = desk && bundle ? { icon: 'file-input', label: 'Import from Excel…', fn: importFromExcel } : null;
     if (name === 'macApp') {
@@ -10057,15 +10124,14 @@
       // MultipleDocuments etc. are full-colour pictograms and look out of
       // place next to the template ones, so those items carry no icon.
       return [
-        { icon: 'file-plus-2', nativeIcon: 'Add', label: 'New project', fn: newProjectModal },
-        { icon: 'folder-open', label: 'Open project', fn: openProject },
-        shared[0], shared[1], shared[2],
+        { icon: 'file-plus-2', nativeIcon: 'Add', label: 'New project…', fn: newProjectModal },
+        openItem,
+        convertItem,
         { icon: 'file-spreadsheet', label: 'Download template', fn: downloadTemplate },
         { sep: true },
         saveItem,
+        saveAsItem,
         importItem,
-        bundle ? null : { icon: 'save', label: 'Save as…', kbd: '⇧⌘S', fn: function () { window.HeadwayApp.save(true); } },
-        bundle ? null : { icon: 'timer-reset', label: 'Auto save', checked: autoSave, fn: toggleAutoSave },
         { sep: true },
         { icon: 'share', nativeIcon: 'Share', label: 'Export…', fn: function () { $('#btnExport').click(); } },
         { icon: 'refresh-cw', label: 'Sync with Jira…', fn: function () { HeadwayJira.syncModal(); } },
@@ -10078,18 +10144,14 @@
         { icon: 'house', label: 'Start page', fn: showStart },
         { sep: true },
         { icon: 'file-plus-2', label: 'New project…', fn: newProjectModal },
-        { icon: 'folder-open', label: 'Open project…', fn: openProject },
-        desk ? { sep: true } : null,
-        shared[0], shared[1], shared[2],
+        openItem,
+        convertItem,
         { sep: true },
         saveItem,
+        saveAsItem,
         importItem,
-        desk && !bundle
-          ? { icon: 'save', label: 'Save as…', fn: function () { window.HeadwayApp.save(true); } }
-          : null,
-        desk && !bundle
-          ? { icon: 'timer-reset', label: 'Auto save', checked: autoSave, fn: toggleAutoSave }
-          : null,
+        // auto-save writes an .xlsx in place — the desktop never does that
+        // any more (projects sync shard by shard); the browser has no file
         { sep: true },
         { icon: 'share', label: 'Export…', fn: function () { $('#btnExport').click(); } },
         window.HeadwayJira ? { icon: 'refresh-cw', label: 'Sync with Jira…', fn: function () { HeadwayJira.syncModal(); } } : null,
@@ -13035,21 +13097,24 @@
   var RECENTS_KEY = 'headway-recents-v1';
   var SESSION_KEY = 'headway-in-editor';
 
+  // projects only: the desktop no longer opens an .xlsx in place, so
+  // legacy workbook entries (kind 'xlsx' or no kind) are dropped on read
   function loadRecents() {
     try {
       var r = JSON.parse(localStorage.getItem(RECENTS_KEY) || '[]');
-      return Array.isArray(r) ? r : [];
+      return Array.isArray(r) ? r.filter(function (x) { return x && x.kind === 'bundle' && x.path; }) : [];
     } catch (e) { return []; }
   }
   function saveRecents(list) {
     try { localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, 12))); } catch (e) { /* storage optional */ }
   }
-  // upsert a path at the top of the recents; title comes from the live doc.
-  // kind: 'bundle' (a .headway folder) | 'xlsx' (default — legacy entries too)
+  // upsert a project marker (<Project>/<Project>.headway) at the top of the
+  // recents; title comes from the live doc. Anything but kind 'bundle' is
+  // ignored: workbooks are import/export only on the desktop.
   function noteRecent(path, kind) {
-    if (!path) return;
+    if (!path || kind !== 'bundle') return;
     var list = loadRecents().filter(function (r) { return r.path !== path; });
-    list.unshift({ path: path, title: (state && state.meta.title) || '', at: Date.now(), kind: kind === 'bundle' ? 'bundle' : 'xlsx' });
+    list.unshift({ path: path, title: (state && state.meta.title) || '', at: Date.now(), kind: 'bundle' });
     saveRecents(list);
     if (document.body.classList.contains('start')) renderStartPage();
   }
@@ -13090,9 +13155,8 @@
     var recents = desktop ? loadRecents() : [];
     var rows = recents.map(function (r) {
       var base = String(r.path).replace(/^.*[\\/]/, '').replace(/\.headway$/i, '');
-      var isBundle = r.kind === 'bundle';
-      return '<div class="sp-row" role="button" tabindex="0" data-sp-open="' + esc(r.path) + '" data-sp-kind="' + (isBundle ? 'bundle' : 'xlsx') + '">' +
-        '<span class="sp-ico"><i data-lucide="' + (isBundle ? 'folder-open' : 'file-spreadsheet') + '"></i></span>' +
+      return '<div class="sp-row" role="button" tabindex="0" data-sp-open="' + esc(r.path) + '" data-sp-kind="bundle">' +
+        '<span class="sp-ico"><i data-lucide="folder-open"></i></span>' +
         '<span class="sp-rmain"><span class="sp-rtitle">' + esc(r.title || base) + '</span>' +
         '<span class="sp-rpath">' + esc(r.path) + '</span></span>' +
         '<span class="sp-rtime">' + esc(relTime(r.at)) + '</span>' +
@@ -13118,8 +13182,7 @@
       '</div></div>' +
       '<div class="sp-actions">' +
       '<button class="primary sp-big" data-sp-new><i data-lucide="file-plus-2"></i>New project…</button>' +
-      '<button class="sp-big" data-sp-opendlg><i data-lucide="folder-open"></i>Open…</button>' +
-      (desktop ? '<button class="sp-big" data-sp-openbundle title="Open a .headway folder shared through OneDrive, SharePoint or Dropbox"><i data-lucide="folder-open"></i>Open shared roadmap…</button>' : '') +
+      '<button class="sp-big" data-sp-opendlg' + (desktop ? ' title="Open a project (.headway), or an .xlsx — which is converted to a project beside it"' : '') + '><i data-lucide="folder-open"></i>Open…</button>' +
       '</div>' +
       '<div class="sp-recent-hd">Recent</div>' +
       '<div class="sp-recents">' +
@@ -13227,12 +13290,11 @@
     if (e.target.closest('[data-sp-new]')) { guardUnsaved(newProjectModal); return; }
     if (e.target.closest('[data-sp-opendlg]')) {
       guardUnsaved(function () {
-        if (window.HeadwayDesktop) HeadwayDesktop.openDialog();
+        if (window.HeadwayDesktop) openAnyDialog();
         else $('#filePick').click();
       });
       return;
     }
-    if (e.target.closest('[data-sp-openbundle]')) { openSharedRoadmap(); return; }
     if (e.target.closest('[data-sp-settings]')) { personalSettingsModal(); return; }
     if (e.target.closest('[data-sp-update]')) { updateButtonClick(); return; }
     if (e.target.closest('[data-sp-notes]')) { openReleaseNotes(); return; }
@@ -13244,22 +13306,13 @@
   });
 
   function openRecent(path) {
-    if (!window.HeadwayDesktop || !HeadwayDesktop.openPath) return;
-    var entry = loadRecents().filter(function (r) { return r.path === path; })[0];
-    if (entry && entry.kind === 'bundle') {
-      openBundleDoc(path).catch(function () { dropRecent(path); renderStartPage(); });
-      return;
-    }
-    HeadwayDesktop.openPath(path).catch(function (err) {
-      toast('Could not open “' + String(path).replace(/^.*[\\/]/, '') + '” — ' +
-        (err && err.message || err), 'err');
-      dropRecent(path);
-      renderStartPage();
-    });
+    if (!window.HeadwayDesktop || !HeadwayDesktop.openBundle) return;
+    openBundleDoc(path).catch(function () { dropRecent(path); renderStartPage(); });
   }
 
-  // every project starts life as a file on disk: desktop picks a location
-  // first; the browser fires the .xlsx download the moment it's created
+  // every project starts life on disk: the desktop creates a project folder
+  // (<Name>/<Name>.headway + <Name>/.headway/) inside a folder picked next;
+  // the browser fires the .xlsx download the moment it's created
   function newProjectModal() {
     var desktop = !!window.HeadwayDesktop;
     openModal(
@@ -13269,7 +13322,7 @@
       '<div class="m-sec"><label>Project name</label>' +
       '<input id="npName" style="width:100%" maxlength="120" placeholder="Q1 Platform Roadmap">' +
       '<div class="m-hint">' + (desktop
-        ? 'Every project lives in an .xlsx file — you’ll pick where to save it next. Edits then auto-save to that file.'
+        ? 'Creates a project folder with this name inside the folder you pick next. Put it somewhere synced (OneDrive, SharePoint, Dropbox) and others can open and edit it at the same time.'
         : 'Every project lives in an .xlsx file — a copy downloads right away; use Save to keep it current.') +
       '</div></div></div>' +
       '<div class="m-foot"><button data-m="cancel">Cancel</button>' +
@@ -13308,18 +13361,9 @@
   }
 
   function createProjectOnDisk(st) {
+    if (window.HeadwayDesktop) return createSharedFolder(st, st.meta.title, 'Created');
     var fname = ((st.meta.title || '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Roadmap') + '.xlsx';
     RMExcel.exportWorkbook(st, exportUiSnapshot()).then(function (blob) {
-      if (window.HeadwayDesktop) {
-        // the file must exist before the project does — Save dialog first
-        return HeadwayDesktop.saveBlob(blob, fname, true).then(function (path) {
-          if (!path) { toast('Project not created — no file chosen'); return; }
-          // the dialog may have picked a different name — the filename wins
-          st.meta.title = titleFromFileName(HeadwayDesktop.basename(path));
-          adoptProject(st, path);
-          toast('Created “' + st.meta.title + '” — ' + HeadwayDesktop.basename(path));
-        });
-      }
       var a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = fname;
@@ -13351,7 +13395,10 @@
   }
 
   function doSave(forceDialog, quiet) {
-    if (docKind === 'bundle') return exportXlsx(); // Save / Save as… = a standalone export
+    if (docKind === 'bundle') return exportXlsx(); // Save = a standalone export
+    // the desktop never writes an .xlsx in place: a document that is not a
+    // project yet (a session restored from app storage) becomes one
+    if (window.HeadwayDesktop) { saveAsProject(); return Promise.resolve(); }
     var btn = $('#btnSave');
     savingNow = true;
     btn.disabled = true; btn.textContent = 'Saving…';
@@ -13514,6 +13561,8 @@
     renderStartPage: renderStartPage,
     // shared bundle (folder) contract — see the comment block in js/desktop.js
     openBundleDoc: openBundleDoc,
+    openFromPath: openFromPath,
+    saveAsProject: saveAsProject,
     applyExternalEntities: applyExternalEntities,
     presenceChanged: presenceChanged,
     plansChanged: plansChanged,
@@ -14086,7 +14135,7 @@
     templateState: templateState,
     getHistory: function () { return docKind === 'bundle' ? historyView().slice() : RM.clone(state.history || []); },
     getInfo: function () {
-      return { docKind: docKind, bundleDir: bundleDir, activePlanId: activePlanId, docSaved: docSaved,
+      return { docKind: docKind, bundleDir: bundleDir, bundleMarker: bundleMarker, activePlanId: activePlanId, docSaved: docSaved,
         undoLen: undoStack.length, redoLen: redoStack.length, plans: RM.clone(planList), peers: RM.clone(peers),
         peerByItem: RM.clone(peerByItem), presenceOn: presenceOn,
         pendingHistory: pendingHistory.length, renderCount: renderCount, userId: readUser().id || null,

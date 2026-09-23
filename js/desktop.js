@@ -10,13 +10,17 @@
   var fs = window.__TAURI__.fs;
 
   var XLSX_FILTER = [{ name: 'Excel workbook', extensions: ['xlsx'] }];
+  var PROJECT_FILTER = [{ name: 'Headway project', extensions: ['headway'] }];
+  var OPEN_FILTER = [{ name: 'Headway project or Excel workbook', extensions: ['headway', 'xlsx'] }];
   var currentPath = null;   // absolute path of the open xlsx (null = unsaved / bundle mode)
   var unwatch = null;       // stops the active directory watcher
   var watchGen = 0;         // bumps on every rewatch so a late event from an old watcher is dropped
   var reloading = false;
 
   // shared-bundle (folder) document — see the "shared bundle" section below
-  var bundleDir = null;      // absolute path of the open <Title>.headway folder
+  var bundleDir = null;      // absolute path of the open project's hidden <Project>/.headway data folder
+  var markerFile = null;     // absolute path of <Project>/<Project>.headway — what the user opened
+  var projectTitle = null;   // the marker's title (the folder is named after it)
   var activePlanId = null;   // sub-bundle whose entity events are applied live
   var lastShardJson = {};    // rel path → canonical envelope JSON we last read or wrote (echo test)
   var bundleWarnings = [];   // {path, err} — shards skipped on read, never fatal
@@ -35,11 +39,11 @@
   }
 
   function markTitle() {
-    var name = bundleDir ? basename(bundleDir).replace(/\.headway$/i, '')
+    var name = markerFile ? (projectTitle || basename(markerFile).replace(/\.headway$/i, ''))
       : currentPath ? basename(currentPath) : null;
     document.title = name ? name + ' — Headway' : 'Headway — Roadmap Planner';
     var t = document.getElementById('docTitle');
-    if (t) t.title = bundleDir || currentPath || '';
+    if (t) t.title = markerFile || currentPath || '';
   }
 
   function setPath(p) {
@@ -52,13 +56,9 @@
     if (p) app().noteRecent(p); // the start page's Recent list
   }
 
-  // migrate the pre-start-page single last-path memory into the recents list
-  (function () {
-    try {
-      var p = localStorage.getItem('headway-last-path');
-      if (p) { app().noteRecent(p); localStorage.removeItem('headway-last-path'); }
-    } catch (e) { /* storage optional */ }
-  })();
+  // the pre-start-page single last-path memory named an .xlsx; recents are
+  // projects only now
+  try { localStorage.removeItem('headway-last-path'); } catch (e) { /* storage optional */ }
 
   // Watch the parent directory, not the file: editors and sync clients
   // (OneDrive included) replace files by rename, which kills a file watch.
@@ -172,8 +172,12 @@
   }
 
   // ------------------------------------------------------- shared bundle
-  // A shared roadmap is a folder, not a file:
-  //   <Title>.headway/headway.json            plan list (merged by plan id)
+  // A project is a folder named after its title:
+  //   <Project>/<Project>.headway             marker the user opens:
+  //                                           {"headway":1,"id":<docId>,"title":…}
+  //   <Project>/.headway/                     hidden; EVERYTHING below lives here
+  //                                           (bundleDir = this folder):
+  //   headway.json                            plan list (merged by plan id)
   //   plans/<planId>/meta.json                meta envelope (id 'meta')
   //   plans/<planId>/{items,phases,team,costs}/<uid>.json   one envelope per entity
   //   history/<userId>.jsonl                  append-only, one writer per file
@@ -457,6 +461,7 @@
     watchGen++;
     if (unwatch) { try { unwatch(); } catch (e) { /* already gone */ } unwatch = null; }
     bundleDir = null; activePlanId = null; lastShardJson = {}; bundleWarnings = [];
+    markerFile = null; projectTitle = null;
     if (!dir || !uid) return Promise.resolve();
     return removePresence(dir, uid).catch(function () { /* best effort */ });
   }
@@ -525,37 +530,68 @@
     });
   }
 
+  // <Project>/<Project>.headway → <Project>/.headway
+  function dataDirOf(marker) { return dirname(norm(marker)) + '/' + RB().DATA_DIR; }
+  function readMarker(marker) {
+    return fs.readTextFile(marker).catch(rejectFriendly).then(function (text) {
+      var m = RB().parseMarker(text);
+      if (!m) throw new Error('“' + basename(marker) + '” is not a Headway project file');
+      return m;
+    });
+  }
+  function writeMarker(projectDir, id, title) {
+    var marker = norm(projectDir).replace(/\/+$/, '') + '/' + basename(projectDir) + RB().MARKER_EXT;
+    return atomicWriteText(marker, RB().markerText(id, title)).then(function () { return marker; });
+  }
+  // names already in a folder (so a new project folder never lands on one)
+  function namesIn(dir) {
+    return fs.exists(dir).then(function (there) { return there ? fs.readDir(dir) : []; })
+      .then(function (entries) { return (entries || []).map(function (e) { return e.name; }); });
+  }
+
   window.HeadwayDesktop = {
     // ---- shared bundle (folder) backend ----
-    // open a <Title>.headway folder; planId defaults to the first live plan.
-    // Resolves {doc, planId, plans, headway, envs, metaEnv, warnings}; the
-    // only hard failure is a missing/invalid headway.json.
-    openBundle: function (dir, planId) {
-      dir = norm(dir).replace(/\/+$/, '');
-      return fs.readTextFile(dir + '/headway.json').catch(rejectFriendly).then(function (text) {
+    // open a project by its <Project>.headway marker file; planId defaults to
+    // the first live plan. Resolves {doc, planId, plans, headway, envs,
+    // metaEnv, warnings, marker}; hard failures: not a marker, no .headway/
+    // data folder beside it, a missing/invalid headway.json.
+    openBundle: function (marker, planId) {
+      marker = norm(marker).replace(/\/+$/, '');
+      if (!/^.+\.headway$/i.test(basename(marker))) return Promise.reject(new Error('Not a Headway project: open the “.headway” file inside the project folder'));
+      var dir = dataDirOf(marker), mk;
+      return readMarker(marker).then(function (m) {
+        mk = m;
+        return fs.exists(dir + '/headway.json').catch(function () { return false; });
+      }).then(function (there) {
+        if (!there) throw new Error('“' + basename(marker) + '” has no project data beside it — the hidden .headway folder is missing');
+        return fs.readTextFile(dir + '/headway.json').catch(rejectFriendly);
+      }).then(function (text) {
         var hw;
-        try { hw = JSON.parse(text); } catch (e) { throw new Error('Not a Headway shared folder: headway.json is not valid JSON'); }
-        if (!isObj(hw) || !Array.isArray(hw.plans)) throw new Error('Not a Headway shared folder: headway.json has no plan list');
+        try { hw = JSON.parse(text); } catch (e) { throw new Error('Not a Headway project: headway.json is not valid JSON'); }
+        if (!isObj(hw) || !Array.isArray(hw.plans)) throw new Error('Not a Headway project: headway.json has no plan list');
         var live = hw.plans.filter(function (p) { return p && p.id && !p.deleted; });
         var pid = planId || (live[0] && live[0].id);
-        if (!pid) throw new Error('This shared folder has no plans');
+        if (!pid) throw new Error('This project has no plans');
         if (bundleDir && bundleDir !== dir) leaveBundle();
         bundleWarnings = [];
         lastShardJson = {};
         return readPlan(dir, pid).then(function (plan) {
           bundleDir = dir;
+          markerFile = marker;
+          projectTitle = mk.title || hw.title || basename(marker).replace(/\.headway$/i, '');
           activePlanId = pid;
           // keeps every xlsx path inert: autosave, renameTo, reload all gate on currentPath
           currentPath = null; lastSig = null; lastStateJson = null;
           markTitle();
           rewatch();
           var a = app();
-          if (a && typeof a.noteRecent === 'function') a.noteRecent(dir, 'bundle');
+          if (a && typeof a.noteRecent === 'function') a.noteRecent(marker, 'bundle');
           return {
             doc: RB().assembleState(plan.meta, plan.envs),
             planId: pid, plans: hw.plans, headway: hw,
             envs: plan.envs, metaEnv: plan.meta,
-            warnings: bundleWarnings.slice()
+            warnings: bundleWarnings.slice(),
+            marker: marker
           };
         });
       });
@@ -645,9 +681,12 @@
     removeShard: removeShard,
 
     // contents = RMBundle.migrateFromState(...): {headway, plans:{<pid>:{meta,
-    // items:[env], …}}, history:{<uid>:[lines]}}. Resolves the folder path.
-    createBundle: function (dir, contents) {
-      dir = norm(dir).replace(/\/+$/, '');
+    // items:[env], …}}, history:{<uid>:[lines]}}. Writes projectDir/.headway/…
+    // then the marker projectDir/<basename>.headway (last, so a marker always
+    // has its data). Resolves the marker path.
+    createBundle: function (projectDir, contents) {
+      projectDir = norm(projectDir).replace(/\/+$/, '');
+      var dir = projectDir + '/' + RB().DATA_DIR;
       var files = []; // [rel, text]
       var shards = []; // [rel, env]
       files.push(['headway.json', JSON.stringify(contents.headway, null, 2) + '\n']);
@@ -677,13 +716,82 @@
         return shards.reduce(function (chain, s) {
           return chain.then(function () { return writeShard(dir, s[0], s[1]); });
         }, Promise.resolve());
-      }).catch(rejectFriendly).then(function () { return dir; });
+      }).then(function () {
+        var hw = contents.headway || {};
+        return writeMarker(projectDir, hw.docId, hw.title);
+      }).catch(rejectFriendly);
     },
-    openBundleDialog: function () {
-      return dialog.open({ directory: true, multiple: false }).then(function (dir) {
-        return dir ? window.HeadwayDesktop.openBundle(dir) : null;
+    // a new project folder inside parentDir, named after the title (" (2)"
+    // on a collision — never written into an existing folder). Resolves the
+    // marker path.
+    createProject: function (parentDir, title, contents) {
+      parentDir = norm(parentDir).replace(/\/+$/, '');
+      return namesIn(parentDir).then(function (names) {
+        var name = RB().uniqueName(RB().projectName(title), names);
+        return window.HeadwayDesktop.createBundle(parentDir + '/' + name, contents);
       });
     },
+    // Save as…: copy the project whose data folder is srcDir into a NEW
+    // project folder destProjectDir (refused if it exists). Every plan and
+    // shard and the history come along; presence does not; headway.json gets
+    // a new docId (the copies must never merge) and every plan's meta the new
+    // title. Resolves the new marker path.
+    copyProject: function (srcDir, destProjectDir, title) {
+      srcDir = norm(srcDir).replace(/\/+$/, '');
+      destProjectDir = norm(destProjectDir).replace(/\/+$/, '');
+      var dest = destProjectDir + '/' + RB().DATA_DIR;
+      var now = new Date().toISOString(), uid = ownUserId || 'headway';
+      var files = [], docId = null;
+      function walk(relDir) {
+        var abs = relDir ? srcDir + '/' + relDir : srcDir;
+        return fs.readDir(abs).then(function (entries) {
+          return (entries || []).reduce(function (chain, e) {
+            var r = relDir ? relDir + '/' + e.name : e.name;
+            return chain.then(function () {
+              if (e.isDirectory) return r === 'presence' ? null : walk(r);
+              if (/\.jsonl?$/i.test(e.name)) files.push(r);
+            });
+          }, Promise.resolve());
+        });
+      }
+      return fs.exists(destProjectDir).then(function (there) {
+        if (there) throw new Error('A folder named “' + basename(destProjectDir) + '” already exists there');
+        return walk('');
+      }).then(function () {
+        return files.sort().reduce(function (chain, r) {
+          return chain.then(function () {
+            return fs.readTextFile(srcDir + '/' + r).then(function (text) {
+              var c = classify(r);
+              if (c.kind === 'plans') {
+                var hw = JSON.parse(text);
+                hw.docId = docId = window.RM.uid('doc');
+                hw.title = title;
+                text = JSON.stringify(hw, null, 2) + '\n';
+              } else if (c.kind === 'meta') {
+                var env = null;
+                try { env = JSON.parse(text); } catch (e) { /* copied as-is */ }
+                if (isEnvelope(env)) text = pretty(RB().canonicalize(RB().retitleMeta(env, title, uid, now)));
+              }
+              return atomicWriteText(dest + '/' + r, text);
+            });
+          });
+        }, Promise.resolve());
+      }).then(function () {
+        if (!docId) throw new Error('Not a Headway project: headway.json is missing');
+        return fs.mkdir(dest + '/presence', { recursive: true });
+      }).then(function () {
+        return writeMarker(destProjectDir, docId, title);
+      }).catch(rejectFriendly);
+    },
+    // pick a <Project>.headway marker and open it; null on cancel
+    openBundleDialog: function () {
+      return dialog.open({ multiple: false, filters: PROJECT_FILTER }).then(function (p) {
+        return p ? window.HeadwayDesktop.openBundle(p) : null;
+      });
+    },
+    markerPath: function () { return markerFile; },
+    projectDir: function () { return markerFile ? dirname(markerFile) : null; },
+    projectTitle: function () { return projectTitle; },
     // a parent folder for a new / converted bundle; null on cancel
     pickFolder: function () {
       return dialog.open({ directory: true, multiple: false }).then(function (d) { return d || null; });
@@ -742,31 +850,30 @@
 
     // ---- xlsx (single-file) backend ----
     // pick an .xlsx and hand back its bytes WITHOUT adopting it — no
-    // currentPath, no watcher, the bundle stays the document (Import from
-    // Excel…). Resolves {path, name, buffer}, or null on cancel.
+    // currentPath, no watcher (Import from Excel…, Open and Convert Legacy
+    // File…). Resolves {path, name, buffer}, or null on cancel.
     pickWorkbook: function () {
       return dialog.open({ multiple: false, filters: XLSX_FILTER }).then(function (p) {
-        if (!p) return null;
-        return fs.readFile(p).then(function (bytes) {
-          // an exact ArrayBuffer: a view may sit inside a larger pool
-          var buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-          return { path: p, name: basename(p), buffer: buf };
-        });
+        return p ? window.HeadwayDesktop.readWorkbookAt(p) : null;
       });
     },
-    // native open dialog → load → remember + watch the path
+    readWorkbookAt: function (p) {
+      return fs.readFile(p).then(function (bytes) {
+        // an exact ArrayBuffer: a view may sit inside a larger pool
+        var buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        return { path: p, name: basename(p), buffer: buf };
+      });
+    },
+    // File → Open…: a project marker or a legacy workbook; null on cancel
+    pickOpenPath: function () {
+      return dialog.open({ multiple: false, filters: OPEN_FILTER }).then(function (p) { return p || null; });
+    },
+    // the one Open: the app opens a marker and converts an .xlsx
     openDialog: function () {
-      dialog.open({ multiple: false, filters: XLSX_FILTER }).then(function (p) {
-        if (!p) return;
-        fs.readFile(p).then(function (bytes) {
-          return app().loadBuffer(bytes.buffer, basename(p)).then(function () {
-            return noteLoadedBytes(bytes);
-          });
-        }).then(function () {
-          setPath(p);
-        }).catch(function (err) {
-          app().toast('Could not open: ' + err.message, 'err');
-        });
+      return window.HeadwayDesktop.pickOpenPath().then(function (p) {
+        var a = app();
+        if (p && a && typeof a.openFromPath === 'function') return a.openFromPath(p);
+        return null;
       });
     },
 
@@ -836,18 +943,6 @@
       var op = window.__TAURI__ && window.__TAURI__.opener;
       if (!op || !op.openUrl) { window.open(url, '_blank', 'noopener'); return Promise.resolve(); }
       return op.openUrl(url).catch(function (err) { app().toast('Could not open link: ' + (err && err.message || err), 'err'); });
-    },
-
-    // open a known path (start page recents) — rejects if unreadable
-    openPath: function (p) {
-      return fs.readFile(p).then(function (bytes) {
-        return app().loadBuffer(bytes.buffer, basename(p)).then(function () {
-          return noteLoadedBytes(bytes);
-        });
-      }).then(function () {
-        setPath(p);
-        return p;
-      });
     },
 
     // rename the open file in place (the title IS the filename). Resolves to

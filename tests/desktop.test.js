@@ -58,7 +58,10 @@ const USER = 'tester-abc12';
 const T0 = '2026-09-01T10:00:00.000Z';
 const T1 = '2026-09-01T10:05:00.000Z';
 const T2 = '2026-09-01T10:10:00.000Z';
-const DIR = 'C:/Users/me/OneDrive/Roadmap.headway';
+// a project: <Project>/<Project>.headway marker + <Project>/.headway/ data
+const PROJ = 'C:/Users/me/OneDrive/Roadmap';
+const DIR = PROJ + '/.headway';            // bundleDir: every shard lives below here
+const MARKER = PROJ + '/Roadmap.headway';  // what the user opens
 
 async function main() {
   const tauri = makeFakeTauri();
@@ -94,15 +97,20 @@ async function main() {
   const fixture = RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
   const contents = RB.migrateFromState(fixture, USER, T0);
   const pid = contents.headway.plans[0].id;
-  const out = await HD.createBundle(DIR, contents);
-  eq(out, DIR, 'createBundle resolves the dir');
-  ok(tauri.files.has(DIR + '/headway.json'), 'headway.json written');
+  const out = await HD.createBundle(PROJ, contents);
+  eq(out, MARKER, 'createBundle resolves the marker path');
+  ok(tauri.files.has(DIR + '/headway.json'), 'headway.json written under .headway/');
+  eq(JSON.parse(tauri.files.get(MARKER)), { headway: 1, id: contents.headway.docId, title: fixture.meta.title }, 'marker at the top: {headway, id, title}');
+  eq([...tauri.files.keys()].filter((f) => f.indexOf(PROJ + '/') === 0 && f.indexOf(DIR + '/') !== 0), [MARKER],
+    'the marker is the ONLY file outside .headway/');
+  ok([...tauri.dirs].filter((d) => d.indexOf(PROJ + '/') === 0).every((d) => d === DIR || d.indexOf(DIR + '/') === 0),
+    'every folder lives under .headway/');
   eq(tauri.files.has(DIR + '/plans/' + pid + '/meta.json'), true, 'meta.json written');
   const shardCount = [...tauri.files.keys()].filter((f) => f.indexOf(DIR + '/plans/' + pid + '/items/') === 0).length;
   eq(shardCount, fixture.items.length, 'one item shard per item');
   ok([...tauri.files.keys()].every((f) => !/\.tmp$/.test(f)), 'no .tmp left behind');
 
-  let opened = await HD.openBundle(DIR);
+  let opened = await HD.openBundle(MARKER);
   eq(opened.planId, pid, 'openBundle picks the first plan');
   eq(opened.doc.items.length, fixture.items.length, 'item count matches the fixture');
   eq(opened.doc.phases.length, fixture.phases.length, 'phase count matches the fixture');
@@ -113,9 +121,14 @@ async function main() {
   eq(HD.bundleDir(), DIR, 'bundleDir set');
   eq(HD.activePlanId(), pid, 'activePlanId set');
   eq(HD.currentPath(), null, 'currentPath stays null in bundle mode');
-  eq(window.document.title, 'Roadmap — Headway', 'title from the folder name');
+  eq(HD.markerPath(), MARKER, 'markerPath set');
+  eq(HD.projectDir(), PROJ, 'projectDir is the marker\'s folder');
+  eq(HD.projectTitle(), fixture.meta.title, 'projectTitle from the marker');
+  eq(opened.marker, MARKER, 'openBundle hands back the marker');
+  eq(window.document.title, fixture.meta.title + ' — Headway', 'window title from the marker title');
+  eq(tauri.watchOpts() && tauri.log.filter((l) => l.op === 'watch').slice(-1)[0].path, DIR, 'the watch root is .headway/ (the marker is never watched)');
   ok(tauri.watching() && tauri.watchOpts().recursive === true, 'recursive watch installed');
-  eq(named('noteRecent').slice(-1)[0].args, [DIR, 'bundle'], 'noteRecent(dir, "bundle")');
+  eq(named('noteRecent').slice(-1)[0].args, [MARKER, 'bundle'], 'noteRecent(marker, "bundle")');
 
   section('corrupt shard is skipped with a warning');
   const itemFiles = [...tauri.files.keys()].filter((f) => f.indexOf(DIR + '/plans/' + pid + '/items/') === 0).sort();
@@ -123,13 +136,13 @@ async function main() {
   const badEnv = JSON.parse(tauri.files.get(badPath));
   const goodText = tauri.files.get(badPath);
   tauri.files.set(badPath, '{');
-  opened = await HD.openBundle(DIR);
+  opened = await HD.openBundle(MARKER);
   eq(opened.doc.items.length, fixture.items.length - 1, 'the corrupt item is missing');
   ok(!opened.doc.items.some((it) => it.id === badEnv.id), 'and it is exactly the corrupt one');
   eq(opened.warnings.length, 1, 'exactly one warning');
   ok(opened.warnings[0].path.indexOf(badPath) >= 0, 'warning names the shard');
   tauri.files.set(badPath, goodText);
-  opened = await HD.openBundle(DIR);
+  opened = await HD.openBundle(MARKER);
   eq(opened.warnings.length, 0, 'clean again');
 
   section('flushShards writes only the changed shards, atomically');
@@ -241,7 +254,7 @@ async function main() {
   const sib2 = JSON.parse(JSON.stringify(merged));
   sib2.fields.notes = 'sibling on open'; sib2.fieldsAt.notes = '2026-09-01T10:20:00.000Z'; sib2.updatedAt = sib2.fieldsAt.notes; sib2.updatedBy = 'peer-zz999';
   tauri.files.set(sibPath, JSON.stringify(sib2));
-  opened = await HD.openBundle(DIR);
+  opened = await HD.openBundle(MARKER);
   ok(!tauri.files.has(sibPath), 'sibling present at open is removed');
   eq(JSON.parse(tauri.files.get(canonPath)).fields.notes, 'sibling on open', 'canonical shard absorbed it');
   eq(opened.doc.items.filter((it) => it.id === idB)[0].notes, 'sibling on open', 'assembled doc reflects the merge');
@@ -307,13 +320,27 @@ async function main() {
 
   section('openBundle failures');
   let err = null;
-  await HD.openBundle('C:/nowhere/Nope.headway').catch((e) => { err = e; });
-  ok(err && /headway\.json|No such file/i.test(err.message), 'missing headway.json rejects: ' + (err && err.message));
-  tauri.dirs.add('C:/x/Bad.headway');
-  tauri.files.set('C:/x/Bad.headway/headway.json', '{"format":"headway-bundle-v1"}');
+  await HD.openBundle('C:/nowhere/Nope/Nope.headway').catch((e) => { err = e; });
+  ok(err && /No such file/i.test(err.message), 'a missing marker rejects: ' + (err && err.message));
+  tauri.dirs.add('C:/x/Bad');
+  tauri.files.set('C:/x/Bad/Bad.headway', RB.markerText('doc-bad', 'Bad'));
   err = null;
-  await HD.openBundle('C:/x/Bad.headway').catch((e) => { err = e; });
+  await HD.openBundle('C:/x/Bad/Bad.headway').catch((e) => { err = e; });
+  ok(err && /\.headway folder is missing/.test(err.message), 'a bare marker (no .headway/ beside it) is refused: ' + (err && err.message));
+  tauri.files.set('C:/x/Bad/.headway/headway.json', '{"format":"headway-bundle-v1"}');
+  err = null;
+  await HD.openBundle('C:/x/Bad/Bad.headway').catch((e) => { err = e; });
   ok(err && /plan list/.test(err.message), 'headway.json without plans rejects');
+  tauri.files.set('C:/x/Junk/Junk.headway', 'hello');
+  err = null;
+  await HD.openBundle('C:/x/Junk/Junk.headway').catch((e) => { err = e; });
+  ok(err && /not a Headway project file/.test(err.message), 'a .headway file that is not a marker is refused: ' + (err && err.message));
+  err = null;
+  await HD.openBundle('C:/x/Bad/.headway').catch((e) => { err = e; });
+  ok(err && /open the “\.headway” file/.test(err.message), 'the data folder itself (the PR 1 layout) is not recognised: ' + (err && err.message));
+  err = null;
+  await HD.openBundle(DIR.replace('/.headway', '') + '.headway').catch((e) => { err = e; });
+  ok(err, 'an old <Title>.headway folder path is not recognised');
   eq(HD.bundleDir(), null, 'a failed open leaves no bundle state');
 
   section('close hook');
@@ -336,13 +363,13 @@ async function main() {
   const b2 = boot(t2);
   const c2 = b2.RB.migrateFromState(b2.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js')))), USER, T0);
   err = null;
-  await b2.HD.createBundle(DIR, c2).catch((e) => { err = e; });
+  await b2.HD.createBundle(PROJ, c2).catch((e) => { err = e; });
   ok(err && err.message.indexOf('fs:allow-rename') >= 0, 'createBundle rejects naming fs:allow-rename: ' + (err && err.message));
   // a bundle that already exists (written by a peer), then a flush from a build missing the cap
   const t3 = makeFakeTauri();
   const b3 = boot(t3);
-  await b3.HD.createBundle(DIR, c2);
-  const o3 = await b3.HD.openBundle(DIR);
+  await b3.HD.createBundle(PROJ, c2);
+  const o3 = await b3.HD.openBundle(MARKER);
   const id3 = o3.doc.items[0].id;
   const e3 = o3.envs.items.filter((e) => e.id === id3)[0];
   t3.deny.add('rename');
@@ -364,8 +391,8 @@ async function main() {
   section('rename retry then in-place fallback on a sharing violation');
   const t4 = makeFakeTauri();
   const b4 = boot(t4);
-  await b4.HD.createBundle(DIR, c2);
-  const o4 = await b4.HD.openBundle(DIR);
+  await b4.HD.createBundle(PROJ, c2);
+  const o4 = await b4.HD.openBundle(MARKER);
   const id4 = o4.doc.items[0].id;
   const e4 = o4.envs.items.filter((e) => e.id === id4)[0];
   const realRename = t4.fs.rename;
@@ -384,8 +411,8 @@ async function main() {
   section('in-place fallback re-merges a peer shard that landed during the rename retries');
   const t5 = makeFakeTauri();
   const b5 = boot(t5);
-  await b5.HD.createBundle(DIR, c2);
-  const o5 = await b5.HD.openBundle(DIR);
+  await b5.HD.createBundle(PROJ, c2);
+  const o5 = await b5.HD.openBundle(MARKER);
   const id5 = o5.doc.items[0].id;
   const e5 = o5.envs.items.filter((e) => e.id === id5)[0];
   const p5 = DIR + '/plans/' + o5.planId + '/items/' + id5 + '.json';
@@ -419,7 +446,7 @@ async function main() {
   section('readPresence skips one unreadable file instead of failing the scan');
   const t6 = makeFakeTauri();
   const b6 = boot(t6);
-  await b6.HD.createBundle(DIR, c2);
+  await b6.HD.createBundle(PROJ, c2);
   await b6.HD.writePresence(DIR, 'good-aaa11', { name: 'Good', planId: 'p', editing: [], ts: 1 });
   await b6.HD.writePresence(DIR, 'bad-bbb22', { name: 'Bad', planId: 'p', editing: [], ts: 1 });
   const realRead6 = t6.fs.readTextFile;
@@ -432,8 +459,8 @@ async function main() {
   section('a denied read surfaces once, without burning the retry ladder');
   const t7 = makeFakeTauri();
   const b7 = boot(t7);
-  await b7.HD.createBundle(DIR, c2);
-  const o7 = await b7.HD.openBundle(DIR);
+  await b7.HD.createBundle(PROJ, c2);
+  const o7 = await b7.HD.openBundle(MARKER);
   const id7 = o7.doc.items[0].id;
   const p7 = DIR + '/plans/' + o7.planId + '/items/' + id7 + '.json';
   t7.deny.add('readTextFile');
@@ -455,7 +482,7 @@ async function main() {
   const b8 = boot(t8);
   t8.dirs.add('C:/picked'); // the dialog only ever returns folders that exist
   ['pickFolder', 'exportBlob', 'readHeadway', 'writeHeadway'].forEach((m) => ok(typeof b8.HD[m] === 'function', 'HeadwayDesktop.' + m + ' exists'));
-  await b8.HD.createBundle(DIR, c2);
+  await b8.HD.createBundle(PROJ, c2);
   const hw0 = await b8.HD.readHeadway(DIR);
   eq(hw0.plans.length, c2.headway.plans.length, 'readHeadway parses the plan list');
   eq(await b8.HD.readHeadway('C:/nowhere/None.headway'), null, 'readHeadway of a missing folder is null');
@@ -481,7 +508,7 @@ async function main() {
 
   section('pickFolder / exportBlob adopt nothing');
   eq(await b8.HD.pickFolder(), 'C:/picked/Parent', 'pickFolder resolves the chosen folder');
-  const o8 = await b8.HD.openBundle(DIR);
+  const o8 = await b8.HD.openBundle(MARKER);
   const blob8 = { arrayBuffer: () => Promise.resolve(new Uint8Array([1, 2, 3]).buffer) };
   const ep = await b8.HD.exportBlob(blob8, 'Roadmap.xlsx', 'xlsx', 'Excel workbook');
   eq(ep, 'C:/picked/Roadmap.xlsx', 'exportBlob resolves the written path');
@@ -513,6 +540,70 @@ async function main() {
   await t8.emitPaths(DIR + '/headway.json');
   await tick();
   eq(b8.named('planShardChanged').length, before + 2, 'headway.json is not a plan shard');
+
+  section('createProject: named after the title, " (2)" on a collision, beside other files');
+  {
+    const tp = makeFakeTauri();
+    const bp = boot(tp);
+    const fx = bp.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    const cp = bp.RB.migrateFromState(fx, USER, T0);
+    tp.dirs.add('C:/work');
+    tp.files.set('C:/work/Plan.xlsx', 'xlsx bytes');
+    const m1 = await bp.HD.createProject('C:/work', 'Plan', cp);
+    eq(m1, 'C:/work/Plan/Plan.headway', 'first project: <Title>/<Title>.headway');
+    ok(tp.files.has('C:/work/Plan/.headway/headway.json'), '…with its data under .headway/');
+    eq(tp.files.get('C:/work/Plan.xlsx'), 'xlsx bytes', 'the file beside it is untouched');
+    const m2 = await bp.HD.createProject('C:/work', 'plan', bp.RB.migrateFromState(fx, USER, T0));
+    eq(m2, 'C:/work/plan (2)/plan (2).headway', 'a taken name (case-insensitive) gets " (2)"');
+    const m3 = await bp.HD.createProject('C:/work', 'a/b: c?', bp.RB.migrateFromState(fx, USER, T0));
+    eq(m3, 'C:/work/ab c/ab c.headway', 'the title is sanitised for the folder');
+    eq(JSON.parse(tp.files.get(m3)).title, fx.meta.title, 'the marker keeps the document title');
+  }
+
+  section('copyProject (Save as…): a complete copy with a new id; the original untouched');
+  {
+    const tc = makeFakeTauri();
+    const bc = boot(tc);
+    bc.HD.setUserId(USER);
+    const fx = bc.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    fx.options = [{ id: 'opt-b', name: 'Plan B', doc: JSON.parse(JSON.stringify(fx)) }];
+    const cc = bc.RB.migrateFromState(fx, USER, T0);
+    const SRC = 'C:/w/Orig';
+    const srcMarker = await bc.HD.createBundle(SRC, cc);
+    await bc.HD.writePresence(SRC + '/.headway', 'peer-1', { name: 'Peer', ts: 1 });
+    tc.files.set(SRC + '/.headway/plans/' + cc.headway.plans[0].id + '/items/x.json.tmp', '{');
+    const snap = new Map([...tc.files.entries()].filter(([k]) => k.indexOf(SRC + '/') === 0));
+    const newMarker = await bc.HD.copyProject(SRC + '/.headway', 'C:/w/Copy', 'Copy');
+    eq(newMarker, 'C:/w/Copy/Copy.headway', 'resolves the new marker');
+    const mk = JSON.parse(tc.files.get(newMarker));
+    const hwNew = JSON.parse(tc.files.get('C:/w/Copy/.headway/headway.json'));
+    ok(mk.id && mk.id !== cc.headway.docId && hwNew.docId === mk.id, 'a NEW bundle id, in the marker and headway.json');
+    eq([mk.title, hwNew.title], ['Copy', 'Copy'], 'titled with the new name');
+    eq(hwNew.plans.map((p) => p.id), cc.headway.plans.map((p) => p.id), 'every plan comes along');
+    const relOf = (root) => [...tc.files.keys()].filter((k) => k.indexOf(root + '/') === 0).map((k) => k.slice(root.length + 1));
+    const srcShards = relOf(SRC + '/.headway').filter((r) => /^plans\/.*\.json$/.test(r)).sort();
+    eq(relOf('C:/w/Copy/.headway').filter((r) => /^plans\/.*\.json$/.test(r)).sort(), srcShards, 'every shard of every plan is copied');
+    ok(srcShards.length > fx.items.length * 2, 'both plans\' shards (' + srcShards.length + ')');
+    const itemRel = srcShards.find((r) => /\/items\//.test(r));
+    eq(tc.files.get('C:/w/Copy/.headway/' + itemRel), tc.files.get(SRC + '/.headway/' + itemRel), 'shards are copied verbatim');
+    eq(tc.files.get('C:/w/Copy/.headway/history/' + USER + '.jsonl'), tc.files.get(SRC + '/.headway/history/' + USER + '.jsonl'), 'history copied over');
+    eq(relOf('C:/w/Copy/.headway').filter((r) => /^presence\//.test(r)), [], 'no presence copied');
+    ok(!relOf('C:/w/Copy/.headway').some((r) => /\.tmp$/.test(r)), 'no .tmp copied');
+    cc.headway.plans.forEach((p) => {
+      const env = JSON.parse(tc.files.get('C:/w/Copy/.headway/plans/' + p.id + '/meta.json'));
+      eq(bc.RB.unwrap(env).meta.title, 'Copy', 'plan ' + p.name + ': meta.title is the new name');
+    });
+    let same = true;
+    snap.forEach((v, k) => { if (tc.files.get(k) !== v) same = false; });
+    ok(same && [...tc.files.keys()].filter((k) => k.indexOf(SRC + '/') === 0).length === snap.size, 'the original is untouched');
+    eq(JSON.parse(tc.files.get(srcMarker)).id, cc.headway.docId, 'the original keeps its id');
+    const opened = await bc.HD.openBundle(newMarker);
+    eq(opened.doc.meta.title, 'Copy', 'the copy opens with the new title');
+    eq(opened.doc.items.length, fx.items.length, '…and every item');
+    let err = null;
+    await bc.HD.copyProject(SRC + '/.headway', 'C:/w/Copy', 'Copy').catch((e) => { err = e; });
+    ok(err && /already exists/.test(err.message), 'an existing target folder is refused: ' + (err && err.message));
+  }
 
   section('resumeBundle is called once desktop.js has loaded');
   const b9 = boot(makeFakeTauri(), ['resumeBundle']);

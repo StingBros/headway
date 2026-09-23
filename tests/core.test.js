@@ -3077,6 +3077,15 @@ eq(RB.parseMarker('not json'), null, 'garbage is not a marker');
 eq(RB.parseMarker('{"headway":1}'), null, 'a marker needs an id');
 eq(RB.parseMarker('{"id":"x"}'), null, 'a marker needs the headway key');
 eq(RB.parseMarker('{"headway":"1","id":7}'), { headway: 1, id: '7', title: '' }, 'loose types are coerced');
+var rtSrc = mkState([{ num: 1, feature: 'a' }]);
+rtSrc.meta.title = 'Old';
+var rtEnv = RB.wrapMeta(rtSrc, null, 'ann-1', T0);
+var rtOut = RB.retitleMeta(rtEnv, 'New name', 'bob-2', '2026-09-02T00:00:00.000Z');
+eq(RB.unwrap(rtOut).meta.title, 'New name', 'retitleMeta sets meta.title');
+eq(RB.unwrap(rtOut).wsOrder, RB.unwrap(rtEnv).wsOrder, 'other meta fields are kept');
+eq(rtOut.fieldsAt.meta, '2026-09-02T00:00:00.000Z', 'the meta field carries the new stamp');
+eq(rtOut.rev, (+rtEnv.rev || 0) + 1, 'rev moves on');
+eq(RB.unwrap(rtEnv).meta.title, 'Old', 'the source envelope is untouched');
 
 var RMJira = require('../js/export-jira.js');
 var sJc = mkState([
