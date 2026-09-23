@@ -2338,3 +2338,14 @@ section('snapped placement');
   eq(stP.startDay, 5, 'Place at earliest slot snaps too');
   eq(stP.durDays, 5, 'and rounds the duration up');
 }
+  // started work that capacity pushes off its start takes the snap where it
+  // lands, so a second pass finds nothing left to do
+  var sPush = autoState([
+    { num: 1, feature: 'busy', phaseId: 'p1', startDay: 0, durDays: 15, locked: true, capType: 'Development' },
+    { num: 2, feature: 'begun', phaseId: 'p1', startDay: 1, durDays: 3, capType: 'Development' }
+  ], [{ name: 'Solo', capType: 'Development' }]);
+  var wk = { phaseIds: ['p1'], today: 2, snap: { story: 'week', feature: 'week' } };
+  var rPush = RM.autoTimeline(sPush, wk);
+  var pushed = RM.itemByNum(rPush.state, 2);
+  eq([pushed.startDay, pushed.durDays], [15, 5], 'begun work pushed by capacity lands on the week grid with whole weeks');
+  eq(RM.autoTimeline(rPush.state, wk).changed, 0, 'and a second pass leaves it there');

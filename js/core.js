@@ -3174,8 +3174,10 @@
       // boundary and buys whole units of work. Work already under way is
       // exempt: an automatic pass never shoves in-flight work forward (the
       // explicit Place at earliest slot still snaps it).
-      var snapMode = started ? 'day' : RM.snapModeOf(opts, u.storyId ? 'story' : 'feature');
-      var work = RM.snapUpDays(meta, RM.unitWorkDays(state, u, ledger.set), snapMode);
+      var gridMode = RM.snapModeOf(opts, u.storyId ? 'story' : 'feature');
+      var snapMode = started ? 'day' : gridMode;
+      var baseWork = RM.unitWorkDays(state, u, ledger.set);
+      var work = RM.snapUpDays(meta, baseWork, snapMode);
       var s = RM.snapUpDay(meta, est, snapMode);
       var dur = RM.stretchSpan(meta, s, work, ledger.set);
       if (ledger.constrained(u) && RM.unitWeekDemand(state, u, s, dur, ledger.set) > ledger.peak(u.capType) + 1e-9) {
@@ -3190,11 +3192,23 @@
         release(u);
         return;
       }
-      var guard = 0;
-      while (guard < HORIZON * S) {
-        if (!RM.offDay(meta, s, ledger.set) && ledger.fits(u, s, dur)) break;
-        s = RM.snapUpDay(meta, s + 1, snapMode); dur = RM.stretchSpan(meta, s, work, ledger.set); guard += 1;
+      function fitFrom(start, mode, w) {
+        var fs = RM.snapUpDay(meta, start, mode), fd = RM.stretchSpan(meta, fs, w, ledger.set), guard = 0;
+        while (guard < HORIZON * S) {
+          if (!RM.offDay(meta, fs, ledger.set) && ledger.fits(u, fs, fd)) break;
+          fs = RM.snapUpDay(meta, fs + 1, mode); fd = RM.stretchSpan(meta, fs, w, ledger.set); guard += 1;
+        }
+        return [fs, fd];
       }
+      var fit = fitFrom(est, snapMode, work);
+      // started work that capacity pushes off its start is no longer under
+      // way where it lands: it takes the snap grid like any other move (else
+      // the next pass, seeing it in the future, would snap it then)
+      if (started && fit[0] !== u.startDay && gridMode !== snapMode) {
+        work = RM.snapUpDays(meta, baseWork, gridMode);
+        fit = fitFrom(fit[0], gridMode, work);
+      }
+      s = fit[0]; dur = fit[1];
       if (RM.applyUnitPlacement(state, u, s, dur, ledger.set)) out.changed += 1;
       touchedItems[u.itemId] = true;
       ledger.book(u, s, dur, 1);
