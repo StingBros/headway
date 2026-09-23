@@ -2,6 +2,7 @@
  * Headway — in-app "How to use" guide.
  *
  * Content for the start page's How-to area: a short tutorial (Start here),
+ * Lean and literal: short imperative sentences, menu paths, no filler.
  * one line per view, the keyboard shortcuts and a features list.
  * Pure data + HTML builders, no DOM access — app.js renders it and wires the
  * tabs. Keep entries short: this is a field guide, not the manual (README.md
@@ -35,20 +36,20 @@
 
   // Start here — the one path every new plan takes, in order
   var START = [
-    { t: 'Create the project', d: '**New project…** names it and picks the timeline start. **Setup** (top tabs) holds the end date, sprint length and numbering, workstreams, phases, team and holidays — change any of it later.' },
-    { t: 'Add the work', d: 'Edit → **Add feature**, or click the **Add feature** row under a phase and type the title. Click a row and the panel on the right shows it: description, size, priority, tags, and a **Stories** section for the pieces underneath (double-click a title to rename).' },
-    { t: 'Put it on the timeline', d: 'In **Planning**, **double-click** the empty lane where the work starts — a bar of the feature’s size appears. Drag the bar to move it, drag its edges to resize, or type the weeks in the chip. Stories get their own bars the same way.' },
-    { t: 'Link what depends on what', d: 'Hover a bar and drag its edge **circle** onto another bar: left circle = depends on it, right = enables it. The orange chain is the critical path; dashed amber arrows are violations. The ⚡ **Auto timeline** button on a phase band lays that phase out by dependencies and capacity; right-click a row → **Place at earliest slot** moves just one.' },
-    { t: 'Save and share', d: '`Mod+S` saves a lossless **.xlsx** that also opens in Excel. File → **Convert to shared folder…** makes a **.headway** folder for OneDrive so several people edit at once. **Export…** gives PNG, PowerPoint and Jira CSV.' }
+    { t: 'Create the project', d: '**New project…** sets the name and start date. **Setup**: end date, sprints, workstreams, phases, team, holidays.' },
+    { t: 'Add features', d: 'Edit → **Add feature**, or the **Add feature** row under a phase. Click a row to see it in the panel: description, size, priority, tags, stories.' },
+    { t: 'Schedule', d: '**Planning**: double-click the empty lane to place a bar. Drag to move, drag an edge to resize, or type the weeks in the chip.' },
+    { t: 'Link dependencies', d: 'Hover a bar, drag its edge **circle** onto another bar. Orange = critical path, dashed amber = violation. ⚡ **Auto timeline** on a phase band lays the phase out; right-click a row → **Place at earliest slot** for one item.' },
+    { t: 'Save and share', d: '`Mod+S` saves .xlsx. File → **Convert to shared folder…** makes a .headway folder for OneDrive. **Export…**: PNG, PowerPoint, Jira CSV.' }
   ];
 
   var VIEWS = [
-    { t: 'Setup', d: 'Project settings: timeline, sprints, workstreams, phases, team, sizing scale, estimate mode (single or **range**), capacity switch, holidays, which tabs are on.' },
-    { t: 'Planning', d: 'The Gantt. Bars, story bars, dependency arrows, the phase lane, capacity rows, the Resources panel at the bottom; the left pane’s chip columns have headers you can resize, reorder and hide. Drag empty space to pan, `Mod+scroll` to zoom.' },
-    { t: 'Scoping', d: 'A spreadsheet of the same rows: size, risk, weeks, workstream, epic, then text columns (Enables, Out of scope, External dependencies, Notes, your own). The **+** header adds columns.' },
-    { t: 'Prioritizing', d: 'Kanban. Columns are the phases, or Priority / Size / Risk — drag a card to set the field. Switch to the **Story** level for a story board.' },
-    { t: 'Sprinting', d: 'Sprint by sprint: every feature or story listed under the sprint it starts in. Drag a row to another sprint to move it; right-click for **Move to sprint…**.' },
-    { t: 'Budgeting', d: 'Roles with hourly cost and rate, margin and total, and the week-hours grid. The **Reports** drawer rolls up effort and cost by workstream or phase.' }
+    { t: 'Setup', d: 'Timeline, sprints, workstreams, phases, team, sizing, estimate mode, capacity, holidays, which tabs are on.' },
+    { t: 'Planning', d: 'Gantt: bars, story bars, dependencies, phase lane, capacity rows, Resources panel. Drag empty space to pan, `Mod+scroll` to zoom.' },
+    { t: 'Scoping', d: 'Spreadsheet of the rows: size, risk, weeks, workstream, epic, text columns. **+** adds columns.' },
+    { t: 'Prioritizing', d: 'Kanban by phase, Priority, Size or Risk. Drag a card to set the field. **Story** level shows a story board.' },
+    { t: 'Sprinting', d: 'Rows grouped by the sprint they start in. Drag to another sprint, or right-click → **Move to sprint…**' },
+    { t: 'Budgeting', d: 'Cost and rate per role, margin, total, week hours. **Reports** drawer: effort and cost by workstream or phase.' }
   ];
 
   var KEYS = [
@@ -59,16 +60,16 @@
   ];
 
   var FEATURES = [
-    { t: 'Range estimates', d: 'Setup → Sizing → **Range estimate**: a low and a high per feature and story. The planned bar follows the basis you pick (high or low); the hatched band shows the other end. View → **Estimate ranges** hides the bands for a clean read-out. Sheets that count four days to a week set a rate of 1.25 working days per day.' },
-    { t: 'Plans', d: 'The plan menu next to the title keeps alternate versions of the same roadmap — must-haves only, with the coulds, everything. Switch, compare (the other plan rides as a dashed ghost behind the bars), or add a new one.' },
-    { t: 'Shared roadmap folder', d: 'A **.headway** folder in OneDrive or SharePoint is one file per feature, phase and teammate, so two people editing different rows never clobber each other. Presence chips show who is in; Version history shows who changed what.' },
-    { t: 'Colour and grouping', d: 'View → **Color by** workstream, epic, priority or item type; **Group by** workstream and epic nests rows under bands. Workstream colours are edited from any workstream dropdown’s pencil.' },
-    { t: 'Milestones, flags, locks', d: 'A zero-duration item is a milestone (diamond, star or circle). Right-click → **Flag…** puts an orange flag with a reason on any row. **Lock** pins a bar through Auto timeline; **Done** greys it out.' },
-    { t: 'Capacity and cost', d: 'Setup → Capacity turns on the roster maths: hours per person per week in the Resources panel, capacity rows over the timeline, and an Auto timeline that never overbooks. Budgeting prices it.' },
-    { t: 'Checks', d: 'The preflight chip in the top bar lists cycles, unknown dependencies, starts inside a dependency’s buffer, missing sizes and over-capacity weeks; each row shows its own alert.' },
-    { t: 'Sizes from stories', d: 'Setup → Sizing → **Roll up from stories** sizes each feature from the span its sized stories cover; right-click a story → **Move to feature…** re-homes it.' },
-    { t: 'Standalone HTML', d: 'Export → **Standalone HTML** saves the whole roadmap as one view-only page — every tab there to browse, nothing to install — for people who only need to look.' },
-    { t: 'AI assistant', d: '`Mod+J` opens a chat that knows the open plan: ask what slips if a feature moves, or tell it to re-tag, re-phase or re-size — every edit is undoable and logged as “you · AI”.' }
+    { t: 'Range estimates', d: 'Setup → Sizing → **Range estimate**: low and high per feature and story. The bar follows the basis (high or low); the hatched band shows the rest. View → **Estimate ranges** hides the bands. 4-day weeks: rate 1.25.' },
+    { t: 'Plans', d: 'Plan menu next to the title: alternate versions of the roadmap. Switch, compare (ghost bars), add.' },
+    { t: 'Shared roadmap folder', d: '.headway folder on OneDrive or SharePoint: one file per feature, phase and person. Presence shows who is in; Version history shows who changed what.' },
+    { t: 'Colour and grouping', d: 'View → **Color by** workstream, epic, priority or type. **Group by** workstream or epic. Workstream colours: the pencil in any workstream dropdown.' },
+    { t: 'Milestones, flags, locks', d: 'Zero-duration item = milestone (diamond, star, circle). Right-click → **Flag…** with a reason. **Lock** pins a bar; **Done** greys it out.' },
+    { t: 'Capacity and cost', d: 'Setup → Capacity: hours per person per week in the Resources panel, capacity rows, Auto timeline that never overbooks. Budgeting prices it.' },
+    { t: 'Checks', d: 'Preflight chip: cycles, unknown dependencies, starts inside a buffer, missing sizes, over-capacity weeks. Each row shows its own alert.' },
+    { t: 'Sizes from stories', d: 'Setup → Sizing → **Roll up from stories**. Right-click a story → **Move to feature…**' },
+    { t: 'Standalone HTML', d: 'Export → **Standalone HTML**: one view-only page with every tab.' },
+    { t: 'AI assistant', d: '`Mod+J`. Ask about the plan, or tell it to re-tag, re-phase, re-size. Edits are undoable and logged as “you · AI”.' }
   ];
 
 
@@ -93,7 +94,7 @@
         return '<div class="hg-key"><span class="hg-kk">' + keys + '</span><span class="hg-kd">' + rich(k[1]) + '</span></div>';
       }).join('') + '</div>';
     }).join('') + '</div>' +
-    '<div class="hg-note">' + (mac ? '⌘ is Ctrl on Windows.' : 'Ctrl is ⌘ on a Mac.') + ' Shortcuts stay quiet while you are typing in a field.</div>';
+    '<div class="hg-note">' + (mac ? '⌘ is Ctrl on Windows.' : 'Ctrl is ⌘ on a Mac.') + ' Shortcuts are off while typing in a field.</div>';
   }
 
   var G = {};
@@ -112,7 +113,7 @@
     return '<section class="hg' + (open ? ' open' : '') + '" data-hg>' +
       '<button class="hg-hd" data-hg-toggle aria-expanded="' + (open ? 'true' : 'false') + '">' +
       '<i data-lucide="book-open"></i><span>How to use Headway</span>' +
-      '<span class="hg-hd-sub">' + (open ? 'tutorial, views, shortcuts, features' : 'a two-minute tour') + '</span>' +
+      '<span class="hg-hd-sub">' + (open ? 'start, views, shortcuts, features' : '') + '</span>' +
       '<i data-lucide="' + (open ? 'chevron-up' : 'chevron-down') + '" class="hg-chev"></i></button>' +
       (open
         ? '<div class="hg-tabs" role="tablist">' + TABS.map(function (t) {
