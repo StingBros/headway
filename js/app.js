@@ -6834,7 +6834,7 @@
         toast(it.locked ? 'Locked — unlock it to place it' : 'Already done — nothing to place', 'err');
         return;
       }
-      var r = RM.placeUnit(state, it.id, null, snapOpts());
+      var r = RM.placeUnit(state, it.id, null, placeOpts());
       if (r.changed) {
         replaceState('snap', r.state);
         toast('Snapped #' + it.num + ' to its earliest open slot' + (r.note ? ' — ' + r.note : ''));
@@ -8255,9 +8255,7 @@
     if (storyId && !st) return null;
     return { icon: 'zap', label: 'Place at earliest slot',
       disabled: !!it.locked || !!it.done || !!(st && st.done), fn: function () {
-      var po = snapOpts();
-      po.autoOrder = autoOrder; // fan-out ranks stories' features in on-screen order
-      var r = RM.placeUnit(state, itemId, storyId || null, po);
+      var r = RM.placeUnit(state, itemId, storyId || null, placeOpts());
       // a partial placement still lands what it could — keep it, and say why
       if (r.changed) {
         replaceState('place', r.state);
@@ -9320,6 +9318,9 @@
   function snapModeFor(kind) { return kind === 'story' ? snapStory : snapFeat; }
   // core never reads UI prefs: hand the snap modes down explicitly
   function snapOpts() { return { snap: { feature: snapFeat, story: snapStory } }; }
+  // Place at earliest slot / row-chip snap: the snap grid plus the on-screen
+  // row order the scheduler ranks by (auto-order is a render-time sort)
+  function placeOpts() { var o = snapOpts(); o.autoOrder = autoOrder; return o; }
   // a working-day count, rounded up to a whole number of the kind's snap unit
   function snapUpDays(days, kind) { return days == null ? days : RM.snapUpDays(state.meta, days, snapModeFor(kind)); }
   function setSnapMode(kind, mode) { if (kind === 'story') snapStory = mode; else snapFeat = mode; }
