@@ -2468,9 +2468,13 @@
     state.items.forEach(function (it, idx) {
       if (it.milestone) return;
       if (!storyLevel) {
+        // Features level: stories are not units and ride along with their
+        // feature, so a feature with ANY excluded story is excluded whole
         var u = { id: 'i:' + it.id, itemId: it.id, storyId: null, capType: RM.itemCapType(state, it),
           mult: it.capMult || 1, points: RM.pointsOf(it), startDay: it.startDay, durDays: it.durDays,
-          riskDays: it.riskDays || 0, deps: [], locked: !!it.locked, noAuto: !!it.noAuto, done: !!it.done, milestone: false,
+          riskDays: it.riskDays || 0, deps: [], locked: !!it.locked,
+          noAuto: !!it.noAuto || (it.stories || []).some(function (st) { return st && st.noAuto; }),
+          done: !!it.done, milestone: false,
           phaseId: it.phaseId, order: [idx, 0] };
         units.push(u);
         unitsByItem[it.id] = [u];

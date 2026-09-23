@@ -2716,6 +2716,22 @@ section('exclude from auto');
   eq(FS[2].stories[0].startDay, 40, 'a story’s own noAuto keeps it put');
   ok(FS[2].stories[1].startDay !== 50, 'its unflagged sibling still moves');
 
+  // Features level: stories are not units, so a feature with ANY excluded
+  // story is fixed as a whole (its stories would otherwise ride along)
+  var sFL = autoState([
+    { num: 1, feature: 'F', phaseId: 'p1', startDay: 20, durDays: 5, capType: 'Development',
+      stories: [{ num: 101, title: 'a', startDay: 21, durDays: 2, noAuto: true }, { num: 102, title: 'b' }] },
+    { num: 2, feature: 'G', phaseId: 'p1', durDays: 5, capType: 'Development' }
+  ], [{ name: 'Solo', capType: 'Development' }], { planLevel: 'feature' }, PH0);
+  var FL = byNum(RM.autoTimeline(sFL, { phaseIds: ['p1'], today: 0 }).state);
+  eq([FL[1].startDay, FL[1].stories[0].startDay], [20, 21], 'Features level: a feature with an excluded story stays put, story and all');
+  eq(FL[2].startDay, 0, 'while its neighbour still moves');
+  ok(RM.capUnits(sFL).filter(function (u) { return u.itemId === RM.itemByNum(sFL, 1).id; })[0].noAuto === true,
+    'its feature-level unit carries noAuto');
+  eq(RM.autoPhase(sFL, 'p1', { today: 0 }).changed, 1, 'and the dry run counts only the neighbour');
+  RM.itemByNum(sFL, 1).stories[0].noAuto = false;
+  ok(byNum(RM.autoTimeline(sFL, { phaseIds: ['p1'], today: 0 }).state)[1].startDay !== 20, 'without the story flag the feature moves');
+
   // ⚡ dry run: an excluded feature is never counted
   var sDry = autoState([{ num: 1, feature: 'excluded', phaseId: 'p1', startDay: 20, durDays: 5, noAuto: true, capType: 'Development' }],
     [{ name: 'Solo', capType: 'Development' }], null, PH0);

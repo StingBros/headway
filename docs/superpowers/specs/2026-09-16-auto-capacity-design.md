@@ -393,7 +393,10 @@ A feature or story can be excluded from the Auto timeline with a boolean
 `noAuto` (normalized with `!!`; on features it is mutually exclusive with
 `locked` — `RM.setLocked` / `RM.setNoAuto` clear the other, and a document or
 Excel import carrying both keeps the Lock). `RM.capUnits` carries `noAuto` on
-every unit (a story unit inherits its feature's flag, like `locked`);
+every unit (a story unit inherits its feature's flag, like `locked`; at the
+Features planning level, where stories are not units and ride along with
+their feature, a feature with ANY excluded story is excluded whole, so the
+story flag is honoured at both levels);
 `RM.autoTimeline` treats an excluded unit exactly like a locked one — not
 movable, pre-booked in the ledger where it sits — so `RM.autoPhase`'s dry run
 never counts it, and `RM.autoSizeChanges` skips an excluded feature.
