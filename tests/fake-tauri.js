@@ -48,6 +48,7 @@ module.exports = function makeFakeTauri(opts) {
     }),
     writeTextFile: guard('writeTextFile', (p, text, o) => {
       p = norm(p);
+      if (typeof api.beforeWrite === 'function') api.beforeWrite(p);
       if (!hasDir(parent(p))) return missing(p);
       const prev = (o && o.append && files.has(p)) ? files.get(p) : '';
       files.set(p, prev + String(text));
@@ -162,6 +163,7 @@ module.exports = function makeFakeTauri(opts) {
     fs, dialog, files, dirs, log, deny,
     renameFails: null, // (from, to) → error string to refuse that rename
     onExists: null,    // (path) → called before every fs.exists answers
+    beforeWrite: null, // (path) → called before every writeTextFile lands
     window: { getCurrentWindow: () => win },
     watching: () => !!watchCb,
     watchOpts: () => watchOpts,

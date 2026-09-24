@@ -929,6 +929,9 @@
       ? HeadwayDesktop.flushShards(dir, pid, changes)
       : Promise.resolve({ written: [], merged: [] });
     return shards.then(function (res) {
+      // a peer's rename landed mid-flush: desktop.js followed it (bundleMoved
+      // already re-pointed bundleDir) and finished the flush in the new folder
+      if (res && res.dir && res.dir !== dir && bundleDir === res.dir) dir = res.dir;
       if (bundleDir === dir && activePlanId === pid) {
         var mergedIds = {}, fold = [];
         (res.merged || []).forEach(function (id) { mergedIds[id] = true; });

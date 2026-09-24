@@ -763,6 +763,53 @@ async function main() {
     }
   }
 
+  section('a peer rename mid-flush: the old folder is never re-created; every shard lands in the new one');
+  for (const how of ['inside a shard write', 'between two shards']) {
+    const tm = makeFakeTauri();
+    const bm = boot(tm, ['bundleMoved', 'bundleDetached']);
+    bm.HD.setUserId(USER);
+    const fx = bm.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    const cm = bm.RB.migrateFromState(fx, USER, T0);
+    const mk = await bm.HD.createBundle('C:/m/Old', cm);
+    const om = await bm.HD.openBundle(mk);
+    const envs = om.envs.items.slice(0, 4);
+    const changes = envs.map((e) => ({ kind: 'items', id: e.id, env: bm.RB.wrap(Object.assign(bm.RB.unwrap(e), { notes: 'mid-flush ' + e.id }), e, USER, T1), baseRev: e.rev }));
+    let moved = false;
+    const peerRename = () => {
+      moved = true;
+      tm.moveDir('C:/m/Old', 'C:/m/New');
+      tm.files.delete('C:/m/New/Old.headway');
+      tm.files.set('C:/m/New/New.headway', bm.RB.markerText(cm.headway.docId, 'New'));
+    };
+    let n = 0;
+    if (how === 'inside a shard write') {
+      tm.beforeWrite = (p) => { if (!moved && /^C:\/m\/Old\/\.headway\/plans\/.*\.json\.tmp$/.test(p) && ++n === 2) peerRename(); };
+    } else {
+      tm.onExists = (p) => { if (!moved && p === 'C:/m/Old/.headway' && ++n === 2) peerRename(); };
+    }
+    const res = await bm.HD.flushShards(om.headway ? bm.HD.bundleDir() : '', om.planId, changes).catch((e) => ({ err: e }));
+    tm.beforeWrite = null; tm.onExists = null;
+    ok(moved, how + ': the peer rename happened mid-flush');
+    ok(!res.err, how + ': the flush resolves: ' + (res.err && res.err.message));
+    eq(res.dir, 'C:/m/New/.headway', how + ': resolves the folder it ended in');
+    eq((res.written || []).length, 4, how + ': all four shards written');
+    eq(envs.map((e) => { const f = tm.files.get('C:/m/New/.headway/plans/' + om.planId + '/items/' + e.id + '.json'); return !!f && JSON.parse(f).fields.notes === 'mid-flush ' + e.id; }), [true, true, true, true], how + ': every shard is in New/');
+    ok(![...tm.files.keys()].some((k) => k.indexOf('C:/m/Old') === 0) && ![...tm.dirs].some((d) => d.indexOf('C:/m/Old') === 0), how + ': nothing re-created under Old/');
+    eq(bm.named('bundleMoved').length, 1, how + ': the app is told once');
+    eq(bm.named('bundleDetached').length, 0, how + ': never detached');
+  }
+  {
+    // the mkdir fallback still makes a missing sub-folder inside a LIVE data folder (a new plan's kind dir)
+    const tm = makeFakeTauri();
+    const bm = boot(tm);
+    const fx = bm.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    const cm = bm.RB.migrateFromState(fx, USER, T0);
+    await bm.HD.createBundle('C:/m/Live', cm);
+    const env = cm.plans[cm.headway.plans[0].id].items[0];
+    const r = await bm.HD.flushShards('C:/m/Live/.headway', 'plan-new01', [{ kind: 'items', id: env.id, env, baseRev: 0 }]);
+    ok(tm.files.has('C:/m/Live/.headway/plans/plan-new01/items/' + env.id + '.json') && r.written.length === 1, 'a new plan\'s folders are still created inside a live project');
+  }
+
   section('resumeBundle is called once desktop.js has loaded');
   const b9 = boot(makeFakeTauri(), ['resumeBundle']);
   eq(b9.named('resumeBundle').length, 1, 'HeadwayApp.resumeBundle() called at load');

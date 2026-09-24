@@ -358,13 +358,28 @@
     }
     return fs.writeTextFile(tmp, text).catch(function (err) {
       if (!isMissingDir(err)) throw err;
-      return fs.mkdir(dirname(path), { recursive: true }).then(function () { return fs.writeTextFile(tmp, text); });
+      // a missing sub-folder (a new plan's, a kind's first shard) is made —
+      // but ONLY inside a data folder that is still there: a peer's rename
+      // mid-write must never re-create <Old>/.headway/plans/…
+      var root = dataRootOf(path);
+      if (!root) throw err;
+      if (goneDirs[root]) throw goneError();
+      return fs.exists(root).catch(function () { return false; }).then(function (there) {
+        if (!there) throw goneError();
+        return fs.mkdir(dirname(path), { recursive: true });
+      }).then(function () { return fs.writeTextFile(tmp, text); });
     }).then(function () {
       return renameAttempt(0);
     }).catch(function (err) {
       fs.remove(tmp).catch(function () { /* may not exist */ });
+      if (err && err.gone) throw err;
       rejectFriendly(err);
     });
+  }
+  // <Project>/.headway/plans/x.json → <Project>/.headway; null outside a data folder
+  function dataRootOf(path) {
+    var p = norm(path), cut = p.lastIndexOf('/' + RB().DATA_DIR + '/');
+    return cut < 0 ? null : p.slice(0, cut + RB().DATA_DIR.length + 1);
   }
   // write a shard: remember its canonical BEFORE the rename lands so the
   // watch event it raises is recognised as our own; roll back on failure
@@ -628,6 +643,20 @@
     locating = attempt(0).then(done, function (err) { done(null); throw err; });
     return locating;
   }
+  // where a data folder went (a followed peer rename, our own rename), so a
+  // flush that started in the old place can finish in the new one
+  var movedTo = {};
+  function relocate(dir) {
+    var d = dir, hops = 0;
+    while (movedTo[d] && hops++ < 32) d = movedTo[d];
+    if (d !== dir) return Promise.resolve(goneDirs[d] ? null : d); // already followed
+    if (!bundleDir || norm(bundleDir) !== dir) return Promise.resolve(null); // not the open project's folder
+    return checkBundleLocation().then(function (res) {
+      if (res === 'ok' || res === 'reattached') return goneDirs[dir] ? null : dir;
+      if (res === 'moved') return norm(bundleDir);
+      return null;
+    }, function () { return null; });
+  }
   function stopWatch() {
     watchGen++;
     if (unwatch) { try { unwatch(); } catch (e) { /* already gone */ } unwatch = null; }
@@ -635,6 +664,7 @@
   function follow(dir, marker, title, found) {
     var a = app(), ndir = dataDirOf(found.marker);
     goneDirs[dir] = true;
+    movedTo[dir] = ndir;
     stopWatch();
     detached = false; clearTimeout(reattachTimer); reattachTimer = null;
     bundleDir = ndir; markerFile = found.marker; projectTitle = found.title || title;
@@ -763,24 +793,39 @@
     // written by a peer since our last read, so merge before overwriting.
     // Resolves {written:[{kind,id,canon,env}], merged:[id]} — canon is the
     // envelope canonical (the echo key), env what is now on disk.
+    // The folder is checked before EVERY shard: a peer's rename landing
+    // mid-flush is followed (checkBundleLocation) and the rest — the shard
+    // that found its folder gone included — go to the new place. Resolves
+    // {written, merged, dir} — dir is where the flush ended.
     flushShards: function (dir, planId, changes) {
       var written = [], merged = [];
-      return (changes || []).reduce(function (chain, ch) {
-        return chain.then(function () {
-          var r = shardRelPath(planId, ch.kind, ch.id);
-          return readJsonRetry(dir + '/' + r).then(function (disk) {
-            var env = ch.env;
-            var base = isFinite(+ch.baseRev) ? +ch.baseRev : 0;
-            if (isEnvelope(disk) && (+disk.rev || 0) > base) {
-              env = RB().mergeEntity(disk, env);
-              merged.push(ch.id);
-            }
-            return writeShard(dir, r, env).then(function (res) {
-              written.push({ kind: ch.kind, id: ch.id, canon: res.canon, env: res.env });
-            });
+      var cur = norm(dir).replace(/\/+$/, '');
+      function one(ch, tries) {
+        var r = shardRelPath(planId, ch.kind, ch.id);
+        return liveRoot(cur).then(function () {
+          return readJsonRetry(cur + '/' + r);
+        }).then(function (disk) {
+          var env = ch.env;
+          var base = isFinite(+ch.baseRev) ? +ch.baseRev : 0;
+          if (isEnvelope(disk) && (+disk.rev || 0) > base) {
+            env = RB().mergeEntity(disk, env);
+            if (merged.indexOf(ch.id) < 0) merged.push(ch.id);
+          }
+          return writeShard(cur, r, env).then(function (res) {
+            written.push({ kind: ch.kind, id: ch.id, canon: res.canon, env: res.env });
+          });
+        }).catch(function (err) {
+          if (!err || !err.gone || tries >= 2) throw err;
+          return relocate(cur).then(function (nd) {
+            if (!nd) throw err;
+            cur = nd;
+            return one(ch, tries + 1);
           });
         });
-      }, liveRoot(dir)).then(function () { return { written: written, merged: merged }; });
+      }
+      return (changes || []).reduce(function (chain, ch) {
+        return chain.then(function () { return one(ch, 0); });
+      }, Promise.resolve()).then(function () { return { written: written, merged: merged, dir: cur }; });
     },
 
     // history/<userId>.jsonl — we are its only writer, so no temp file
@@ -941,7 +986,10 @@
                 try { env = JSON.parse(text); } catch (e) { /* copied as-is */ }
                 if (isEnvelope(env)) text = pretty(RB().canonicalize(RB().retitleMeta(env, title, uid, now)));
               }
-              return atomicWriteText(dest + '/' + r, text);
+              // its folder first: atomicWriteText makes none outside a live data folder
+              return fs.mkdir(dirname(dest + '/' + r), { recursive: true }).then(function () {
+                return atomicWriteText(dest + '/' + r, text);
+              });
             });
           });
         }, Promise.resolve());
@@ -1002,6 +1050,7 @@
       }).then(function () {
         var nm = newProj + '/' + name + RB().MARKER_EXT;
         bundleDir = newProj + '/' + RB().DATA_DIR;
+        movedTo[oldDir] = bundleDir;
         markerFile = nm;
         projectTitle = title;
         delete goneDirs[bundleDir];

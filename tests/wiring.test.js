@@ -853,6 +853,26 @@ async function fixes() {
     const rf = [...tauri.files.keys()].find((k) => k.indexOf(RP + '/.headway/plans/') === 0 && k.slice(-(S.vId.length + 5)) === S.vId + '.json');
     ok(rf && JSON.parse(tauri.files.get(rf)).fields.notes === 'rescued', 'the in-memory edit is in the new project');
     ok(![...tauri.dirs].some((d) => d.indexOf(PP) === 0) && ![...tauri.files.keys()].some((k) => k.indexOf(PP + '/') === 0), 'the missing folder was never re-created');
+
+    section('a peer rename lands mid-flush: the app ends synced in the new folder, the old one never re-created');
+    const RP2 = 'C:/Users/me/Rescue/Rescued Too', rid = JSON.parse(tauri.files.get(RP + '/Rescued.headway')).id;
+    let movedMid = false;
+    tauri.beforeWrite = (p) => {
+      if (movedMid || p.indexOf(RP + '/.headway/plans/') !== 0 || !/\.tmp$/.test(p)) return;
+      movedMid = true;
+      tauri.moveDir(RP, RP2);
+      tauri.files.delete(RP2 + '/Rescued.headway');
+      tauri.files.set(RP2 + '/Rescued Too.headway', b.RB.markerText(rid, 'Rescued Too'));
+    };
+    seen.length = 0;
+    S.select();
+    S.set('notes', 'during the move');
+    ok(await until(() => movedMid && b.info().bundleDir === RP2 + '/.headway' && b.info().docSaved && !b.info().flushing), 'followed and synced — toasts: ' + seen.join(' | '));
+    tauri.beforeWrite = null;
+    const mf = [...tauri.files.keys()].find((k) => k.indexOf(RP2 + '/.headway/plans/') === 0 && k.slice(-(S.vId.length + 5)) === S.vId + '.json');
+    ok(mf && JSON.parse(tauri.files.get(mf)).fields.notes === 'during the move', 'the edit landed in the new folder');
+    ok(![...tauri.dirs].some((d) => d.indexOf(RP + '/') === 0) && ![...tauri.files.keys()].some((k) => k.indexOf(RP + '/') === 0), 'nothing re-created under the old name');
+    ok(!seen.some((t) => /Sync failed/.test(t)), 'no Sync-failed toast');
     eq(b.errors, [], 'no window errors');
   }
 
