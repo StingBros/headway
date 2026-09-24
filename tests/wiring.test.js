@@ -1705,6 +1705,57 @@ async function projectFlow() {
     eq(b.state().meta.title, 'Just a label', 'the plan title is untouched');
     eq(b.errors, [], 'no window errors');
   }
+  section('M-1: the wizard over a 2-plan project never renames it');
+  {
+    const S = await openFresh('WizTwo');
+    const b = S.b;
+    await addPlanB(S);
+    const hw0 = S.tauri.files.get(S.dir + '/headway.json');
+    const r0 = S.tauri.log.length;
+    b.HA.wizard.open();
+    b.HA.wizard.go('project');
+    ok(!b.doc.querySelector('#wizard #suProjectName'), 'the wizard shows no Project name field (the draft has one plan)');
+    const ti = b.doc.querySelector('#wizard #suTitle');
+    ti.value = 'Wizard Draft Name';
+    ti.dispatchEvent(new b.window.Event('change', { bubbles: true }));
+    // a stray Project name change (and a late deferred rename) while the wizard is up
+    const stray = b.doc.createElement('input');
+    stray.id = 'suProjectName'; stray.value = 'Stray Name';
+    b.doc.querySelector('#wizard').appendChild(stray);
+    stray.dispatchEvent(new b.window.Event('change', { bubbles: true }));
+    stray.remove();
+    await b.HA.renameProjectFolder('Late Rename');
+    await settle(6);
+    eq(b.info().bundleMarker, S.marker, 'the open project keeps its marker');
+    ok(S.tauri.files.has(S.marker), '…on disk');
+    eq(S.tauri.files.get(S.dir + '/headway.json'), hw0, 'headway.json untouched');
+    eq(S.tauri.log.slice(r0).filter((l) => l.op === 'rename' && l.dir).length, 0, 'no folder rename');
+    b.HA.wizard.close(true);
+    await settle(4);
+    eq(b.info().bundleMarker, S.marker, 'still the same folder after closing the wizard');
+    eq(b.errors, [], 'no window errors');
+  }
+  section('M-3: renaming a detached project is refused (toast), nothing touched');
+  {
+    const S = await openFresh('DetRen');
+    const b = S.b;
+    await addPlanB(S);
+    S.tauri.moveDir(S.proj, 'C:/stash/detren');
+    await b.HD.checkBundleLocation();
+    ok(await until(() => b.info().detached), 'detached');
+    const r0 = S.tauri.log.length;
+    b.HA.openSetup('timeline');
+    const pn = b.doc.querySelector('#suProjectName');
+    ok(!!pn, 'Setup shows the Project name field');
+    pn.value = 'Moved While Missing';
+    pn.dispatchEvent(new b.window.Event('change', { bubbles: true }));
+    ok(await until(() => /Project folder is missing — reconnect or Save as… first/.test(b.toasts())), 'toast says why — ' + b.toasts());
+    await settle(4);
+    eq(b.info().bundleMarker, S.marker, 'the marker path is unchanged');
+    eq(S.tauri.log.slice(r0).filter((l) => l.op === 'rename' || l.op === 'mkdir').length, 0, 'nothing renamed or created');
+    ok(![...S.tauri.files.keys()].some((k) => k.indexOf(S.proj + '/') === 0 || k.indexOf('C:/Users/me/OneDrive/Moved While Missing') === 0), 'no folder appears');
+    eq(b.errors, [], 'no window errors');
+  }
   section('conversion: a workbook with no title of its own is named after its file');
   {
     let open = null;

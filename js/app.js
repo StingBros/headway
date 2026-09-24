@@ -1329,6 +1329,10 @@
   var projectRename = null;
   function renameProjectFolder(title) {
     if (docKind !== 'bundle' || !window.HeadwayDesktop || typeof HeadwayDesktop.renameProject !== 'function') return Promise.resolve(null);
+    // the new-project wizard's draft never renames the open project
+    if (wz) return Promise.resolve(null);
+    // a missing folder cannot be renamed; the title stays changed
+    if (detached) { toast('Project folder is missing — reconnect or Save as… first', 'err'); return Promise.resolve(null); }
     if (projectRename) return projectRename.then(function () { return renameProjectFolder(title); });
     if (HeadwayDesktop.projectTitle && HeadwayDesktop.projectTitle() === title) return Promise.resolve(null);
     var dir = bundleDir, oldMarker = bundleMarker;
@@ -12707,6 +12711,7 @@
       return;
     }
     if (e.target.id === 'suProjectName') {
+      if (wz) return; // the wizard edits its draft, never the open project's name
       var pn = e.target.value.trim() || 'Roadmap';
       if (pn !== projectName()) renameProjectFolder(pn).then(function () { if (view === 'setup') renderSetup(); });
       return;

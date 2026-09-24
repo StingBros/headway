@@ -977,6 +977,54 @@ async function main() {
     ok(![...tb.files.keys()].some((k) => k.indexOf(BP + '/') === 0), 'nothing re-created where it was');
   }
 
+  section('M-3: no rename while detached; a detach during a failed rename keeps the folder gone and unwatched');
+  {
+    const tr = makeFakeTauri();
+    const br = boot(tr, ['bundleMoved', 'bundleDetached', 'bundleReattached']);
+    br.HD.setUserId(USER);
+    const fx = br.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    const cr = br.RB.migrateFromState(fx, USER, T0);
+    const o = await br.HD.openBundle(await br.HD.createBundle('C:/r/Keep', cr));
+    tr.moveDir('C:/r/Keep', 'C:/stash/keep');
+    eq(await br.HD.checkBundleLocation(), 'detached', 'detached');
+    const r0 = tr.log.length;
+    let err = null;
+    await br.HD.renameProject('Other').catch((e) => { err = e; });
+    ok(err && /Project folder is missing — reconnect or Save as… first/.test(err.message), 'renameProject refuses while detached: ' + (err && err.message));
+    eq(tr.log.slice(r0).filter((l) => l.op === 'rename' || l.op === 'mkdir' || l.op === 'watch').length, 0, '…touching nothing');
+    ok(br.HD.isDetached() && !tr.watching(), 'still detached, unwatched');
+
+    const t2 = makeFakeTauri();
+    const b2 = boot(t2, ['bundleMoved', 'bundleDetached', 'bundleReattached']);
+    b2.HD.setUserId(USER);
+    const c2 = b2.RB.migrateFromState(b2.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js')))), USER, T0);
+    const o2 = await b2.HD.openBundle(await b2.HD.createBundle('C:/r/Race', c2));
+    const RD = 'C:/r/Race/.headway';
+    const realRename = t2.fs.rename;
+    let located = null;
+    t2.fs.rename = async function (a, b) {
+      if (String(a) === 'C:/r/Race' && String(b) === 'C:/r/Other') {
+        t2.moveDir('C:/r/Race', 'C:/stash/race'); // the folder goes missing mid-rename
+        located = await b2.HD.checkBundleLocation();
+        throw 'Access is denied. (os error 5)';
+      }
+      return realRename.apply(null, arguments);
+    };
+    err = null;
+    await b2.HD.renameProject('Other').catch((e) => { err = e; });
+    t2.fs.rename = realRename;
+    eq(located, 'detached', 'the location check during the rename detached');
+    ok(!!err, 'the rename fails');
+    ok(b2.HD.isDetached(), 'still detached after the failure');
+    ok(!t2.watching(), 'the missing folder is not re-watched');
+    const env0 = o2.envs.items[0];
+    let ferr = null;
+    await b2.HD.flushShards(RD, o2.planId, [{ kind: 'items', id: env0.id, env: env0, baseRev: 0 }]).catch((e) => { ferr = e; });
+    ok(ferr && ferr.gone, 'a flush into it still rejects gone (goneDirs kept)');
+    ok(![...t2.files.keys()].some((k) => k.indexOf('C:/r/Race/') === 0), 'nothing re-created');
+    void o;
+  }
+
   section('resumeBundle is called once desktop.js has loaded');
   const b9 = boot(makeFakeTauri(), ['resumeBundle']);
   eq(b9.named('resumeBundle').length, 1, 'HeadwayApp.resumeBundle() called at load');

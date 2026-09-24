@@ -525,6 +525,7 @@
   // and the history/presence mkdirs would otherwise quietly re-create a
   // project folder a peer just renamed (their sync client moved ours). A gone
   // folder rejects and starts the search for where the project went.
+  var MISSING_RENAME_MSG = 'Project folder is missing — reconnect or Save as… first';
   var GONE_MSG = 'The project folder is gone — it was moved, renamed or removed';
   function liveRoot(dir) {
     dir = norm(dir).replace(/\/+$/, '');
@@ -992,6 +993,8 @@
     // Resolves {marker, dir, renamed}.
     renameProject: function (title) {
       if (!markerFile || !bundleDir) return Promise.reject(new Error('No project is open'));
+      // detached: the folder to rename is missing — nothing is touched
+      if (detached) return Promise.reject(new Error(MISSING_RENAME_MSG));
       var oldMarker = markerFile, oldProj = dirname(oldMarker), oldDir = bundleDir;
       var name = RB().projectName(title);
       var parent = dirname(oldProj);
@@ -1009,7 +1012,12 @@
       var tmpMarker = oldProj + '/' + name + RB().MARKER_EXT;
       var stopped = false;
       function restart() {
-        if (stopped) { stopped = false; delete goneDirs[oldDir]; rewatch(); }
+        if (!stopped) return;
+        stopped = false;
+        // the folder went missing meanwhile (detached): it stays marked gone
+        // and unwatched — the re-attach loop owns it now
+        if (detached) return;
+        delete goneDirs[oldDir]; rewatch();
       }
       return (caseOnly ? Promise.resolve(false) : fs.exists(newProj)).then(function (there) {
         if (there) throw new Error('a folder named “' + name + '” already exists beside it');
