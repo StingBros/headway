@@ -3058,14 +3058,24 @@ section('sprint moves');
 
 section('project folders (RMBundle.projectName / markerText / parseMarker / uniqueName)');
 eq(RB.projectName('Q1 Platform Roadmap'), 'Q1 Platform Roadmap', 'a plain title is the folder name');
-eq(RB.projectName('  a/b\\c:d*e?f"g<h>i|j  '), 'abcdefghij', 'path-hostile characters go');
+eq(RB.projectName('  a/b\\c:d*e?f"g<h>i|j  '), 'a b c d e f g h i j', 'path-hostile characters become spaces');
+eq(RB.projectName('Q3/Q4 Plan'), 'Q3 Q4 Plan', 'a slash separates words (Q3/Q4 → "Q3 Q4", not "Q3Q4")');
+eq(RB.projectName('Beta: v2 //  final'), 'Beta v2 final', 'runs of separators and spaces collapse to one space');
 eq(RB.projectName('Plan.. '), 'Plan', 'trailing dots and spaces go (Windows refuses them)');
 eq(RB.projectName(''), 'Roadmap', 'an empty title falls back');
 eq(RB.projectName('..'), 'Roadmap', 'a dots-only title falls back');
 eq(RB.projectName('.headway'), 'headway', 'no leading dot: the folder must not be hidden');
 eq(RB.projectName('CON'), 'CON project', 'a Windows reserved device name is made safe');
+eq(RB.projectName('CON.txt'), 'CON project.txt', 'a reserved device name with an extension is reserved too');
+eq(RB.projectName('lpt1.tar.gz'), 'lpt1 project.tar.gz', '…whatever the extension');
+eq(RB.projectName('Console'), 'Console', 'a name merely starting with one is fine');
 eq(RB.projectName('a\u0001b'), 'ab', 'control characters go');
-ok(RB.projectName(new Array(300).join('x')).length <= 120, 'long titles are capped');
+ok(RB.projectName(new Array(300).join('x')).length === 80, 'long titles are capped at 80 characters');
+{
+  const emo = new Array(80).join('x') + '\ud83d\ude80\ud83d\ude80'; // 79 x + two 2-unit emoji: unit 80 is the first one's high half
+  const cut = RB.projectName(emo);
+  ok(!/[\ud800-\udbff]$/.test(cut) && cut.length <= 80, 'truncation never splits a surrogate pair: ' + JSON.stringify(cut.slice(-3)));
+}
 eq(RB.uniqueName('Plan', []), 'Plan', 'a free name is kept');
 eq(RB.uniqueName('Plan', ['plan']), 'Plan (2)', 'a taken name gets " (2)" (case-insensitive: macOS/Windows)');
 eq(RB.uniqueName('Plan', ['Plan', 'Plan (2)', 'Plan (3)']), 'Plan (4)', 'the first free suffix wins');

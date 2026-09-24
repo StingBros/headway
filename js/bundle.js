@@ -409,16 +409,25 @@
   //   <Project>/.headway/           everything else (headway.json, plans/, …)
   // The folder is named after the title; these are the pure naming rules.
   var RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+  var NAME_MAX = 80;
   RMBundle.projectName = function (title) {
     var s = String(title == null ? '' : title)
       .replace(/[\u0000-\u001f\u007f]+/g, '')
-      .replace(/[\\/:*?"<>|]+/g, '')
+      .replace(/[\\/:*?"<>|]/g, ' ')   // a separator separates: "Q3/Q4" → "Q3 Q4"
+      .replace(/\s+/g, ' ')
       .trim()
       .replace(/^[.\s]+/, '')      // never a hidden folder
       .replace(/[.\s]+$/, '');     // Windows refuses trailing dots / spaces
-    if (s.length > 120) s = s.slice(0, 120).replace(/[.\s]+$/, '');
+    if (s.length > NAME_MAX) {
+      s = s.slice(0, NAME_MAX);
+      if (/[\ud800-\udbff]$/.test(s)) s = s.slice(0, -1); // never half a surrogate pair
+      s = s.replace(/[.\s]+$/, '');
+    }
     if (!s) return 'Roadmap';
-    if (RESERVED.test(s)) s += ' project';
+    // Windows reserves the device names with ANY extension too (CON.txt)
+    var dot = s.indexOf('.');
+    var stem = dot < 0 ? s : s.slice(0, dot);
+    if (RESERVED.test(stem.replace(/\s+$/, ''))) s = stem.replace(/\s+$/, '') + ' project' + (dot < 0 ? '' : s.slice(dot));
     return s;
   };
   // the first of base, "base (2)", "base (3)", … not in taken (compared
