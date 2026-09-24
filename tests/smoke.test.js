@@ -1037,6 +1037,9 @@ ok(state().team.length === 1, 'role added via the blank add row');
 {
   window.localStorage.removeItem('headway-onboarded-v1');
   const savedName = window.localStorage.getItem('headway-user-v1');
+  const savedUser2 = window.localStorage.getItem('headway-user-v2'); // the identity (id + name) the app reads
+  // no name yet (the identity keeps its id; memory would otherwise supply the old name)
+  window.localStorage.setItem('headway-user-v2', JSON.stringify(Object.assign(JSON.parse(savedUser2 || '{}'), { name: '' })));
   const savedTheme = window.localStorage.getItem('headway-theme-v1');
   window.localStorage.removeItem('headway-user-v1');
   window.HeadwayApp.wizard.open();
@@ -1081,6 +1084,7 @@ ok(state().team.length === 1, 'role added via the blank add row');
   ok(doc.querySelector('#wizard .wz-step.on').dataset.wzgo === 'sprints', 'Edit jumps back to that section');
   window.HeadwayApp.wizard.close(true);
   if (savedName) window.localStorage.setItem('headway-user-v1', savedName);
+  if (savedUser2) window.localStorage.setItem('headway-user-v2', savedUser2); else window.localStorage.removeItem('headway-user-v2');
   if (savedTheme) window.localStorage.setItem('headway-theme-v1', savedTheme); else window.localStorage.removeItem('headway-theme-v1');
   window.localStorage.setItem('headway-onboarded-v1', '1');
 }
@@ -6454,7 +6458,7 @@ let taggedForXlsx = null;
 // ---------------------------------------------------------------- range estimates (Setup → Sizing → Estimates)
 {
   click(doc.querySelector('#btnSetup'));
-  suTab('sizing');
+  suTab('est');
   ok(!!doc.querySelector('#setupView [data-suest="single"]') && !!doc.querySelector('#setupView [data-suest="range"]'), 'Setup offers single / range estimates');
   ok(!doc.querySelector('#setupView [data-suestbasis]'), 'no unit / basis pickers in single mode');
   click(doc.querySelector('#setupView [data-suest="range"]'));
@@ -6491,7 +6495,7 @@ let taggedForXlsx = null;
   click(Array.from(doc.querySelectorAll('#popover .menu-list button')).find(b => /Estimate ranges/.test(b.textContent)));
   ok(!!doc.querySelector('#rows .bar-range[data-range="' + rid + '"]'), 'toggling back on redraws the band');
   click(doc.querySelector('#btnSetup'));
-  suTab('sizing');
+  suTab('est');
   click(doc.querySelector('#setupView [data-suest="single"]'));
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
   ok(!doc.querySelector('#rows .bar-range'), 'single mode hides the span again');

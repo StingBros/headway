@@ -506,13 +506,16 @@ async function main() {
   eq(spOpens.length, 1, 'start page: a single Open… button');
   ok(!doc.querySelector('#startBody [data-sp-openbundle]'), 'no "Open shared roadmap…" button');
 
-  section('New project… creates a project folder');
+  section('New project… (the setup wizard) creates a project folder');
   nextOpenDir = 'C:/Users/me/OneDrive';
   b.menuClick('file', /^New project…/);
-  const nn = doc.querySelector('#modalHost #npName');
+  ok(b.HA.wizard.isOpen(), 'opens the new-project setup');
+  b.HA.wizard.go('project');
+  const nn = doc.querySelector('#wizard #suTitle');
   ok(!!nn, 'asks for a name');
   nn.value = 'Fresh';
-  b.click(doc.querySelector('#modalHost #npCreate'));
+  nn.dispatchEvent(new window.Event('change', { bubbles: true }));
+  b.HA.wizard.create();
   const FPROJ = 'C:/Users/me/OneDrive/Fresh', FDIR = FPROJ + '/.headway', FMARK = FPROJ + '/Fresh.headway';
   ok(await until(() => b.info().bundleDir === FDIR), 'created and opened — toasts: ' + seenToasts.join(' | '));
   eq(b.state().meta.title, 'Fresh', 'blank roadmap titled from the prompt');
@@ -1644,6 +1647,29 @@ function setDocTitle(b, v) {
 }
 async function projectFlow() {
   const OD = 'C:/Users/me/OneDrive/';
+  section('the new-project wizard over an open project: its draft never reaches the project; peer changes wait');
+  {
+    const S = await openFresh('Wiz');
+    const b = S.b;
+    const metaPath = S.dir + '/plans/' + S.pid + '/meta.json';
+    const meta0 = S.tauri.files.get(metaPath);
+    const w0 = shardWrites(S.tauri, 0).length;
+    b.HA.wizard.open();
+    ok(b.HA.wizard.isOpen(), 'wizard open');
+    b.HA.wizard.go('project');
+    const ti = b.doc.querySelector('#wizard #suTitle');
+    ti.value = 'Draft only';
+    ti.dispatchEvent(new b.window.Event('change', { bubbles: true }));
+    await S.emitPeer(S.vId, 'notes', 'peer while wizard', T2);
+    await settle(6);
+    eq(S.tauri.files.get(metaPath), meta0, 'the draft title is not written to the project');
+    eq(shardWrites(S.tauri, 0).length, w0, 'no shard written while the wizard is open');
+    ok(b.info().deferred > 0, 'the peer change is held');
+    b.HA.wizard.close(true);
+    ok(await until(() => S.item().notes === 'peer while wizard'), 'closing the wizard lands the peer change in the project');
+    ok(b.state().meta.title !== 'Draft only', 'the project keeps its own title');
+    eq(b.errors, [], 'no window errors');
+  }
   section('project name: one plan — the title IS the project name (headway.json, marker, folder)');
   {
     const S = await openFresh('PN1');
