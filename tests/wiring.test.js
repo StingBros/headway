@@ -1754,6 +1754,11 @@ async function projectFlow() {
     eq(b.info().bundleMarker, S.marker, 'the marker path is unchanged');
     eq(S.tauri.log.slice(r0).filter((l) => l.op === 'rename' || l.op === 'mkdir').length, 0, 'nothing renamed or created');
     ok(![...S.tauri.files.keys()].some((k) => k.indexOf(S.proj + '/') === 0 || k.indexOf('C:/Users/me/OneDrive/Moved While Missing') === 0), 'no folder appears');
+    // L-f: Save as… while detached copies only the plan on screen — and says so
+    b.click(b.doc.querySelector('#btnSave'));
+    const pm = b.doc.querySelector('#modalHost');
+    ok(!!pm.querySelector('#optNameIn') && /other plans can’t be read while its folder is missing, so they are not copied/.test(pm.textContent), 'the Save as… prompt says the other plans are not copied: ' + pm.textContent.slice(0, 300));
+    b.click(pm.querySelector('[data-m=cancel]'));
     eq(b.errors, [], 'no window errors');
   }
   section('L-c: a flush that finds the folder gone after a blip is re-scheduled; gone for good → only the detached toast');

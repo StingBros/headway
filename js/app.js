@@ -1375,7 +1375,8 @@
   // client moved ours) — follow it; it stayed missing — DETACH: the document
   // stays open with its edits held in memory (never marked saved, nothing
   // written), desktop.js keeps looking and re-attaches when it is back;
-  // Save as… keeps the edits in a new project meanwhile
+  // Save as… meanwhile writes the plan on screen (edits included) into a new
+  // project — the other plans cannot be read from the missing folder
   function bundleMoved(info) {
     if (docKind !== 'bundle' || !info) return;
     var from = bundleMarker;
@@ -1813,7 +1814,8 @@
     var bundle = docKind === 'bundle';
     return new Promise(function (resolve) {
     promptName('Save as', 'Project name',
-      bundle && detached ? 'The project folder is missing. Writes this plan as it is on screen — your unsynced edits included — into a new project folder with this name inside the folder you pick next.'
+      bundle && detached ? 'The project folder is missing. Writes this plan as it is on screen — your unsynced edits included — into a new project folder with this name inside the folder you pick next.' +
+        (livePlans().length > 1 ? ' This project’s other plans can’t be read while its folder is missing, so they are not copied.' : '')
         : bundle ? 'Copies this project — every plan and its history — into a new folder with this name inside the folder you pick next. The copy is a separate project; this one stays as it is.'
         : 'Creates a project folder with this name inside the folder you pick next.',
       projectName(), function (nm) {
@@ -13309,7 +13311,7 @@
         // instead (their seat and points are kept for when they get one)
         (state.meta.capacityEnabled && !m.capType
           ? '<span class="res-cap res-untyped" tabindex="0" role="button" data-runtyped="' + m.id +
-            '" title="No capacity type — supplies nothing. Click to pick a role">set type</span>'
+            '" title="No capacity type — supplies nothing. Click to pick a role (its capacity type applies)">set type</span>'
           : '') +
         (state.meta.capacityEnabled && m.capType && state.meta.capMode !== 'points'
           ? '<span class="res-cap" tabindex="0" role="button" data-rcap="' + m.id +
