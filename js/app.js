@@ -1827,6 +1827,28 @@
       });
     });
   }
+  // resolves 'open' | 'convert' | null (canceled)
+  function askOpenOrConvert(name) {
+    return new Promise(function (resolve) {
+      openModal(
+        '<div class="modal" style="width:460px">' +
+        '<div class="m-head"><h2>Already converted</h2></div>' +
+        '<div class="m-body"><div style="font-size:13px;color:var(--ink-2);line-height:1.5">' +
+        'A project named “' + esc(name) + '” is already beside this workbook — most likely converted from it before. ' +
+        'Open it, or convert the workbook again into a new project folder?</div></div>' +
+        '<div class="m-foot"><button data-m="cancel">Cancel</button>' +
+        '<button data-m="convertAgain">Convert again</button>' +
+        '<button data-m="openExisting" class="primary">Open the existing project</button></div></div>',
+        function (host) {
+          function pick(v) { return function () { closeModal(); resolve(v); }; }
+          $('[data-m=cancel]', host).onclick = pick(null);
+          $('[data-m=convertAgain]', host).onclick = pick('convert');
+          $('[data-m=openExisting]', host).onclick = pick('open');
+        });
+      var def = $('[data-m=openExisting]', modalHost);
+      if (def) def.focus(); // Enter opens the existing project
+    });
+  }
   // File → Open and Convert Legacy File…: an .xlsx picker, same conversion
   function convertLegacyDialog() {
     if (!window.HeadwayDesktop || !HeadwayDesktop.pickWorkbook) return Promise.resolve(null);
@@ -1855,9 +1877,19 @@
       if (own && own.toLowerCase() === 'roadmap') own = '';
       var st = RM.normalizeState(imported.state);
       st.meta.title = own || titleFromFileName(pick.name);
-      return settleCurrentDoc().then(function () {
-        if (imported.ui) applyUi(imported.ui); // the workbook carries the view prefs too
-        return createProjectIn(parent, st, 'Converted to');
+      // converted before? Its project sits beside it: open that (the
+      // default) or convert again into a " (2)" folder
+      var name = RMBundle.projectName(st.meta.title);
+      var existing = parent + '/' + name + '/' + name + RMBundle.MARKER_EXT;
+      return HeadwayDesktop.pathExists(existing).then(function (there) {
+        return there ? askOpenOrConvert(name) : 'convert';
+      }).then(function (choice) {
+        if (choice === 'open') return openBundleDoc(existing).catch(function () { return null; });
+        if (choice !== 'convert') return null;
+        return settleCurrentDoc().then(function () {
+          if (imported.ui) applyUi(imported.ui); // the workbook carries the view prefs too
+          return createProjectIn(parent, st, 'Converted to');
+        });
       });
     }).catch(function (err) {
       toast('Could not convert “' + pick.name + '”: ' + (err && err.message || err), 'err');

@@ -448,9 +448,26 @@ async function main() {
   ok(seenToasts.some((t) => /Converted to “Exported”/.test(t)), 'toast: Converted to “Exported”');
   eq(JSON.parse(window.localStorage.getItem('headway-recents-v1'))[0].path, CMARK, 'recents: the new marker, not the workbook');
 
-  section('Open and Convert Legacy File… again → " (2)" beside it');
+  section('converting it again: its project already sits beside it → "Open the existing project" (default) or "Convert again"');
+  await b.HA.openBundleDoc(MARKER); // somewhere else first, so "open the existing one" is visible
+  eq(b.info().bundleDir, DIR, 'on the first project');
+  nextOpenDir = XL;
+  const toastsB4 = seenToasts.length;
+  b.menuClick('file', /Open and Convert Legacy File…/);
+  ok(await until(() => doc.querySelector('#modalHost [data-m="openExisting"]')), 'a choice is offered');
+  const primary = doc.querySelector('#modalHost .m-foot .primary');
+  eq(primary && primary.getAttribute('data-m'), 'openExisting', 'the default (primary) is to open the existing project');
+  ok(/Exported/.test(doc.querySelector('#modalHost .m-body').textContent), 'it names the project');
+  b.click(primary);
+  ok(await until(() => b.info().bundleDir === CDIR && doc.querySelector('#modalHost').hidden), 'opened the existing project');
+  ok(!seenToasts.slice(toastsB4).some((t) => /Converted to/.test(t)), 'nothing converted');
+  ok(!tauri.files.has('C:/Users/me/OneDrive/Exported (2)/Exported (2).headway'), 'no " (2)" folder');
+
+  section('…"Convert again" → " (2)" beside it');
   nextOpenDir = XL;
   b.menuClick('file', /Open and Convert Legacy File…/);
+  ok(await until(() => doc.querySelector('#modalHost [data-m="convertAgain"]')), 'offered again');
+  b.click(doc.querySelector('#modalHost [data-m="convertAgain"]'));
   const C2 = 'C:/Users/me/OneDrive/Exported (2)';
   ok(await until(() => b.info().bundleDir === C2 + '/.headway'), 'the second conversion lands in "Exported (2)" — toasts: ' + seenToasts.join(' | '));
   ok(tauri.files.has(C2 + '/Exported (2).headway'), 'its marker is named after its folder');
