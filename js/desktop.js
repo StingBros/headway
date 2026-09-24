@@ -968,14 +968,15 @@
     // Save as…: copy the project whose data folder is srcDir into a NEW
     // project folder destProjectDir (refused if it exists). Every plan and
     // shard and the history come along; presence does not; headway.json gets
-    // a new docId (the copies must never merge) and every plan's meta the new
-    // title. Resolves the new marker path.
+    // a new docId (the copies must never merge) and the new project name;
+    // with ONE plan its meta takes the name too (its title is the project
+    // name), with several each plan keeps its own title. Resolves the marker.
     copyProject: function (srcDir, destProjectDir, title) {
       srcDir = norm(srcDir).replace(/\/+$/, '');
       destProjectDir = norm(destProjectDir).replace(/\/+$/, '');
       var dest = destProjectDir + '/' + RB().DATA_DIR;
       var now = new Date().toISOString(), uid = ownUserId || 'headway';
-      var files = [], docId = null;
+      var files = [], docId = null, livePlans = 0;
       function walk(relDir) {
         var abs = relDir ? srcDir + '/' + relDir : srcDir;
         return fs.readDir(abs).then(function (entries) {
@@ -1000,11 +1001,13 @@
                 var hw = JSON.parse(text);
                 hw.docId = docId = window.RM.uid('doc');
                 hw.title = title;
+                livePlans = (hw.plans || []).filter(function (p) { return p && p.id && !p.deleted; }).length;
                 text = JSON.stringify(hw, null, 2) + '\n';
               } else if (c.kind === 'meta') {
                 var env = null;
                 try { env = JSON.parse(text); } catch (e) { /* copied as-is */ }
-                if (isEnvelope(env)) text = pretty(RB().canonicalize(RB().retitleMeta(env, title, uid, now)));
+                // one plan: its title IS the project name; several: labels, kept
+                if (isEnvelope(env) && livePlans <= 1) text = pretty(RB().canonicalize(RB().retitleMeta(env, title, uid, now)));
               }
               // its folder first: atomicWriteText makes none outside a live data folder
               return fs.mkdir(dirname(dest + '/' + r), { recursive: true }).then(function () {

@@ -907,10 +907,12 @@
     var hist = pendingHistory;
     pendingHistory = [];
     // our own edit of the title (Setup, the header, undo, the assistant …):
-    // once it is on disk the folder and marker follow it
+    // once it is on disk the folder and marker follow it — when the project
+    // has ONE plan, whose title is the project name. With several plans a
+    // plan title is a label; the project name is edited on its own (Setup).
     var titleTo = null;
     changes.forEach(function (c) {
-      if (c.kind !== 'meta') return;
+      if (c.kind !== 'meta' || severalPlans()) return;
       var was = RMBundle.unwrap(prevOf['meta/meta']), now = RMBundle.unwrap(c.env);
       var t0 = was && was.meta ? was.meta.title : null, t1 = now && now.meta ? now.meta.title : null;
       if (t1 && t1 !== t0) titleTo = t1;
@@ -1335,6 +1337,8 @@
       return HeadwayDesktop.renameProject(title).then(function (res) {
         bundleDir = res.dir;
         bundleMarker = res.marker;
+        // headway.json carries the project name too (read-merge-write)
+        HeadwayDesktop.writeHeadway(res.dir, { title: title }).catch(function () { /* the marker and folder stand; retried on the next rename */ });
         if (res.renamed) {
           if (oldMarker && oldMarker !== res.marker) dropRecent(oldMarker);
           noteRecent(res.marker, 'bundle');
@@ -1569,6 +1573,14 @@
   // ---- plans (the Options feature over sub-bundles). Which plan I view is
   // mine; the list lives in headway.json and merges by id.
   function livePlans() { return planList.filter(function (p) { return p && p.id && !p.deleted; }); }
+  // the project has ONE name: headway.json's title = the marker's title = the
+  // folder. With one plan the title field edits it; with several, Setup's
+  // Project name does and plan titles are labels
+  function severalPlans() { return docKind === 'bundle' && livePlans().length > 1; }
+  function projectName() {
+    return (docKind === 'bundle' && window.HeadwayDesktop && HeadwayDesktop.projectTitle && HeadwayDesktop.projectTitle()) ||
+      (state && state.meta.title) || 'Roadmap';
+  }
   function planEntry(id) { return planList.filter(function (p) { return p && p.id === id; })[0] || null; }
   function planName(id) {
     var p = planEntry(id);
@@ -1778,7 +1790,7 @@
       bundle && detached ? 'The project folder is missing. Writes this plan as it is on screen — your unsynced edits included — into a new project folder with this name inside the folder you pick next.'
         : bundle ? 'Copies this project — every plan and its history — into a new folder with this name inside the folder you pick next. The copy is a separate project; this one stays as it is.'
         : 'Creates a project folder with this name inside the folder you pick next.',
-      (state && state.meta.title) || 'Roadmap', function (nm) {
+      projectName(), function (nm) {
         var name = RMBundle.projectName(nm);
         var parent;
         resolve(settleCurrentDoc().then(function () {
@@ -1835,9 +1847,14 @@
     return RMExcel.importWorkbook(pick.buffer).then(function (r) {
       imported = r;
     }).then(function () {
+      // the project is named by the workbook's own title; its file name
+      // only when it has none — empty, or the placeholder a load fills in
+      // ('Roadmap'; a template workbook's 'Imported Roadmap')
+      var own = imported.source !== 'template' && imported.state && imported.state.meta &&
+        String(imported.state.meta.title || '').trim();
+      if (own && own.toLowerCase() === 'roadmap') own = '';
       var st = RM.normalizeState(imported.state);
-      // a legacy desktop workbook's title WAS its file name
-      st.meta.title = titleFromFileName(pick.name);
+      st.meta.title = own || titleFromFileName(pick.name);
       return settleCurrentDoc().then(function () {
         if (imported.ui) applyUi(imported.ui); // the workbook carries the view prefs too
         return createProjectIn(parent, st, 'Converted to');
@@ -11596,6 +11613,24 @@
     openBuCellEditor(e.target.closest('.bu-cell'));
   });
 
+  // Setup's Project card. One plan: its title IS the project name. Several
+  // plans: the project name (folder, marker, headway.json) and this plan's
+  // title — a label that never renames anything — are separate fields.
+  function projectNameCardHtml() {
+    var m = state.meta;
+    var titleIn = function (label) {
+      return '<label class="p-lab">' + label + '</label>' +
+        '<input id="suTitle" style="width:100%" maxlength="120" value="' + esc(m.title || '') + '" placeholder="Roadmap name">';
+    };
+    if (!severalPlans()) return '<section class="su-card"><h2>Project</h2>' + titleIn('Name') + '</section>';
+    return '<section class="su-card"><h2>Project</h2>' +
+      '<label class="p-lab">Project name</label>' +
+      '<input id="suProjectName" style="width:100%" maxlength="120" value="' + esc(projectName()) + '" placeholder="Project name">' +
+      '<div class="m-hint">Shared by every plan. The project folder is named after it.</div>' +
+      titleIn('Plan title') +
+      '<div class="m-hint">This plan\u2019s own title \u2014 a label; it does not rename the project.</div>' +
+      '</section>';
+  }
   function renderSetup() {
     var m = state.meta;
     var host = $('#setupView');
@@ -11797,10 +11832,7 @@
     // one card set per vertical tab
     var tabBodies = {
       timeline:
-        '<section class="su-card"><h2>Project</h2>' +
-        '<label class="p-lab">Name</label>' +
-        '<input id="suTitle" style="width:100%" maxlength="120" value="' + esc(m.title || '') + '" placeholder="Roadmap name">' +
-        '</section>' +
+        projectNameCardHtml() +
         '<section class="su-card"><h2>Timeline</h2>' +
         '<div class="p-grid2">' +
         '<div><label class="p-lab">Start (' + firstDayName + ')</label><input type="text" readonly class="cal-in" id="suStart" value="' + esc(m.timelineStart) + '" style="width:100%"></div>' +
@@ -12072,6 +12104,11 @@
   });
 
   $('#setupView').addEventListener('change', function (e) {
+    if (e.target.id === 'suProjectName') {
+      var pn = e.target.value.trim() || 'Roadmap';
+      if (pn !== projectName()) renameProjectFolder(pn).then(function () { if (view === 'setup') renderSetup(); });
+      return;
+    }
     if (e.target.id === 'suTitle') {
       var tv2 = e.target.value.trim() || 'Roadmap';
       commit('title', function (s2) { s2.meta.title = tv2; });

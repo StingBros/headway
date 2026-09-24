@@ -589,20 +589,42 @@ async function main() {
     eq(tc.files.get('C:/w/Copy/.headway/history/' + USER + '.jsonl'), tc.files.get(SRC + '/.headway/history/' + USER + '.jsonl'), 'history copied over');
     eq(relOf('C:/w/Copy/.headway').filter((r) => /^presence\//.test(r)), [], 'no presence copied');
     ok(!relOf('C:/w/Copy/.headway').some((r) => /\.tmp$/.test(r)), 'no .tmp copied');
+    // several plans: each keeps its own title (the project name is headway.json + marker + folder)
     cc.headway.plans.forEach((p) => {
       const env = JSON.parse(tc.files.get('C:/w/Copy/.headway/plans/' + p.id + '/meta.json'));
-      eq(bc.RB.unwrap(env).meta.title, 'Copy', 'plan ' + p.name + ': meta.title is the new name');
+      eq(bc.RB.unwrap(env).meta.title, fx.meta.title, 'plan ' + p.name + ': keeps its own title');
     });
     let same = true;
     snap.forEach((v, k) => { if (tc.files.get(k) !== v) same = false; });
     ok(same && [...tc.files.keys()].filter((k) => k.indexOf(SRC + '/') === 0).length === snap.size, 'the original is untouched');
     eq(JSON.parse(tc.files.get(srcMarker)).id, cc.headway.docId, 'the original keeps its id');
     const opened = await bc.HD.openBundle(newMarker);
-    eq(opened.doc.meta.title, 'Copy', 'the copy opens with the new title');
+    eq(opened.doc.meta.title, fx.meta.title, 'the copy opens with the plan\'s own title');
+    eq(bc.HD.projectTitle(), 'Copy', '…in the project named Copy');
     eq(opened.doc.items.length, fx.items.length, '…and every item');
     let err = null;
     await bc.HD.copyProject(SRC + '/.headway', 'C:/w/Copy', 'Copy').catch((e) => { err = e; });
     ok(err && /already exists/.test(err.message), 'an existing target folder is refused: ' + (err && err.message));
+  }
+
+  section('copyProject with several plans: the project is named; every plan keeps its own title');
+  {
+    const tc = makeFakeTauri();
+    const bc2 = boot(tc);
+    bc2.HD.setUserId(USER);
+    const fx = bc2.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    fx.meta.title = 'Plan A title';
+    const cc = bc2.RB.migrateFromState(fx, USER, T0);
+    await bc2.HD.createBundle('C:/c/Multi', cc);
+    const fb = bc2.RM.clone(fx); fb.meta.title = 'Plan B title';
+    const chB = [{ kind: 'meta', id: 'meta', env: bc2.RB.wrapMeta(fb, null, USER, T0), baseRev: 0 }];
+    await bc2.HD.flushShards('C:/c/Multi/.headway', 'plan-b', chB);
+    await bc2.HD.writeHeadway('C:/c/Multi/.headway', { plans: [bc2.RB.newPlanEntry('plan-b', 'Plan B', T0)] });
+    const nm = await bc2.HD.copyProject('C:/c/Multi/.headway', 'C:/c/Copy', 'The Copy');
+    eq(JSON.parse(tc.files.get(nm)).title, 'The Copy', 'marker: the project name');
+    eq(JSON.parse(tc.files.get('C:/c/Copy/.headway/headway.json')).title, 'The Copy', 'headway.json: the project name');
+    const metaTitle = (pid) => bc2.RB.unwrap(JSON.parse(tc.files.get('C:/c/Copy/.headway/plans/' + pid + '/meta.json'))).meta.title;
+    eq([metaTitle(cc.headway.plans[0].id), metaTitle('plan-b')], ['Plan A title', 'Plan B title'], 'plan titles kept');
   }
 
   section('renameProject: marker + folder follow the title');

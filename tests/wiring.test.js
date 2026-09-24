@@ -424,9 +424,13 @@ async function main() {
   new window.MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach((n) => { if (n.textContent) seenToasts.push(n.textContent); })))
     .observe(doc.querySelector('#toasts'), { childList: true });
 
-  section('Open… an .xlsx → converted BESIDE the workbook, which is left untouched');
-  const XL = 'C:/Users/me/OneDrive/Exported.xlsx';
-  tauri.files.set(XL, Uint8Array.from(new Uint8Array(xbytes)));
+  section('Open… an .xlsx → converted BESIDE the workbook, which is left untouched; the project is named by the workbook\'s own title');
+  // the workbook's internal title names the project, not its file name
+  const XL = 'C:/Users/me/OneDrive/legacy-export v3.xlsx';
+  const exSt = b.RB.exportableState(b.state());
+  exSt.meta.title = 'Exported';
+  const exBlob = await window.RMExcel.exportWorkbook(exSt, {});
+  tauri.files.set(XL, Uint8Array.from(new Uint8Array(await exBlob.arrayBuffer())));
   const xlBefore = Buffer.from(tauri.files.get(XL)).toString('base64');
   nextOpenDir = XL; // the Open dialog returns the workbook
   b.menuClick('file', /^Open…/);
@@ -575,6 +579,7 @@ async function main() {
   await fixes();
   await presence();
   await importFlow();
+  await projectFlow();
 
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
@@ -749,7 +754,9 @@ async function fixes() {
   section('F1+F7/T2b+T8: edit during an in-flight flush, then Open… an .xlsx → edits on disk in the first project, the converted one watched');
   {
     const S = await openFresh('T2b');
-    const blob = await S.b.window.RMExcel.exportWorkbook(S.b.RB.exportableState(S.b.state()), {});
+    const soloSt = S.b.RB.exportableState(S.b.state());
+    soloSt.meta.title = 'Solo'; // the workbook's own title names the converted project
+    const blob = await S.b.window.RMExcel.exportWorkbook(soloSt, {});
     const ab = await blob.arrayBuffer();
     S.tauri.dirs.add('C:/tmp');
     S.tauri.files.set('C:/tmp/Solo.xlsx', Uint8Array.from(new Uint8Array(ab))); // own buffer: bytes.buffer is the file
@@ -1605,3 +1612,71 @@ main().catch((e) => {
   console.error('  ✗ suite threw: ' + (e && e.stack || e));
   process.exit(1);
 });
+
+// ---- the project has ONE name (headway.json title + marker + folder)
+async function addPlanB(S) {
+  const planB = 'plan-b';
+  const envsB = S.b.RB.wrapState(S.b.RM.clone(S.b.state()), {}, 'seed', T0);
+  const chB = [{ kind: 'meta', id: 'meta', env: S.b.RB.wrapMeta(S.b.state(), null, 'seed', T0), baseRev: 0 }];
+  S.b.RB.KINDS.forEach((k) => envsB[k].forEach((env) => chB.push({ kind: k, id: env.id, env, baseRev: 0 })));
+  await S.b.HD.flushShards(S.dir, planB, chB);
+  S.b.HA.plansChanged(await S.b.HD.writeHeadway(S.dir, { plans: [S.b.RB.newPlanEntry(planB, 'Plan B', T0)] }));
+  return planB;
+}
+function setDocTitle(b, v) {
+  const t = b.doc.querySelector('#docTitle');
+  b.click(t);
+  t.value = v;
+  t.dispatchEvent(new b.window.Event('change', { bubbles: true }));
+}
+async function projectFlow() {
+  const OD = 'C:/Users/me/OneDrive/';
+  section('project name: one plan — the title IS the project name (headway.json, marker, folder)');
+  {
+    const S = await openFresh('PN1');
+    const b = S.b;
+    b.HA.openSetup('timeline');
+    ok(!b.doc.querySelector('#suProjectName'), 'one plan: no separate Project name field');
+    setDocTitle(b, 'PN One');
+    ok(await until(() => b.info().bundleMarker === OD + 'PN One/PN One.headway'), 'the folder follows the title');
+    ok(await until(() => JSON.parse(S.tauri.files.get(OD + 'PN One/.headway/headway.json')).title === 'PN One'), 'headway.json title follows too');
+    eq(JSON.parse(S.tauri.files.get(OD + 'PN One/PN One.headway')).title, 'PN One', 'marker title');
+  }
+  section('project name: several plans — plan titles are labels; Setup has a Project name field');
+  {
+    const S = await openFresh('PN2');
+    const b = S.b;
+    await addPlanB(S);
+    const hw0 = JSON.parse(S.tauri.files.get(S.dir + '/headway.json')).title;
+    setDocTitle(b, 'Just a label');
+    ok(await until(() => b.RB.unwrap(JSON.parse(S.tauri.files.get(S.dir + '/plans/' + S.pid + '/meta.json'))).meta.title === 'Just a label'), 'the plan title lands in its meta');
+    await settle(6);
+    eq(b.info().bundleMarker, S.marker, 'the folder is NOT renamed');
+    eq(JSON.parse(S.tauri.files.get(S.dir + '/headway.json')).title, hw0, 'the project name is unchanged');
+    b.HA.openSetup('timeline');
+    const pn = b.doc.querySelector('#suProjectName');
+    ok(!!pn, 'Setup shows a Project name field');
+    eq(pn && pn.value, b.HD.projectTitle(), '…holding the project name');
+    pn.value = 'PN Project';
+    pn.dispatchEvent(new b.window.Event('change', { bubbles: true }));
+    const NP = OD + 'PN Project';
+    ok(await until(() => b.info().bundleMarker === NP + '/PN Project.headway'), 'the folder follows the project name — ' + b.toasts());
+    ok(await until(() => JSON.parse(S.tauri.files.get(NP + '/.headway/headway.json')).title === 'PN Project'), 'headway.json title');
+    eq(JSON.parse(S.tauri.files.get(NP + '/PN Project.headway')).title, 'PN Project', 'marker title');
+    eq(b.state().meta.title, 'Just a label', 'the plan title is untouched');
+    eq(b.errors, [], 'no window errors');
+  }
+  section('conversion: a workbook with no title of its own is named after its file');
+  {
+    let open = null;
+    const tauri = makeFakeTauri({ dialogOpen: () => open });
+    const b = boot(tauri, { localStorage: { 'headway-user-v2': JSON.stringify(FIXER), 'headway-user-v1': FIXER.name } });
+    const st = b.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    st.meta.title = '';
+    const blob = await b.window.RMExcel.exportWorkbook(st, {});
+    const XL = OD + 'Fallback Name.xlsx';
+    tauri.files.set(XL, Uint8Array.from(new Uint8Array(await blob.arrayBuffer())));
+    await b.HA.openFromPath(XL);
+    ok(await until(() => b.info().bundleMarker === OD + 'Fallback Name/Fallback Name.headway'), 'named after the file — ' + b.toasts());
+  }
+}
