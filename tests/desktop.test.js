@@ -554,7 +554,7 @@ async function main() {
     const m2 = await bp.HD.createProject('C:/work', 'plan', bp.RB.migrateFromState(fx, USER, T0));
     eq(m2, 'C:/work/plan (2)/plan (2).headway', 'a taken name (case-insensitive) gets " (2)"');
     const m3 = await bp.HD.createProject('C:/work', 'a/b: c?', bp.RB.migrateFromState(fx, USER, T0));
-    eq(m3, 'C:/work/ab c/ab c.headway', 'the title is sanitised for the folder');
+    eq(m3, 'C:/work/a b c/a b c.headway', 'the title is sanitised for the folder');
     eq(JSON.parse(tp.files.get(m3)).title, fx.meta.title, 'the marker keeps the document title');
   }
 
