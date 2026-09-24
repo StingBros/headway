@@ -1518,7 +1518,7 @@ async function importFlow() {
   ok(/1 new story/.test(txt), 'says 1 new story');
   ok(/1 field filled in/.test(txt), 'says 1 field filled in');
   ok(/0 team members/.test(txt) && /0 phases/.test(txt), 'says 0 team members, 0 phases');
-  ok(/1 difference left alone \(the shared roadmap wins\)/.test(txt), 'says 1 difference left alone: ' + txt.replace(/\s+/g, ' ').slice(0, 200));
+  ok(/1 difference left alone \(the open project keeps its value\)/.test(txt), 'says 1 difference left alone: ' + txt.replace(/\s+/g, ' ').slice(0, 200));
   ok(/Imported feature/.test(txt), 'lists the new feature title');
   ok(!/template layout/.test(txt), 'a Headway workbook: no template note');
   eq(b.state().items.length, nItems, 'nothing applied before Import');

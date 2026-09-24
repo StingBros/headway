@@ -1911,7 +1911,7 @@
   }
   function importPreview(name, plan, source) {
     var s = plan.summary;
-    var leftAlone = countOf(s.conflicts, 'difference', 'differences') + ' left alone (the shared roadmap wins)';
+    var leftAlone = countOf(s.conflicts, 'difference', 'differences') + ' left alone (the open project keeps its value)';
     var note = source === 'template'
       ? '<div class="m-hint">Not a Headway workbook — read from the template layout.</div>' : '';
     var body;

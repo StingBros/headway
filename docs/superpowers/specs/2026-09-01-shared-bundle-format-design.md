@@ -357,3 +357,50 @@ simply not recognised.
   `docId` in `headway.json` and the marker; every plan's meta re-stamped with the new title
   (`RMBundle.retitleMeta`). The app switches to the copy.
 - **File associations** are not declared in `tauri.conf.json`, so none were added.
+
+## Amendment (2026-09-24): review fixes — project name, detached state, conversion rules
+
+Supersedes the matching bullets of the 2026-09-23 amendment.
+
+- **Naming.** `RMBundle.projectName`: a refused separator (`\ / : * ? " < > |`) becomes a
+  space, whitespace runs collapse, control characters go; no leading / trailing dots or
+  spaces; a Windows device name is suffixed also with an extension (`CON.txt` →
+  `CON project.txt`); capped at 80 UTF-16 units without splitting a surrogate pair.
+- **One project name.** `headway.json` `title` = the marker's `title` = the folder name.
+  One live plan: that plan's `meta.title` is the project name — a flush that changes it
+  renames the folder and writes `headway.json`'s title. Several live plans: plan titles are
+  labels and never rename anything; Setup's *Project name* field calls the rename.
+  `copyProject` sets the new name in `headway.json` and the marker; it re-stamps a plan's
+  `meta.title` only when the project has one live plan.
+- **Gone means the data folder.** A location check starts only on an event whose path is
+  the watched `.headway/` folder itself or its project folder (never a path outside, never a
+  file inside — a sync client re-creating `headway.json` is not a move), on a write that
+  finds the folder missing, and on window focus. `liveRoot` and the check test the
+  `.headway/` directory, not `headway.json`. The check retries with backoff (0.5 s, 2 s,
+  5 s): present again → nothing happens; a marker with the same id beside where it was whose
+  `headway.json` has landed → followed (`bundleMoved`); still nothing → **detached**.
+- **Detached.** The session keeps its folder path; nothing is written (the folder is in
+  `goneDirs`); the watcher is off; `bundleDetached({marker, title})`. The app keeps the
+  document open, never marks it saved, holds the pending shards, drops no recent, shows
+  "Folder missing — Save as…" on the Save button, and counts the edits as unsaved for the
+  close / open guard. Save as… writes the in-memory document as a new project. desktop.js
+  looks again on focus and every 10 s; the folder back (complete) → `bundleReattached` and
+  the app flushes; found elsewhere → followed as above.
+- **Mid-flush rename.** `flushShards` checks the folder before every shard; a shard that
+  finds it gone runs the location check and, when followed, is written to the new folder
+  with the rest. It resolves `{written, merged, dir}` and the app adopts `dir`. The temp-file
+  write creates a missing sub-folder only inside a data folder that still exists
+  (`copyProject` makes its own folders). After any re-pointing (own rename, followed move,
+  re-attach) the active plan is re-read and every shard that differs from what was last
+  read or written goes to `applyExternalEntities` in one call.
+- **Conversion.** The project is named by the workbook's own `meta.title` (its file name when
+  that is empty or the `Roadmap` placeholder, or for a template workbook). A project of that
+  name already beside the workbook → *Open the existing project* (default) or *Convert
+  again* (`" (2)"`). A create that fails beside the workbook (read-only folder) asks for a
+  parent folder. The workbook's UI snapshot is applied only after the project is created.
+- **Save / Save as.** ⌘S = Save (a project syncs; outside a project, Save as…); ⇧⌘S = Save
+  as…. The unsaved-work guard's Save runs Save as… and continues once it lands. The in-place
+  `.xlsx` code (`saveBlob`, `setPath`, `renameTo`, `reloadFromDisk`, the xlsx watcher,
+  `openBundleDialog`) and the auto-save preference are removed.
+- **Save as copy.** A shard that disappears between the listing and its read is skipped; any
+  other failure removes the partly written target folder.
