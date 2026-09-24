@@ -1756,6 +1756,43 @@ async function projectFlow() {
     ok(![...S.tauri.files.keys()].some((k) => k.indexOf(S.proj + '/') === 0 || k.indexOf('C:/Users/me/OneDrive/Moved While Missing') === 0), 'no folder appears');
     eq(b.errors, [], 'no window errors');
   }
+  section('L-c: a flush that finds the folder gone after a blip is re-scheduled; gone for good → only the detached toast');
+  {
+    const S = await openFresh('Blip');
+    const b = S.b;
+    const seen = [];
+    new b.window.MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach((n) => { if (n.textContent) seen.push(n.textContent); })))
+      .observe(b.doc.querySelector('#toasts'), { childList: true });
+    const HP = S.dir + '/history/' + FIXER.id + '.jsonl';
+    await settle(6);
+    // the folder blips away while our history line is being written, then is back
+    let blipped = false, n = 0;
+    S.tauri.onExists = (p) => {
+      if (!blipped && p === S.dir + '/history') { blipped = true; S.tauri.moveDir(S.proj, 'C:/stash/blip'); return; }
+      if (blipped && p === S.dir && ++n === 2) S.tauri.moveDir('C:/stash/blip', S.proj);
+    };
+    S.select();
+    S.set('notes', 'through a blip');
+    ok(await until(() => blipped && n >= 2), 'the folder blipped during the history write');
+    ok(await until(() => b.info().docSaved && !b.info().flushing), 'the waiting flush ran again and synced — ' + seen.join(' | '));
+    S.tauri.onExists = null;
+    ok(/through a blip/.test(S.tauri.files.get(HP) || ''), 'the history line landed');
+    ok(!seen.some((t) => /Sync failed/.test(t)), 'no Sync-failed toast: ' + seen.join(' | '));
+    ok(!b.info().detached, 'never detached');
+
+    seen.length = 0;
+    let gone = false;
+    S.tauri.onExists = (p) => { if (!gone && p === S.dir + '/history') { gone = true; S.tauri.moveDir(S.proj, 'C:/stash/gone'); } };
+    S.set('notes', 'gone for good');
+    ok(await until(() => b.info().detached), 'detached — ' + seen.join(' | '));
+    S.tauri.onExists = null;
+    await settle(6);
+    ok(seen.some((t) => /Project folder is missing/.test(t)), 'the detached toast');
+    ok(!seen.some((t) => /Sync failed/.test(t)), 'no Sync-failed toast: ' + seen.join(' | '));
+    eq(b.info().docSaved, false, 'the edits stay pending');
+    eq(S.item().notes, 'gone for good', '…and in the document');
+    eq(b.errors, [], 'no window errors');
+  }
   section('conversion: a workbook with no title of its own is named after its file');
   {
     let open = null;

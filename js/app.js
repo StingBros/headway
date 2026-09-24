@@ -824,6 +824,18 @@
     flushChain = runFlush();
     return flushChain;
   }
+  // a flush found the data folder gone: wait for the locate ladder instead
+  // of toasting. Back after a blip ('ok' / 'reattached') → flush again;
+  // 'moved' → bundleMoved already re-scheduled it; 'detached' → quiet (the
+  // detached toast says it all; the edits stay pending)
+  function flushFoundGone() {
+    if (!window.HeadwayDesktop || typeof HeadwayDesktop.checkBundleLocation !== 'function') return;
+    HeadwayDesktop.checkBundleLocation().then(function (res) {
+      if ((res === 'ok' || res === 'reattached') && !docSaved) scheduleBundleFlush();
+    }, function (err) {
+      toast('Sync failed: ' + (err && err.message || err), 'err');
+    });
+  }
   // Wrap an entity against its disk baseline; the fields this machine changed
   // carry the time they were changed here (localAt), not the flush time, so a
   // value edited offline at 10:00 loses to a peer's 10:05 edit as LWW intends.
@@ -963,6 +975,7 @@
       // keep everything dirty so the Sync button (or the next edit) retries
       pendingHistory = hist.concat(pendingHistory);
       docSaved = false;
+      if (err && err.gone) { flushFoundGone(); return; }
       toast('Sync failed: ' + (err && err.message || err), 'err');
     }).then(function () {
       flushing = false;
