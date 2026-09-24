@@ -1723,4 +1723,52 @@ async function projectFlow() {
     eq(b.info().weekPx, 55, 'the workbook\'s view prefs apply once the project exists');
     eq(b.errors, [], 'no window errors');
   }
+  section('L2/L3: not a project yet — Save, ⌘S and the unsaved guard run Save as… (and then continue); ⇧⌘S is Save as…');
+  {
+    let open = null;
+    const tauri = makeFakeTauri({ dialogOpen: () => open });
+    const b = boot(tauri, { localStorage: { 'headway-user-v2': JSON.stringify(FIXER), 'headway-user-v1': FIXER.name } });
+    const st = b.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    st.meta.title = 'Loose';
+    const blob = await b.window.RMExcel.exportWorkbook(st, {});
+    await b.HA.loadBuffer(Uint8Array.from(new Uint8Array(await blob.arrayBuffer())).buffer, 'Loose.xlsx');
+    await settle();
+    eq(b.info().docKind, 'xlsx', 'a session that is not a project');
+    setDocTitle(b, 'Loose edited');
+    await settle();
+    const prompt = () => b.doc.querySelector('#modalHost:not([hidden]) #optNameIn');
+    const cancel = () => b.click(b.doc.querySelector('#modalHost [data-m="cancel"]'));
+    b.key('s', { metaKey: true });
+    ok(!!prompt(), '⌘S opens Save as… (name prompt)');
+    cancel();
+    b.click(b.doc.querySelector('#btnSave'));
+    ok(!!prompt(), 'the Save button opens Save as…');
+    cancel();
+    b.key('S', { metaKey: true, shiftKey: true });
+    ok(!!prompt(), '⇧⌘S opens Save as…');
+    cancel();
+    ok(b.HA.unsavedNow(), 'the edit counts as unsaved');
+    let proceeded = 0;
+    b.HA.guardUnsaved(() => { proceeded++; });
+    ok(!!b.doc.querySelector('#modalHost [data-m="gsave"]'), 'the unsaved guard asks');
+    b.click(b.doc.querySelector('#modalHost [data-m="gsave"]'));
+    ok(!!prompt(), 'its Save runs Save as…');
+    tauri.dirs.add('C:/Users/me/Saved');
+    open = 'C:/Users/me/Saved';
+    prompt().value = 'Loose Project';
+    b.click(b.doc.querySelector('#modalHost #optNameOk'));
+    ok(await until(() => b.info().bundleMarker === 'C:/Users/me/Saved/Loose Project/Loose Project.headway'), 'saved as a project — ' + b.toasts());
+    ok(await until(() => proceeded === 1), '…and then the close / open asked for continues');
+    eq(b.errors, [], 'no window errors');
+  }
+  section('L3: in a project, ⌘S syncs and ⇧⌘S is Save as…');
+  {
+    const S = await openFresh('Keys');
+    const b = S.b;
+    b.key('s', { metaKey: true });
+    ok(!b.doc.querySelector('#modalHost:not([hidden]) #optNameIn'), '⌘S does not prompt (it syncs)');
+    b.key('S', { ctrlKey: true, shiftKey: true });
+    ok(!!b.doc.querySelector('#modalHost:not([hidden]) #optNameIn'), '⇧Ctrl+S opens Save as…');
+    eq(b.doc.querySelector('#modalHost #optNameIn').value, b.HD.projectTitle(), '…prefilled with the project name');
+  }
 }

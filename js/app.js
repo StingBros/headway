@@ -13868,6 +13868,15 @@
       if (ff) { ff.focus(); ff.select(); }
       return;
     }
+    // ⌘S / Ctrl+S = Save (desktop: Sync a project, Save as… anything else);
+    // ⇧⌘S / ⇧Ctrl+S = Save as… (desktop). Works while typing: the field is
+    // blurred first so its edit commits.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      if (inField && document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      if (e.shiftKey && window.HeadwayDesktop) saveAsProject(); else $('#btnSave').click();
+      return;
+    }
     if (inField) return;
     var mod = e.metaKey || e.ctrlKey;
     // [ and ] fold the left pane / the right panel (never while typing — above)
@@ -13901,9 +13910,6 @@
         render();
       }
       return;
-    }
-    if (mod && e.key.toLowerCase() === 's') {
-      e.preventDefault(); $('#btnSave').click(); return;
     }
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedEdge) {
       e.preventDefault();
