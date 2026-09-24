@@ -11,15 +11,14 @@
   var fs = window.__TAURI__.fs;
 
   var XLSX_FILTER = [{ name: 'Excel workbook', extensions: ['xlsx'] }];
-  var OPEN_FILTER = [{ name: 'Headway project or Excel workbook', extensions: ['headway', 'xlsx'] }];
   var unwatch = null;       // stops the active directory watcher
   var watchGen = 0;         // bumps on every rewatch so a late event from an old watcher is dropped
 
   // shared-bundle (folder) document — see the "shared bundle" section below
-  var bundleDir = null;      // absolute path of the open project's hidden <Project>/.headway data folder
-  var markerFile = null;     // absolute path of <Project>/<Project>.headway — what the user opened
-  var projectTitle = null;   // the marker's title (the folder is named after it)
-  var projectId = null;      // the marker's id (= headway.json docId): finds the project again after a move
+  var bundleDir = null;      // absolute path of the open project's hidden <Project>.headway/.headway data folder
+  var projectPath = null;    // absolute path of the <Project>.headway folder — what the user opened
+  var projectTitle = null;   // headway.json's title (the folder is named after it)
+  var projectId = null;      // headway.json's docId: finds the project again after a move
   var goneDirs = {};         // data folders we know are gone (renamed away): never written again
   var locating = null;       // the in-flight checkBundleLocation()
   var detached = false;      // the data folder is missing: session kept, nothing written, retried
@@ -38,22 +37,23 @@
   }
 
   function markTitle() {
-    var name = markerFile ? (projectTitle || basename(markerFile).replace(/\.headway$/i, '')) : null;
+    var name = projectPath ? (projectTitle || basename(projectPath).replace(/\.headway$/i, '')) : null;
     document.title = name ? name + ' — Headway' : 'Headway — Roadmap Planner';
     var t = document.getElementById('docTitle');
-    if (t) t.title = markerFile || '';
+    if (t) t.title = projectPath || '';
   }
 
   // the pre-start-page single last-path memory named an .xlsx; recents are
   // projects only now
   try { localStorage.removeItem('headway-last-path'); } catch (e) { /* storage optional */ }
 
-  // the open project's data folder, recursively: shards live three levels down
+  // the open project's folder, recursively: headway.json at its top, shards
+  // four levels down in its data folder
   function rewatch() {
     if (unwatch) { try { unwatch(); } catch (e) { /* already gone */ } unwatch = null; }
     var gen = ++watchGen;
     if (!bundleDir) return;
-    fs.watch(bundleDir, function (event) {
+    fs.watch(dirname(bundleDir), function (event) {
       if (gen !== watchGen) return;
       return onBundleEvent(event);
     }, { recursive: true, delayMs: 800 }).then(function (un) {
@@ -65,12 +65,13 @@
   }
 
   // ------------------------------------------------------- shared bundle
-  // A project is a folder named after its title:
-  //   <Project>/<Project>.headway             marker the user opens:
-  //                                           {"headway":1,"id":<docId>,"title":…}
-  //   <Project>/.headway/                     hidden; EVERYTHING below lives here
-  //                                           (bundleDir = this folder):
-  //   headway.json                            plan list (merged by plan id)
+  // A project is a folder named after its title (projectPath), opened as
+  // a whole:
+  //   <Project>.headway/headway.json          {format, docId, title, plans}:
+  //                                           the project's identity and plan
+  //                                           list (plans merged by plan id)
+  //   <Project>.headway/.headway/             hidden; everything else lives
+  //                                           here (bundleDir = this folder):
   //   plans/<planId>/meta.json                meta envelope (id 'meta')
   //   plans/<planId>/{items,phases,team,costs}/<uid>.json   one envelope per entity
   //   history/<userId>.jsonl                  append-only, one writer per file
@@ -96,6 +97,8 @@
   //       than the active one changed (its cached Compare copy is stale).
   //   resumeBundle()                             called once desktop.js has loaded,
   //       so the app can re-link the folder its ui snapshot names.
+  // (`marker` below, and in openBundle / renameProject results, is the
+  // <Project>.headway folder's path — the name predates the folder layout.)
   //   bundleMoved({marker, dir, from, title})     the project folder was found
   //       renamed / moved beside where it was; the session follows it.
   //   bundleDetached({marker, title})             the data folder stayed missing
@@ -128,10 +131,21 @@
     else if (q.toLowerCase() === d.toLowerCase()) q = '';
     return q.replace(/^\/+/, '');
   }
+  // the project's headway.json, beside the data folder dir
+  function headwayPath(dir) { return dirname(norm(dir).replace(/\/+$/, '')) + '/headway.json'; }
+  // a watched path (the watch root is the project folder) → 'headway.json'
+  // for the project's own, its path relative to the data folder dir for one
+  // inside it, null for anything else
+  function watchedRel(dir, p) {
+    var d = norm(dir).replace(/\/+$/, ''), q = norm(p).replace(/\/+$/, '');
+    if (q.toLowerCase() === headwayPath(d).toLowerCase()) return 'headway.json';
+    return q.toLowerCase().indexOf(d.toLowerCase() + '/') === 0 ? rel(d, q) : null;
+  }
 
-  // what a bundle-relative path is. kind: plans|meta|item|phase|team|cost|
-  // history|presence|tmp|other; entityKind is the RMBundle kind (dir name) or
-  // 'meta' for shards; stem is the file name without extension.
+  // what a path relative to the data folder is — or 'headway.json', the
+  // project's plan list beside it (watchedRel). kind: plans|meta|item|phase|
+  // team|cost|history|presence|tmp|other; entityKind is the RMBundle kind
+  // (dir name) or 'meta' for shards; stem is the file name without extension.
   function classify(relPath) {
     var seg = norm(relPath).split('/').filter(Boolean);
     var file = seg.length ? seg[seg.length - 1] : '';
@@ -428,7 +442,7 @@
     watchGen++;
     if (unwatch) { try { unwatch(); } catch (e) { /* already gone */ } unwatch = null; }
     bundleDir = null; activePlanId = null; lastShardJson = {}; bundleWarnings = [];
-    markerFile = null; projectTitle = null; projectId = null;
+    projectPath = null; projectTitle = null; projectId = null;
     detached = false; clearTimeout(reattachTimer); reattachTimer = null;
     if (!dir || !uid || goneDirs[dir]) return Promise.resolve();
     return removePresence(dir, uid).catch(function () { /* best effort */ });
@@ -457,8 +471,8 @@
       return q === d0 || q === p0;
     })) checkBundleLocation().catch(function () { /* checked again on the next write */ });
     ((ev && ev.paths) || []).forEach(function (p) {
-      var r = rel(dir, p);
-      if (seen[r]) return;
+      var r = watchedRel(dir, p);
+      if (r == null || seen[r]) return;
       seen[r] = true;
       var c = classify(r);
       if (c.kind === 'tmp' || c.kind === 'other' || c.kind === 'history') return;
@@ -471,7 +485,7 @@
           return readJsonOnce(dir + '/' + r).then(function (obj) { a.presenceChanged(c.userId, isObj(obj) ? obj : null); });
         }
         if (c.kind === 'plans') {
-          return readJsonRetry(dir + '/' + r).then(function (hw) {
+          return readJsonRetry(headwayPath(dir)).then(function (hw) {
             if (isObj(hw) && a && typeof a.plansChanged === 'function') a.plansChanged(hw);
           });
         }
@@ -508,19 +522,8 @@
     });
   }
 
-  // <Project>/<Project>.headway → <Project>/.headway
-  function dataDirOf(marker) { return dirname(norm(marker)) + '/' + RB().DATA_DIR; }
-  function readMarker(marker) {
-    return fs.readTextFile(marker).catch(rejectFriendly).then(function (text) {
-      var m = RB().parseMarker(text);
-      if (!m) throw new Error('“' + basename(marker) + '” is not a Headway project file');
-      return m;
-    });
-  }
-  function writeMarker(projectDir, id, title) {
-    var marker = norm(projectDir).replace(/\/+$/, '') + '/' + basename(projectDir) + RB().MARKER_EXT;
-    return atomicWriteText(marker, RB().markerText(id, title)).then(function () { return marker; });
-  }
+  // <Project>.headway → <Project>.headway/.headway
+  function dataDirOf(project) { return norm(project).replace(/\/+$/, '') + '/' + RB().DATA_DIR; }
   // Writes go only into a data folder that is still there: atomicWriteText
   // and the history/presence mkdirs would otherwise quietly re-create a
   // project folder a peer just renamed (their sync client moved ours). A gone
@@ -548,8 +551,8 @@
   // sync client moved ours — or it was moved / removed, or a sync client is
   // re-materialising it piecemeal). Look again with backoff before deciding:
   //   still (or again) there        → 'ok', nothing changes
-  //   a marker with the same id beside where it was, its headway.json
-  //   landed                         → follow it: watcher, paths, title;
+  //   a project folder with the same docId beside where it was, its
+  //   data folder landed             → follow it: watcher, paths, title;
   //                                    bundleMoved({marker, dir, from, title})
   //   not found after the ladder     → DETACHED: the session keeps its folder
   //                                    path and the app its edits; nothing is
@@ -562,24 +565,27 @@
   var REATTACH_MS = 10000;
   function checkBundleLocation() {
     if (locating) return locating;
-    if (!bundleDir || !markerFile) return Promise.resolve('none');
-    var dir = bundleDir, marker = markerFile, id = projectId, title = projectTitle;
-    var parent = dirname(dirname(marker));
+    if (!bundleDir || !projectPath) return Promise.resolve('none');
+    var dir = bundleDir, marker = projectPath, id = projectId, title = projectTitle;
+    var parent = dirname(marker);
     var wasDetached = detached;
     function done(v) { locating = null; return v; }
     function present() {
       return fs.exists(dir).catch(function () { return true; }).then(function (there) {
         // detached: back only once it is complete again
         if (!there || !wasDetached) return there;
-        return fs.exists(dir + '/headway.json').catch(function () { return false; });
+        return fs.exists(headwayPath(dir)).catch(function () { return false; });
       });
     }
     function attempt(n) {
       return present().then(function (there) {
         if (bundleDir !== dir) return 'ok'; // the document changed meanwhile
         if (there) return wasDetached ? reattach(dir, marker) : 'ok';
-        return findMarker(parent, id).then(function (found) {
+        return findProject(parent, id).then(function (found) {
           if (bundleDir !== dir) return 'ok';
+          // the scan re-finds the project where it was (its data folder
+          // came back meanwhile): it never moved
+          if (found && found.marker === marker) return wasDetached ? reattach(dir, marker) : 'ok';
           if (found) return follow(dir, marker, title, found);
           if (wasDetached) return 'detached';
           if (n < LOCATE_RETRY_MS.length) return wait(LOCATE_RETRY_MS[n]).then(function () { return attempt(n + 1); });
@@ -635,7 +641,7 @@
     movedTo[dir] = ndir;
     stopWatch();
     detached = false; clearTimeout(reattachTimer); reattachTimer = null;
-    bundleDir = ndir; markerFile = found.marker; projectTitle = found.title || title;
+    bundleDir = ndir; projectPath = found.marker; projectTitle = found.title || title;
     delete goneDirs[ndir];
     markTitle();
     rewatch();
@@ -668,9 +674,9 @@
     if (a && typeof a.bundleReattached === 'function') a.bundleReattached({ marker: marker, dir: dir });
     return resyncActivePlan().then(function () { return 'reattached'; });
   }
-  // a <X>/<Y>.headway marker with this id (and its .headway/ beside it)
-  // among parent's sub-folders; null when none
-  function findMarker(parent, id) {
+  // a project folder with this docId (and its data folder) among parent's
+  // sub-folders; null when none
+  function findProject(parent, id) {
     if (!id) return Promise.resolve(null);
     return fs.readDir(parent).catch(function () { return []; }).then(function (entries) {
       var subs = (entries || []).filter(function (e) { return e && e.isDirectory; }).map(function (e) { return e.name; }).sort();
@@ -678,22 +684,13 @@
         return chain.then(function (hit) {
           if (hit) return hit;
           var d = parent + '/' + sub;
-          return fs.readDir(d).catch(function () { return []; }).then(function (inner) {
-            var marks = (inner || []).filter(function (e) { return e && e.isFile && /^.+\.headway$/i.test(e.name); });
-            return marks.reduce(function (c2, e) {
-              return c2.then(function (h) {
-                if (h) return h;
-                var mp = d + '/' + e.name;
-                return fs.readTextFile(mp).then(function (text) {
-                  var m = RB().parseMarker(text);
-                  if (!m || m.id !== id) return null;
-                  return fs.exists(dataDirOf(mp) + '/headway.json').then(function (ok) {
-                    return ok ? { marker: mp, title: m.title } : null;
-                  });
-                }, function () { return null; });
-              });
-            }, Promise.resolve(null));
-          });
+          return fs.readTextFile(d + '/headway.json').then(function (text) {
+            var m = RB().parseProject(text);
+            if (!m || m.id !== id) return null;
+            return fs.exists(dataDirOf(d)).then(function (ok) {
+              return ok ? { marker: d, title: m.title } : null;
+            });
+          }, function () { return null; });
         });
       }, Promise.resolve(null));
     });
@@ -707,24 +704,28 @@
 
   window.HeadwayDesktop = {
     // ---- shared bundle (folder) backend ----
-    // open a project by its <Project>.headway marker file; planId defaults to
+    // open a project by its <Project>.headway folder (its headway.json or
+    // hidden data folder picked instead also opens it); planId defaults to
     // the first live plan. Resolves {doc, planId, plans, headway, envs,
-    // metaEnv, warnings, marker}; hard failures: not a marker, no .headway/
-    // data folder beside it, a missing/invalid headway.json.
+    // metaEnv, warnings, marker} — marker is the project folder; hard
+    // failures: no or an invalid headway.json, no .headway/ data folder.
     openBundle: function (marker, planId) {
       marker = norm(marker).replace(/\/+$/, '');
-      if (!/^.+\.headway$/i.test(basename(marker))) return Promise.reject(new Error('Not a Headway project: open the “.headway” file inside the project folder'));
-      var dir = dataDirOf(marker), mk;
-      return readMarker(marker).then(function (m) {
-        mk = m;
-        return fs.exists(dir + '/headway.json').catch(function () { return false; });
-      }).then(function (there) {
-        if (!there) throw new Error('“' + basename(marker) + '” has no project data beside it — the hidden .headway folder is missing');
-        return fs.readTextFile(dir + '/headway.json').catch(rejectFriendly);
+      if (/^(headway\.json|\.headway)$/i.test(basename(marker))) marker = dirname(marker);
+      var dir = dataDirOf(marker), hwPath = marker + '/headway.json', mk;
+      return fs.exists(hwPath).catch(function () { return false; }).then(function (there) {
+        if (!there) throw new Error('Not a Headway project: “' + basename(marker) + '” has no headway.json');
+        return fs.readTextFile(hwPath).catch(rejectFriendly);
       }).then(function (text) {
         var hw;
         try { hw = JSON.parse(text); } catch (e) { throw new Error('Not a Headway project: headway.json is not valid JSON'); }
         if (!isObj(hw) || !Array.isArray(hw.plans)) throw new Error('Not a Headway project: headway.json has no plan list');
+        mk = RB().parseProject(text) || { id: null, title: '' };
+        return fs.exists(dir).catch(function () { return false; }).then(function (ok) {
+          if (!ok) throw new Error('“' + basename(marker) + '” has no project data — the hidden .headway folder inside it is missing');
+          return hw;
+        });
+      }).then(function (hw) {
         var live = hw.plans.filter(function (p) { return p && p.id && !p.deleted; });
         var pid = planId || (live[0] && live[0].id);
         if (!pid) throw new Error('This project has no plans');
@@ -733,8 +734,8 @@
         lastShardJson = {};
         return readPlan(dir, pid).then(function (plan) {
           bundleDir = dir;
-          markerFile = marker;
-          projectTitle = mk.title || hw.title || basename(marker).replace(/\.headway$/i, '');
+          projectPath = marker;
+          projectTitle = mk.title || basename(marker).replace(/\.headway$/i, '');
           projectId = mk.id;
           delete goneDirs[dir]; detached = false; clearTimeout(reattachTimer); reattachTimer = null;
           activePlanId = pid;
@@ -865,14 +866,13 @@
 
     // contents = RMBundle.migrateFromState(...): {headway, plans:{<pid>:{meta,
     // items:[env], …}}, history:{<uid>:[lines]}}. Writes projectDir/.headway/…
-    // then the marker projectDir/<basename>.headway (last, so a marker always
-    // has its data). Resolves the marker path.
+    // then projectDir/headway.json (last, so a project that opens always has
+    // its data). Resolves projectDir.
     createBundle: function (projectDir, contents) {
       projectDir = norm(projectDir).replace(/\/+$/, '');
       var dir = projectDir + '/' + RB().DATA_DIR;
       var files = []; // [rel, text]
       var shards = []; // [rel, env]
-      files.push(['headway.json', JSON.stringify(contents.headway, null, 2) + '\n']);
       Object.keys(contents.plans || {}).forEach(function (pid) {
         var plan = contents.plans[pid];
         if (plan.meta) shards.push([shardRelPath(pid, 'meta', 'meta'), plan.meta]);
@@ -900,18 +900,15 @@
           return chain.then(function () { return writeShard(dir, s[0], s[1]); });
         }, Promise.resolve());
       }).then(function () {
-        var hw = contents.headway || {};
-        return writeMarker(projectDir, hw.docId, hw.title);
-      }).catch(rejectFriendly);
+        return atomicWriteText(projectDir + '/headway.json', JSON.stringify(contents.headway, null, 2) + '\n');
+      }).then(function () { return projectDir; }).catch(rejectFriendly);
     },
-    // a new project folder inside parentDir, named after the title (" (2)"
-    // on a collision — never written into an existing folder). Resolves the
-    // marker path.
+    // a new <Title>.headway project folder inside parentDir (" (2)" on a
+    // collision — never written into an existing folder). Resolves its path.
     createProject: function (parentDir, title, contents) {
       parentDir = norm(parentDir).replace(/\/+$/, '');
       return namesIn(parentDir).then(function (names) {
-        var name = RB().uniqueName(RB().projectName(title), names);
-        return window.HeadwayDesktop.createBundle(parentDir + '/' + name, contents);
+        return window.HeadwayDesktop.createBundle(parentDir + '/' + RB().uniqueProjectFolder(title, names), contents);
       });
     },
     // Save as…: copy the project whose data folder is srcDir into a NEW
@@ -919,13 +916,14 @@
     // shard and the history come along; presence does not; headway.json gets
     // a new docId (the copies must never merge) and the new project name;
     // with ONE plan its meta takes the name too (its title is the project
-    // name), with several each plan keeps its own title. Resolves the marker.
+    // name), with several each plan keeps its own title. headway.json lands
+    // last. Resolves destProjectDir.
     copyProject: function (srcDir, destProjectDir, title) {
       srcDir = norm(srcDir).replace(/\/+$/, '');
       destProjectDir = norm(destProjectDir).replace(/\/+$/, '');
       var dest = destProjectDir + '/' + RB().DATA_DIR;
       var now = new Date().toISOString(), uid = ownUserId || 'headway';
-      var files = [], docId = null, livePlans = 0;
+      var files = [], hw = null, livePlans = 0;
       function walk(relDir) {
         var abs = relDir ? srcDir + '/' + relDir : srcDir;
         return fs.readDir(abs).then(function (entries) {
@@ -941,6 +939,13 @@
       var started = false;
       return fs.exists(destProjectDir).then(function (there) {
         if (there) throw new Error('A folder named “' + basename(destProjectDir) + '” already exists there');
+        return readJsonOnce(headwayPath(srcDir));
+      }).then(function (src) {
+        if (!isObj(src) || !Array.isArray(src.plans)) throw new Error('Not a Headway project: headway.json is missing');
+        hw = src;
+        hw.docId = window.RM.uid('doc');
+        hw.title = title;
+        livePlans = hw.plans.filter(function (p) { return p && p.id && !p.deleted; }).length;
         started = true;
         return walk('');
       }).then(function () {
@@ -948,13 +953,7 @@
           return chain.then(function () {
             return fs.readTextFile(srcDir + '/' + r).then(function (text) {
               var c = classify(r);
-              if (c.kind === 'plans') {
-                var hw = JSON.parse(text);
-                hw.docId = docId = window.RM.uid('doc');
-                hw.title = title;
-                livePlans = (hw.plans || []).filter(function (p) { return p && p.id && !p.deleted; }).length;
-                text = JSON.stringify(hw, null, 2) + '\n';
-              } else if (c.kind === 'meta') {
+              if (c.kind === 'meta') {
                 var env = null;
                 try { env = JSON.parse(text); } catch (e) { /* copied as-is */ }
                 // one plan: its title IS the project name; several: labels, kept
@@ -967,17 +966,16 @@
             }, function (err) {
               // listed, then gone before we read it (a peer's sync client):
               // skip that one shard — never abort with half a copy
-              if (isMissingDir(err) && /\.json$/i.test(r) && classify(r).kind !== 'plans') return;
+              if (isMissingDir(err) && /\.json$/i.test(r)) return;
               throw err;
             });
           });
         }, Promise.resolve());
       }).then(function () {
-        if (!docId) throw new Error('Not a Headway project: headway.json is missing');
         return fs.mkdir(dest + '/presence', { recursive: true });
       }).then(function () {
-        return writeMarker(destProjectDir, docId, title);
-      }).catch(function (err) {
+        return atomicWriteText(destProjectDir + '/headway.json', JSON.stringify(hw, null, 2) + '\n');
+      }).then(function () { return destProjectDir; }).catch(function (err) {
         // the target did not exist when we started: take back what we made
         if (!started) rejectFriendly(err);
         return fs.remove(destProjectDir, { recursive: true }).catch(function () { /* best effort */ }).then(function () {
@@ -985,31 +983,26 @@
         });
       });
     },
-    // the project's title changed: <Old>/<Old>.headway → <New>/<New>.headway.
-    // The caller has landed its pending shards. Watcher off, marker renamed,
-    // folder renamed (marker put back if that fails), marker title rewritten,
-    // watcher on again. Rejects — the old names kept — when the target exists
-    // or the file system refuses (a sync client holding the folder, …).
-    // Resolves {marker, dir, renamed}.
+    // the project's title changed: <Old>.headway → <New>.headway. The caller
+    // has landed its pending shards, and writes the title into headway.json
+    // after. Watcher off, folder renamed, watcher on again. Rejects — the old
+    // name kept — when the target exists or the file system refuses (a sync
+    // client holding the folder, …). Resolves {marker, dir, renamed}.
     renameProject: function (title) {
-      if (!markerFile || !bundleDir) return Promise.reject(new Error('No project is open'));
+      if (!projectPath || !bundleDir) return Promise.reject(new Error('No project is open'));
       // detached: the folder to rename is missing — nothing is touched
       if (detached) return Promise.reject(new Error(MISSING_RENAME_MSG));
-      var oldMarker = markerFile, oldProj = dirname(oldMarker), oldDir = bundleDir;
-      var name = RB().projectName(title);
-      var parent = dirname(oldProj);
-      var newProj = parent + '/' + name;
+      var oldProj = projectPath, oldDir = bundleDir;
+      var name = RB().projectFolderName(title);
+      var newProj = dirname(oldProj) + '/' + name;
       var sameName = basename(oldProj) === name;
       var caseOnly = !sameName && basename(oldProj).toLowerCase() === name.toLowerCase();
       if (sameName) {
         // the folder name does not change (e.g. only characters the name
-        // drops were edited): just the marker's title
-        return atomicWriteText(oldMarker, RB().markerText(projectId, title)).then(function () {
-          projectTitle = title; markTitle();
-          return { marker: oldMarker, dir: oldDir, renamed: false };
-        }).catch(rejectFriendly);
+        // drops were edited): only headway.json's title, which the caller writes
+        projectTitle = title; markTitle();
+        return Promise.resolve({ marker: oldProj, dir: oldDir, renamed: false });
       }
-      var tmpMarker = oldProj + '/' + name + RB().MARKER_EXT;
       var stopped = false;
       function restart() {
         if (!stopped) return;
@@ -1026,31 +1019,20 @@
         if (unwatch) { try { unwatch(); } catch (e) { /* already gone */ } unwatch = null; }
         stopped = true;
         goneDirs[oldDir] = true;
-        return basename(oldMarker) === basename(tmpMarker) ? null : fs.rename(oldMarker, tmpMarker);
+        return fs.rename(oldProj, newProj);
       }).then(function () {
-        return fs.rename(oldProj, newProj).catch(function (err) {
-          // put the marker back so the project opens as before
-          var back = basename(oldMarker) === basename(tmpMarker) ? Promise.resolve() : fs.rename(tmpMarker, oldMarker);
-          return back.catch(function () { /* best effort */ }).then(function () { throw err; });
-        });
-      }).then(function () {
-        var nm = newProj + '/' + name + RB().MARKER_EXT;
-        bundleDir = newProj + '/' + RB().DATA_DIR;
+        bundleDir = dataDirOf(newProj);
         movedTo[oldDir] = bundleDir;
-        markerFile = nm;
+        projectPath = newProj;
         projectTitle = title;
         delete goneDirs[bundleDir];
         stopped = false;
         markTitle();
         rewatch();
-        return atomicWriteText(nm, RB().markerText(projectId, title)).catch(function (err) {
-          warn(nm, err); // the rename stands; the marker's title catches up on the next rename
-        }).then(function () {
-          return resyncActivePlan(); // a peer's shard that landed while the watcher was off
-        }).then(function () {
+        return resyncActivePlan().then(function () { // a peer's shard that landed while the watcher was off
           var a = app();
-          if (a && typeof a.noteRecent === 'function') a.noteRecent(nm, 'bundle');
-          return { marker: nm, dir: bundleDir, renamed: true };
+          if (a && typeof a.noteRecent === 'function') a.noteRecent(newProj, 'bundle');
+          return { marker: newProj, dir: bundleDir, renamed: true };
         });
       }).catch(function (err) {
         restart();
@@ -1059,27 +1041,28 @@
     },
     checkBundleLocation: checkBundleLocation,
     isDetached: function () { return detached; },
-    markerPath: function () { return markerFile; },
-    projectDir: function () { return markerFile ? dirname(markerFile) : null; },
+    markerPath: function () { return projectPath; },
+    projectDir: function () { return projectPath; },
     projectTitle: function () { return projectTitle; },
     // a parent folder for a new / converted bundle; null on cancel
     pickFolder: function () {
       return dialog.open({ directory: true, multiple: false }).then(function (d) { return d || null; });
     },
-    // so Create/Convert can refuse a <parent>/<title>.headway that already exists
+    // so Save as / Convert can refuse a <parent>/<Title>.headway that already exists
     // (createBundle would otherwise write into — and merge with — someone's bundle)
     pathExists: function (p) {
       return fs.exists(norm(p).replace(/\/+$/, '')).catch(function () { return false; });
     },
+    // the project's headway.json, beside its data folder dir
     readHeadway: function (dir) {
-      return readJsonRetry(norm(dir).replace(/\/+$/, '') + '/headway.json');
+      return readJsonRetry(headwayPath(dir));
     },
     // headway.json read-merge-write: hw.plans merge by id into what is on
     // disk (a peer's concurrent create / rename / tombstone survives), other
     // keys overwrite. Resolves the document that landed.
     writeHeadway: function (dir, hw) {
       dir = norm(dir).replace(/\/+$/, '');
-      var p = dir + '/headway.json';
+      var p = headwayPath(dir);
       return liveRoot(dir).then(function () { return readJsonRetry(p); }).then(function (disk) {
         var base = isObj(disk) ? disk : {};
         var out = {};
@@ -1133,11 +1116,12 @@
         return { path: p, name: basename(p), buffer: buf };
       });
     },
-    // File → Open…: a project marker or a legacy workbook; null on cancel
+    // File → Open…: a project folder (<Project>.headway); null on cancel.
+    // Workbooks come in through Open and Convert Legacy File…
     pickOpenPath: function () {
-      return dialog.open({ multiple: false, filters: OPEN_FILTER }).then(function (p) { return p || null; });
+      return dialog.open({ directory: true, multiple: false }).then(function (p) { return p || null; });
     },
-    // the one Open: the app opens a marker and converts an .xlsx
+    // the one Open: the app opens a project folder (and converts an .xlsx path)
     openDialog: function () {
       return window.HeadwayDesktop.pickOpenPath().then(function (p) {
         var a = app();

@@ -41,11 +41,12 @@ async function until(fn, ms) {
 
 const T0 = '2026-09-01T10:00:00.000Z';
 const T2 = '2026-09-01T10:10:00.000Z';
-// a project: <Project>/<Project>.headway marker + <Project>/.headway/ data
-// (named like the title the suite gives it, so that edit renames nothing)
-const PROJ = 'C:/Users/me/OneDrive/Shared Title';
+// a project: the <Project>.headway folder (what the user opens) holding
+// headway.json + a hidden .headway/ data folder (named like the title the
+// suite gives it, so that edit renames nothing)
+const PROJ = 'C:/Users/me/OneDrive/Shared Title.headway';
 const DIR = PROJ + '/.headway';                 // bundleDir: every shard lives below here
-const MARKER = PROJ + '/Shared Title.headway';  // what the user opens
+const MARKER = PROJ;                            // what the user opens: the project folder
 const SEED_USER = 'seed-user-00000';
 const SCRIPTS = ['js/core.js', 'js/bundle.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/app.js'];
 
@@ -108,8 +109,8 @@ function boot(tauri, opts) {
 const shardWrites = (tauri, from) => tauri.log.slice(from).filter((l) => l.op === 'writeTextFile' && l.path.indexOf('/plans/') >= 0);
 
 async function main() {
-  let nextOpenDir = null, nextSavePath = null;
-  const tauri = makeFakeTauri({ dialogOpen: () => nextOpenDir, dialogSave: () => nextSavePath });
+  let nextOpenDir = null, nextSavePath = null, lastOpenOpts = null;
+  const tauri = makeFakeTauri({ dialogOpen: (o) => { lastOpenOpts = o || null; return nextOpenDir; }, dialogSave: () => nextSavePath });
   const b = boot(tauri);
   const { doc, window } = b;
 
@@ -146,10 +147,10 @@ async function main() {
   eq(b.HD.userId(), myId, 'desktop shell knows our id');
   eq(JSON.parse(window.localStorage.getItem('headway-user-v2')).id, myId, 'identity persisted');
   const rec0 = JSON.parse(window.localStorage.getItem('headway-recents-v1'));
-  eq([rec0[0].path, rec0[0].kind, rec0[0].title], [MARKER, 'bundle', fixture.meta.title], 'recents entry = the marker file, kind + live title');
+  eq([rec0[0].path, rec0[0].kind, rec0[0].title], [MARKER, 'bundle', fixture.meta.title], 'recents entry = the project folder, kind + live title');
   eq(info.bundleMarker, MARKER, 'bundleMarker set');
   const uiSnap = JSON.parse(window.localStorage.getItem('headway-ui-v1'));
-  eq([uiSnap.docKind, uiSnap.bundleMarker, uiSnap.activePlanId], ['bundle', MARKER, pid], 'ui snapshot carries the session (by marker) for a reload');
+  eq([uiSnap.docKind, uiSnap.bundleMarker, uiSnap.activePlanId], ['bundle', MARKER, pid], 'ui snapshot carries the session (by project folder) for a reload');
   ok(tauri.watching() && tauri.watchOpts().recursive === true, 'recursive watch active');
 
   section('a commit flushes ONLY the changed shard + one history line');
@@ -306,7 +307,7 @@ async function main() {
   eq(writes.map((w) => w.path), [DIR + '/plans/' + pid + '/meta.json.tmp'], 'only meta.json written');
   eq(JSON.parse(tauri.files.get(DIR + '/plans/' + pid + '/meta.json')).fields.meta.title, 'Shared Title', 'meta shard carries the title');
   eq(b.HD.bundleDir(), DIR, 'the folder already carries that name: not renamed');
-  ok(await until(() => JSON.parse(tauri.files.get(MARKER)).title === 'Shared Title'), '…only the marker\'s title is rewritten');
+  ok(await until(() => JSON.parse(tauri.files.get(PROJ + '/headway.json')).title === 'Shared Title'), '…only headway.json\'s title is rewritten');
 
   section('presence + editingIds');
   b.HA.presenceChanged('peer-zz999', { name: 'Peer', planId: pid, editing: [vId], ts: 1 });
@@ -325,7 +326,7 @@ async function main() {
   b.click(doc.querySelector('#modalHost #optNameOk'));
   ok(await until(() => b.info().activePlanId !== pid), 'switched to the new plan — toasts: ' + b.toasts());
   await settle();
-  let hw = JSON.parse(tauri.files.get(DIR + '/headway.json'));
+  let hw = JSON.parse(tauri.files.get(PROJ + '/headway.json'));
   eq(hw.plans.length, 2, 'headway.json lists two plans');
   const pB = hw.plans.find((p) => p.name === 'Plan B');
   ok(!!pB && pB.id === b.info().activePlanId, 'the new entry is the active plan');
@@ -369,19 +370,19 @@ async function main() {
   b.click(b.optAct(/Plan B/, 'Rename'));
   doc.querySelector('#modalHost #optNameIn').value = 'Plan C';
   b.click(doc.querySelector('#modalHost #optNameOk'));
-  ok(await until(() => /Plan C/.test(JSON.parse(tauri.files.get(DIR + '/headway.json')).plans.find((p) => p.id === pB.id).name)), 'rename lands in headway.json');
+  ok(await until(() => /Plan C/.test(JSON.parse(tauri.files.get(PROJ + '/headway.json')).plans.find((p) => p.id === pB.id).name)), 'rename lands in headway.json');
   b.click(doc.querySelector('#optBtn'));
   b.click(b.optAct(/Plan C/, 'Delete'));
   ok(!!doc.querySelector('#modalHost [data-m="ok"]'), 'delete asks for confirmation');
   b.click(doc.querySelector('#modalHost [data-m="ok"]'));
-  ok(await until(() => JSON.parse(tauri.files.get(DIR + '/headway.json')).plans.find((p) => p.id === pB.id).deleted === true), 'delete = tombstone entry');
+  ok(await until(() => JSON.parse(tauri.files.get(PROJ + '/headway.json')).plans.find((p) => p.id === pB.id).deleted === true), 'delete = tombstone entry');
   ok(tauri.files.has(DIR + '/plans/' + pB.id + '/meta.json'), 'the plan\'s files are kept');
   eq(b.info().plans.filter((p) => !p.deleted).length, 1, 'one live plan');
   // a peer adds a plan: plansChanged via the watcher
-  hw = JSON.parse(tauri.files.get(DIR + '/headway.json'));
+  hw = JSON.parse(tauri.files.get(PROJ + '/headway.json'));
   hw.plans.push(b.RB.newPlanEntry('plan-peer', 'Peer plan', T2));
-  tauri.files.set(DIR + '/headway.json', JSON.stringify(hw));
-  await tauri.emitPaths(DIR + '/headway.json');
+  tauri.files.set(PROJ + '/headway.json', JSON.stringify(hw));
+  await tauri.emitPaths(PROJ + '/headway.json');
   await settle(1);
   ok(b.info().plans.some((p) => p.id === 'plan-peer'), 'a peer\'s plan entry arrives through the watcher');
   ok(/2 open plans/.test(doc.querySelector('#optBtn').title), 'plan button counts it');
@@ -422,7 +423,7 @@ async function main() {
   new window.MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach((n) => { if (n.textContent) seenToasts.push(n.textContent); })))
     .observe(doc.querySelector('#toasts'), { childList: true });
 
-  section('Open… an .xlsx → converted BESIDE the workbook, which is left untouched; the project is named by the workbook\'s own title');
+  section('Open and Convert Legacy File… an .xlsx → converted BESIDE the workbook, which is left untouched; the project is named by the workbook\'s own title');
   // the workbook's internal title names the project, not its file name
   const XL = 'C:/Users/me/OneDrive/legacy-export v3.xlsx';
   const exSt = b.RB.exportableState(b.state());
@@ -430,20 +431,20 @@ async function main() {
   const exBlob = await window.RMExcel.exportWorkbook(exSt, {});
   tauri.files.set(XL, Uint8Array.from(new Uint8Array(await exBlob.arrayBuffer())));
   const xlBefore = Buffer.from(tauri.files.get(XL)).toString('base64');
-  nextOpenDir = XL; // the Open dialog returns the workbook
-  b.menuClick('file', /^Open…/);
-  const CPROJ = 'C:/Users/me/OneDrive/Exported', CDIR = CPROJ + '/.headway', CMARK = CPROJ + '/Exported.headway';
+  nextOpenDir = XL; // the workbook dialog returns the workbook
+  b.menuClick('file', /Open and Convert Legacy File…/);
+  const CPROJ = 'C:/Users/me/OneDrive/Exported.headway', CDIR = CPROJ + '/.headway', CMARK = CPROJ;
   ok(await until(() => b.info().docKind === 'bundle' && b.info().bundleDir === CDIR), 'converted and opened as a project — toasts: ' + seenToasts.join(' | '));
-  eq(b.info().bundleMarker, CMARK, 'the new marker is the open project');
-  ok(tauri.files.has(CDIR + '/headway.json') && tauri.files.has(CMARK), 'headway.json under .headway/, marker beside it');
-  eq(JSON.parse(tauri.files.get(CMARK)).title, 'Exported', 'marker titled after the workbook');
+  eq(b.info().bundleMarker, CMARK, 'the new project folder is the open project');
+  ok(tauri.files.has(CPROJ + '/headway.json') && !tauri.files.has(CDIR + '/headway.json'), 'headway.json at the top of the project folder, data under .headway/');
+  eq(JSON.parse(tauri.files.get(CPROJ + '/headway.json')).title, 'Exported', 'headway.json titled after the workbook');
   const cPid = b.info().activePlanId;
   eq([...tauri.files.keys()].filter((f) => f.indexOf(CDIR + '/plans/' + cPid + '/items/') === 0).length, b.state().items.length, 'one shard per item');
   ok(tauri.files.has(CDIR + '/history/' + myId + '.jsonl'), 'legacy history landed in the converting user\'s file');
   eq(b.state().meta.title, 'Exported', 'same document');
   eq(Buffer.from(tauri.files.get(XL)).toString('base64'), xlBefore, 'the workbook is byte-for-byte untouched');
-  ok(seenToasts.some((t) => /Converted to “Exported”/.test(t)), 'toast: Converted to “Exported”');
-  eq(JSON.parse(window.localStorage.getItem('headway-recents-v1'))[0].path, CMARK, 'recents: the new marker, not the workbook');
+  ok(seenToasts.some((t) => /Converted to “Exported\.headway”/.test(t)), 'toast: Converted to “Exported.headway”');
+  eq(JSON.parse(window.localStorage.getItem('headway-recents-v1'))[0].path, CMARK, 'recents: the new project folder, not the workbook');
 
   section('converting it again: its project already sits beside it → "Open the existing project" (default) or "Convert again"');
   await b.HA.openBundleDoc(MARKER); // somewhere else first, so "open the existing one" is visible
@@ -458,18 +459,18 @@ async function main() {
   b.click(primary);
   ok(await until(() => b.info().bundleDir === CDIR && doc.querySelector('#modalHost').hidden), 'opened the existing project');
   ok(!seenToasts.slice(toastsB4).some((t) => /Converted to/.test(t)), 'nothing converted');
-  ok(!tauri.files.has('C:/Users/me/OneDrive/Exported (2)/Exported (2).headway'), 'no " (2)" folder');
+  ok(![...tauri.files.keys()].some((k) => k.indexOf('C:/Users/me/OneDrive/Exported (2)') === 0), 'no " (2)" folder');
 
   section('…"Convert again" → " (2)" beside it');
   nextOpenDir = XL;
   b.menuClick('file', /Open and Convert Legacy File…/);
   ok(await until(() => doc.querySelector('#modalHost [data-m="convertAgain"]')), 'offered again');
   b.click(doc.querySelector('#modalHost [data-m="convertAgain"]'));
-  const C2 = 'C:/Users/me/OneDrive/Exported (2)';
-  ok(await until(() => b.info().bundleDir === C2 + '/.headway'), 'the second conversion lands in "Exported (2)" — toasts: ' + seenToasts.join(' | '));
-  ok(tauri.files.has(C2 + '/Exported (2).headway'), 'its marker is named after its folder');
-  ok(tauri.files.has(CMARK), 'the first project is left alone');
-  ok(seenToasts.some((t) => /Converted to “Exported \(2\)”/.test(t)), 'toast names the suffixed folder');
+  const C2 = 'C:/Users/me/OneDrive/Exported (2).headway';
+  ok(await until(() => b.info().bundleDir === C2 + '/.headway'), 'the second conversion lands in "Exported (2).headway" — toasts: ' + seenToasts.join(' | '));
+  ok(tauri.files.has(C2 + '/headway.json'), 'with its own headway.json');
+  ok(tauri.files.has(CMARK + '/headway.json'), 'the first project is left alone');
+  ok(seenToasts.some((t) => /Converted to “Exported \(2\)\.headway”/.test(t)), 'toast names the suffixed folder');
 
   section('an unreadable workbook → error toast, nothing opens, nothing written');
   tauri.files.set('C:/Users/me/OneDrive/Broken.xlsx', new Uint8Array([1, 2, 3, 4]));
@@ -482,16 +483,27 @@ async function main() {
   eq(b.info().bundleDir, before, 'the open project is unchanged');
   eq([...tauri.files.keys()].sort().join('|'), filesBefore, 'not a single file written');
 
-  section('Open… a marker; a bare marker is refused');
+  section('Open… a project folder; a folder that is not a whole project is refused');
   nextOpenDir = CMARK;
+  lastOpenOpts = null;
   b.menuClick('file', /^Open…/);
-  ok(await until(() => b.info().bundleDir === CDIR), 'Open… on a marker opens that project');
-  tauri.files.set('C:/Users/me/OneDrive/Lonely/Lonely.headway', b.RB.markerText('doc-lonely', 'Lonely'));
+  ok(await until(() => b.info().bundleDir === CDIR), 'Open… on a project folder opens that project');
+  ok(lastOpenOpts && lastOpenOpts.directory === true && !lastOpenOpts.filters, 'Open… is a folder picker: ' + JSON.stringify(lastOpenOpts));
+  await b.HA.openBundleDoc(MARKER);
+  await b.HA.openFromPath(CMARK + '/headway.json');
+  ok(await until(() => b.info().bundleDir === CDIR && b.info().bundleMarker === CMARK), 'its headway.json picked instead opens the project folder');
+  tauri.files.set('C:/Users/me/OneDrive/Lonely.headway/headway.json', JSON.stringify({ format: 'headway-bundle-v1', docId: 'doc-lonely', title: 'Lonely', plans: [{ id: 'p1', name: 'Default' }] }));
   seenToasts.length = 0;
-  await b.HA.openFromPath('C:/Users/me/OneDrive/Lonely/Lonely.headway');
+  await b.HA.openFromPath('C:/Users/me/OneDrive/Lonely.headway');
   await settle();
-  ok(seenToasts.some((t) => /\.headway folder is missing/.test(t)), 'a marker with no .headway/ beside it is refused: ' + seenToasts.join(' | '));
+  ok(seenToasts.some((t) => /\.headway folder inside it is missing/.test(t)), 'headway.json with no .headway/ data folder is refused: ' + seenToasts.join(' | '));
   eq(b.info().bundleDir, CDIR, 'and the open project stays');
+  tauri.dirs.add('C:/Users/me/OneDrive/Just a folder');
+  seenToasts.length = 0;
+  await b.HA.openFromPath('C:/Users/me/OneDrive/Just a folder');
+  await settle();
+  ok(seenToasts.some((t) => /has no headway\.json/.test(t)), 'a folder with no headway.json is refused: ' + seenToasts.join(' | '));
+  eq(b.info().bundleDir, CDIR, '…the open project still stays');
 
   section('recents: projects only; start page has ONE Open…');
   window.localStorage.setItem('headway-recents-v1', JSON.stringify(
@@ -499,12 +511,24 @@ async function main() {
   b.HA.noteRecent('C:/x/Other.xlsx');
   b.HA.renderStartPage();
   const rows = [...doc.querySelectorAll('#startBody [data-sp-open]')];
-  ok(rows.length > 0 && rows.every((r) => /\.headway$/.test(r.dataset.spOpen)), 'every recent is a project marker: ' + rows.map((r) => r.dataset.spOpen).join(', '));
+  ok(rows.length > 0 && rows.every((r) => /\.headway$/.test(r.dataset.spOpen)), 'every recent is a project folder: ' + rows.map((r) => r.dataset.spOpen).join(', '));
   ok(!rows.some((r) => /\.xlsx$/.test(r.dataset.spOpen)), 'legacy workbook recents are dropped');
   ok(rows.find((r) => r.dataset.spOpen === CMARK).querySelector('i[data-lucide="folder-open"]'), 'a project recent shows the folder icon');
   const spOpens = [...doc.querySelectorAll('#startBody .sp-actions button')].filter((x) => /Open/.test(x.textContent));
   eq(spOpens.length, 1, 'start page: a single Open… button');
   ok(!doc.querySelector('#startBody [data-sp-openbundle]'), 'no "Open shared roadmap…" button');
+  ok(!doc.querySelector('#startBody [data-sp-continue]'), 'no "Continue where you left off" on the desktop');
+  {
+    // the desktop start page's Convert .xlsx… runs the legacy convert
+    const conv = doc.querySelector('#startBody [data-sp-convert]');
+    ok(!!conv && /Convert \.xlsx/.test(conv.textContent), 'start page: a Convert .xlsx… button');
+    await b.HA.openBundleDoc(MARKER); // somewhere else first, so opening the existing one is visible
+    nextOpenDir = XL;
+    b.click(conv);
+    ok(await until(() => doc.querySelector('#modalHost [data-m="openExisting"]')), '…which converts: the workbook\'s project exists, so it offers to open it');
+    b.click(doc.querySelector('#modalHost [data-m="openExisting"]'));
+    ok(await until(() => b.info().bundleDir === CDIR && doc.querySelector('#modalHost').hidden), '…and opens it');
+  }
 
   section('New project… (the setup wizard) creates a project folder');
   nextOpenDir = 'C:/Users/me/OneDrive';
@@ -516,11 +540,11 @@ async function main() {
   nn.value = 'Fresh';
   nn.dispatchEvent(new window.Event('change', { bubbles: true }));
   b.HA.wizard.create();
-  const FPROJ = 'C:/Users/me/OneDrive/Fresh', FDIR = FPROJ + '/.headway', FMARK = FPROJ + '/Fresh.headway';
+  const FPROJ = 'C:/Users/me/OneDrive/Fresh.headway', FDIR = FPROJ + '/.headway', FMARK = FPROJ;
   ok(await until(() => b.info().bundleDir === FDIR), 'created and opened — toasts: ' + seenToasts.join(' | '));
   eq(b.state().meta.title, 'Fresh', 'blank roadmap titled from the prompt');
   eq(b.state().items.length, 0, 'empty');
-  ok(tauri.files.has(FDIR + '/headway.json') && tauri.files.has(FMARK), 'layout written');
+  ok(tauri.files.has(FPROJ + '/headway.json') && [...tauri.files.keys()].some((k) => k.indexOf(FDIR + '/') === 0), 'layout written');
 
   section('resume after a reload (ui snapshot) + beforeClose');
   const ls = {};
@@ -551,6 +575,34 @@ async function main() {
   w.HA.applyExternalEntities([{ kind: 'items', id: 'x', env: { id: 'x', rev: 1, fields: {}, fieldsAt: {} } }]);
   ok(true, 'applyExternalEntities is a no-op outside a bundle');
 
+  section('the desktop stores no document in the app: no headway-v1, no "Continue where you left off"');
+  {
+    eq(window.localStorage.getItem('headway-v1'), null, 'a whole desktop session of edits wrote no headway-v1');
+    ok('headway-ui-v1' in ls, '(the ui snapshot is still kept, for the reload re-link)');
+    // a stale copy left by an older build: removed at boot, never restored
+    const stale = JSON.stringify(b.RB.exportableState(b.state()));
+    const d1 = boot(makeFakeTauri(), { localStorage: { 'headway-v1': stale, 'headway-user-v2': ls['headway-user-v2'] } });
+    ok(d1.errors.length === 0, 'desktop boot with a stale headway-v1 is clean');
+    eq(d1.window.localStorage.getItem('headway-v1'), null, 'the stale headway-v1 is removed at boot');
+    ok(d1.doc.body.classList.contains('start'), 'the start page shows');
+    ok(!d1.doc.querySelector('#startBody [data-sp-continue]'), 'no "Continue where you left off" row');
+    ok(d1.state().items.length === 0, 'the stale document is not restored: ' + d1.state().items.length + ' items');
+    // a mid-session reload with no project to re-link lands on the start page, not an empty editor
+    const d2 = boot(makeFakeTauri(), { localStorage: { 'headway-v1': stale }, sessionStorage: { 'headway-in-editor': '1' } });
+    ok(d2.doc.body.classList.contains('start'), 'a desktop reload without a project to resume shows the start page');
+    eq(d2.window.localStorage.getItem('headway-v1'), null, '…and headway-v1 is gone there too');
+    d1.HA.renderStartPage();
+    ok(!d1.doc.querySelector('#startBody [data-sp-continue]'), 'still no Continue row on a re-render');
+    // the browser keeps its local copy and the Continue row
+    const w2 = boot(null, { localStorage: { 'headway-v1': stale } });
+    ok(w2.doc.body.classList.contains('start'), 'browser: fresh launch on the start page');
+    ok(!!w2.doc.querySelector('#startBody [data-sp-continue]'), 'browser: "Continue where you left off" is offered');
+    ok(w2.window.localStorage.getItem('headway-v1') != null, 'browser: headway-v1 kept');
+    ok(!w2.doc.querySelector('#startBody [data-sp-convert]'), 'browser: no Convert .xlsx… button');
+    const w3 = boot(null, { localStorage: { 'headway-v1': stale }, sessionStorage: { 'headway-in-editor': '1' } });
+    ok(!w3.doc.body.classList.contains('start') && w3.state().items.length === b.state().items.length, 'browser: a reload re-enters the editor with its stored document');
+  }
+
   section('File → Save as…: copies the open project, switches to the copy');
   await b.HA.openBundleDoc(CMARK);
   await settle();
@@ -567,17 +619,17 @@ async function main() {
   ok(sa && sa.value === 'Exported', 'name prompt prefilled with the current name');
   sa.value = 'Exported copy';
   b.click(doc.querySelector('#modalHost #optNameOk'));
-  const SPROJ = 'C:/Users/me/Copies/Exported copy', SMARK = SPROJ + '/Exported copy.headway';
+  const SPROJ = 'C:/Users/me/Copies/Exported copy.headway', SMARK = SPROJ;
   ok(await until(() => b.info().bundleDir === SPROJ + '/.headway'), 'switched to the copy — toasts: ' + seenToasts.join(' | '));
-  eq(b.info().bundleMarker, SMARK, 'the copy\'s marker is the open project');
+  eq(b.info().bundleMarker, SMARK, 'the copy\'s folder is the open project');
   eq(b.state().meta.title, 'Exported copy', 'title is the new name');
-  ok(JSON.parse(tauri.files.get(SMARK)).id !== JSON.parse(tauri.files.get(CMARK)).id, 'the copy has a different bundle id');
+  ok(JSON.parse(tauri.files.get(SMARK + '/headway.json')).docId !== JSON.parse(tauri.files.get(CMARK + '/headway.json')).docId, 'the copy has a different bundle id');
   eq(b.state().items.length, itemsBefore, 'every item came along');
   ok(tauri.files.has(SPROJ + '/.headway/history/' + myId + '.jsonl'), 'history came along');
   eq(JSON.parse(window.localStorage.getItem('headway-recents-v1'))[0].path, SMARK, 'recents: the copy on top');
   eq(window.document.title, 'Exported copy — Headway', 'window title follows');
   const lw = tauri.log.filter((l) => l.op === 'watch').pop();
-  eq(lw && lw.path, SPROJ + '/.headway', 'the watcher follows the copy');
+  eq(lw && lw.path, SPROJ, 'the watcher follows the copy (its project folder)');
   await settle(6);
   const changed = origKeys.filter((k, i) => tauri.files.get(k) !== origSnap[i]);
   eq(changed, [], 'the original is untouched');
@@ -611,9 +663,9 @@ async function openFresh(name, tauriOpts) {
   const b = boot(tauri, { localStorage: { 'headway-user-v2': JSON.stringify(FIXER), 'headway-user-v1': FIXER.name } });
   const fixture = b.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
   const contents = b.RB.migrateFromState(fixture, SEED_USER, T0);
-  const proj = 'C:/Users/me/OneDrive/' + name;
+  const proj = 'C:/Users/me/OneDrive/' + name + '.headway';
   const dir = proj + '/.headway';
-  const marker = proj + '/' + name + '.headway';
+  const marker = proj;
   await b.HD.createBundle(proj, contents);
   await b.HA.openBundleDoc(marker);
   const pid = contents.headway.plans[0].id;
@@ -744,13 +796,13 @@ async function fixes() {
     S.b.RB.KINDS.forEach((k) => envsB[k].forEach((env) => chB.push({ kind: k, id: env.id, env, baseRev: 0 })));
     await S.b.HD.flushShards(S.dir, planB, chB);
     S.b.HA.plansChanged(await S.b.HD.writeHeadway(S.dir, { plans: [S.b.RB.newPlanEntry(planB, 'Plan B', T0)] }));
-    const NP = 'C:/Users/me/OneDrive/M2 Renamed';
+    const NP = 'C:/Users/me/OneDrive/M2 Renamed.headway';
     const ren = S.b.HA.renameProjectFolder('M2 Renamed'); // not awaited: the switch lands inside the window
     S.b.click(S.b.doc.querySelector('#optBtn'));
     S.b.click(S.b.optRow(/Plan B/));
     await ren;
     ok(await until(() => S.b.info().activePlanId === planB), 'switched to Plan B — toasts: ' + S.b.toasts());
-    eq(S.b.info().bundleMarker, NP + '/M2 Renamed.headway', 'on the renamed marker');
+    eq(S.b.info().bundleMarker, NP, 'on the renamed project folder');
     eq(S.b.info().bundleDir, NP + '/.headway', '…and folder');
     ok(!/Could not switch plan/.test(S.b.toasts()), 'no switch failure');
     // New plan inside a rename window: its shards + list entry land in the renamed folder
@@ -761,10 +813,10 @@ async function fixes() {
     nin.value = 'Plan C';
     S.b.click(S.b.doc.querySelector('#modalHost #optNameOk'));
     await ren2;
-    const AP = 'C:/Users/me/OneDrive/M2 Again';
+    const AP = 'C:/Users/me/OneDrive/M2 Again.headway';
     ok(await until(() => (S.b.info().plans || []).some((p) => p.name === 'Plan C') && S.b.info().bundleDir === AP + '/.headway'), 'Plan C created — toasts: ' + S.b.toasts());
     ok(!/Could not create the plan/.test(S.b.toasts()), 'no create failure');
-    ok(JSON.parse(S.tauri.files.get(AP + '/.headway/headway.json')).plans.some((p) => p.name === 'Plan C'), 'its list entry is in the renamed folder');
+    ok(JSON.parse(S.tauri.files.get(AP + '/headway.json')).plans.some((p) => p.name === 'Plan C'), 'its list entry is in the renamed folder');
     ok(![...S.tauri.files.keys()].some((k) => k.indexOf(NP + '/') === 0) && ![...S.tauri.dirs].some((d) => d.indexOf(NP) === 0), 'the old folder was not re-created');
   }
 
@@ -792,18 +844,18 @@ async function fixes() {
     await opening;
     st.restore();
     await settle();
-    eq(S.b.info().bundleDir, 'C:/tmp/Solo/.headway', 'the converted project is open');
+    eq(S.b.info().bundleDir, 'C:/tmp/Solo.headway/.headway', 'the converted project is open');
     const d = S.disk(S.vId);
     eq([d.fields.feature, d.fields.notes], ['A1', 'N2'], 'both edits on disk under the first project');
     ok(S.tauri.watching() && (S.tauri.watchOpts() || {}).recursive, 'a recursive watch is active after the switch');
     const lastWatch = S.tauri.log.filter((l) => l.op === 'watch').pop();
-    eq(lastWatch && lastWatch.path, 'C:/tmp/Solo/.headway', '…on the new project\'s .headway/');
+    eq(lastWatch && lastWatch.path, 'C:/tmp/Solo.headway', '…on the new project\'s folder');
     const ops = S.tauri.log.map((l) => l.op);
     ok(ops.lastIndexOf('unwatch') < ops.lastIndexOf('watch'), 'no unwatch after the new watch (leave ran first)');
     eq(S.b.state().meta.title, 'Solo', 'the converted workbook is the document');
   }
 
-  section('renaming the project renames marker + folder');
+  section('renaming the project renames its folder');
   {
     let rescueDir = null;
     const S = await openFresh('Ren', { dialogOpen: () => rescueDir });
@@ -817,52 +869,55 @@ async function fixes() {
       t.value = v;
       t.dispatchEvent(new b.window.Event('change', { bubbles: true }));
     };
-    const NP = 'C:/Users/me/OneDrive/Q3 Plan', NM = NP + '/Q3 Plan.headway';
+    const retitle = (proj, title) => {
+      const hw = JSON.parse(tauri.files.get(proj + '/headway.json'));
+      hw.title = title;
+      tauri.files.set(proj + '/headway.json', JSON.stringify(hw));
+    };
+    const NP = 'C:/Users/me/OneDrive/Q3 Plan.headway', NM = NP;
     setTitle('Q3 Plan');
-    ok(await until(() => b.info().bundleMarker === NM), 'the open project is the renamed marker — toasts: ' + seen.join(' | '));
+    ok(await until(() => b.info().bundleMarker === NM), 'the open project is the renamed folder — toasts: ' + seen.join(' | '));
     eq(b.info().bundleDir, NP + '/.headway', 'bundleDir re-pointed');
     eq(b.HD.bundleDir(), NP + '/.headway', 'desktop re-pointed');
     ok(![...tauri.files.keys()].some((k) => k.indexOf(S.proj + '/') === 0), 'nothing left under the old folder');
     eq(b.RB.unwrap(JSON.parse(tauri.files.get(NP + '/.headway/plans/' + S.pid + '/meta.json'))).meta.title, 'Q3 Plan', 'the title landed before the move');
-    eq(JSON.parse(tauri.files.get(NM)).title, 'Q3 Plan', 'marker title rewritten');
+    ok(await until(() => JSON.parse(tauri.files.get(NM + '/headway.json')).title === 'Q3 Plan'), 'headway.json title rewritten');
     const rec = JSON.parse(b.window.localStorage.getItem('headway-recents-v1'));
-    eq(rec[0].path, NM, 'recents: the new marker on top');
+    eq(rec[0].path, NM, 'recents: the new folder on top');
     ok(!rec.some((r) => r.path === S.marker), '…the old one dropped');
-    eq(JSON.parse(b.window.localStorage.getItem('headway-ui-v1')).bundleMarker, NM, 'a reload re-links the new marker');
-    ok(seen.some((t) => /Renamed the project folder to “Q3 Plan”/.test(t)), 'toast says so');
-    eq(tauri.log.filter((l) => l.op === 'watch').pop().path, NP + '/.headway', 'watching the new folder');
+    eq(JSON.parse(b.window.localStorage.getItem('headway-ui-v1')).bundleMarker, NM, 'a reload re-links the new folder');
+    ok(seen.some((t) => /Renamed the project folder to “Q3 Plan\.headway”/.test(t)), 'toast says so');
+    eq(tauri.log.filter((l) => l.op === 'watch').pop().path, NP, 'watching the new project folder');
     S.select();
     S.set('notes', 'after the rename');
     ok(await until(() => { const f = tauri.files.get(NP + '/.headway/plans/' + S.pid + '/items/' + S.vId + '.json'); return f && JSON.parse(f).fields.notes === 'after the rename'; }), 'the next edit flushes into the new folder');
 
     section('a refused rename keeps the old names; the title stays changed');
-    tauri.dirs.add('C:/Users/me/OneDrive/Taken');
+    tauri.dirs.add('C:/Users/me/OneDrive/Taken.headway');
     seen.length = 0;
     setTitle('Taken');
     ok(await until(() => seen.some((t) => /Could not rename the project folder/.test(t))), 'toast says why: ' + seen.join(' | '));
     ok(seen.some((t) => /already exists/.test(t)), '…the target exists');
-    eq(b.info().bundleMarker, NM, 'still the old marker');
+    eq(b.info().bundleMarker, NM, 'still the old folder');
     eq(b.state().meta.title, 'Taken', 'the title stays changed in the document');
     eq(b.RB.unwrap(JSON.parse(tauri.files.get(NP + '/.headway/plans/' + S.pid + '/meta.json'))).meta.title, 'Taken', '…and on disk');
-    tauri.renameFails = (a, c) => (/OneDrive\/Held$/.test(c) ? 'Access is denied. (os error 5)' : null);
+    tauri.renameFails = (a, c) => (/OneDrive\/Held\.headway$/.test(c) ? 'Access is denied. (os error 5)' : null);
     seen.length = 0;
     setTitle('Held');
     ok(await until(() => seen.some((t) => /Could not rename the project folder.*Access is denied/.test(t))), 'a folder a sync client holds: toast says why — ' + seen.join(' | '));
     eq(b.info().bundleMarker, NM, 'old names kept');
-    ok(tauri.files.has(NM), 'the marker is back under its old name');
+    ok(tauri.files.has(NM + '/headway.json') && ![...tauri.files.keys()].some((k) => k.indexOf('C:/Users/me/OneDrive/Held') === 0), 'the project is whole under its old name');
     tauri.renameFails = null;
 
     section('a peer renamed the folder: followed');
-    const PP = 'C:/Users/me/OneDrive/Peer Name', PM = PP + '/Peer Name.headway';
-    const id = JSON.parse(tauri.files.get(NM)).id;
+    const PP = 'C:/Users/me/OneDrive/Peer Name.headway', PM = PP;
     tauri.moveDir(NP, PP);
-    tauri.files.delete(PP + '/Q3 Plan.headway');
-    tauri.files.set(PM, b.RB.markerText(id, 'Peer Name'));
+    retitle(PP, 'Peer Name');
     seen.length = 0;
     await b.HD.checkBundleLocation();
-    ok(await until(() => b.info().bundleMarker === PM), 'the app follows the marker with the same id');
+    ok(await until(() => b.info().bundleMarker === PM), 'the app follows the project folder with the same docId');
     eq(b.info().bundleDir, PP + '/.headway', 'bundleDir re-pointed');
-    ok(seen.some((t) => /renamed to “Peer Name”.*following it/.test(t)), 'toast says which: renamed, followed — ' + seen.join(' | '));
+    ok(seen.some((t) => /renamed to “Peer Name\.headway”.*following it/.test(t)), 'toast says which: renamed, followed — ' + seen.join(' | '));
     eq(JSON.parse(b.window.localStorage.getItem('headway-recents-v1'))[0].path, PM, 'recents follow');
     S.set('notes', 'after the peer rename');
     ok(await until(() => { const f = tauri.files.get(PP + '/.headway/plans/' + S.pid + '/items/' + S.vId + '.json'); return f && JSON.parse(f).fields.notes === 'after the peer rename'; }), 'edits flush into the followed folder');
@@ -903,7 +958,7 @@ async function fixes() {
     ok(!!nin, 'Save opens the Save as name prompt');
     nin.value = 'Rescued';
     b.click(b.doc.querySelector('#modalHost #optNameOk'));
-    const RP = 'C:/Users/me/Rescue/Rescued';
+    const RP = 'C:/Users/me/Rescue/Rescued.headway';
     ok(await until(() => b.info().bundleDir === RP + '/.headway'), 'now editing the rescued project — toasts: ' + seen.join(' | '));
     ok(!b.info().detached && b.info().docSaved, 'attached and saved');
     const rf = [...tauri.files.keys()].find((k) => k.indexOf(RP + '/.headway/plans/') === 0 && k.slice(-(S.vId.length + 5)) === S.vId + '.json');
@@ -911,14 +966,13 @@ async function fixes() {
     ok(![...tauri.dirs].some((d) => d.indexOf(PP) === 0) && ![...tauri.files.keys()].some((k) => k.indexOf(PP + '/') === 0), 'the missing folder was never re-created');
 
     section('a peer rename lands mid-flush: the app ends synced in the new folder, the old one never re-created');
-    const RP2 = 'C:/Users/me/Rescue/Rescued Too', rid = JSON.parse(tauri.files.get(RP + '/Rescued.headway')).id;
+    const RP2 = 'C:/Users/me/Rescue/Rescued Too.headway';
     let movedMid = false;
     tauri.beforeWrite = (p) => {
       if (movedMid || p.indexOf(RP + '/.headway/plans/') !== 0 || !/\.tmp$/.test(p)) return;
       movedMid = true;
       tauri.moveDir(RP, RP2);
-      tauri.files.delete(RP2 + '/Rescued.headway');
-      tauri.files.set(RP2 + '/Rescued Too.headway', b.RB.markerText(rid, 'Rescued Too'));
+      retitle(RP2, 'Rescued Too');
     };
     seen.length = 0;
     S.select();
@@ -1143,10 +1197,10 @@ async function fixes() {
     const seen = [];
     const mo = new S.b.window.MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach((n) => { if (n.textContent) seen.push(n.textContent); })));
     mo.observe(S.b.doc.querySelector('#toasts'), { childList: true });
-    const hw = JSON.parse(S.tauri.files.get(S.dir + '/headway.json'));
+    const hw = JSON.parse(S.tauri.files.get(S.proj + '/headway.json'));
     hw.plans[0].deleted = true; hw.plans[0].updatedAt = isoIn(1000);
-    S.tauri.files.set(S.dir + '/headway.json', JSON.stringify(hw));
-    await S.tauri.emitPaths(S.dir + '/headway.json');
+    S.tauri.files.set(S.proj + '/headway.json', JSON.stringify(hw));
+    await S.tauri.emitPaths(S.proj + '/headway.json');
     ok(seen.some((t) => /deleted by someone else/.test(t)), 'toast says the plan was deleted: ' + seen.join(' | '));
     eq(S.b.info().planGone, true, 'planGone set');
     S.select();
@@ -1596,7 +1650,7 @@ async function importFlow() {
 
   section('Auto timeline after a peer change: the dry run sees the peer, the click keeps their edit');
   {
-    const PROJ3 = 'C:/Users/me/OneDrive/Capacity';
+    const PROJ3 = 'C:/Users/me/OneDrive/Capacity.headway';
     const capDoc = b.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
     capDoc.meta.capacityEnabled = true; capDoc.meta.planLevel = 'feature'; capDoc.meta.capMode = 'person';
     capDoc.team = [{ id: 'solo', name: 'Solo', capType: 'Development', weekHours: {}, capacity: 1 }];
@@ -1606,7 +1660,7 @@ async function importFlow() {
     const c3 = b.RB.migrateFromState(capDoc, SEED_USER, T0);
     const pid3 = c3.headway.plans[0].id;
     await b.HD.createBundle(PROJ3, c3);
-    await b.HA.openBundleDoc(PROJ3 + '/Capacity.headway');
+    await b.HA.openBundleDoc(PROJ3);
     await settle();
     eq(b.info().docKind, 'bundle', 'capacity bundle open');
     // the render above computed (and memoized) the band's ⚡ dry run
@@ -1629,7 +1683,7 @@ main().catch((e) => {
   process.exit(1);
 });
 
-// ---- the project has ONE name (headway.json title + marker + folder)
+// ---- the project has ONE name (headway.json title + folder)
 async function addPlanB(S) {
   const planB = 'plan-b';
   const envsB = S.b.RB.wrapState(S.b.RM.clone(S.b.state()), {}, 'seed', T0);
@@ -1670,38 +1724,37 @@ async function projectFlow() {
     ok(b.state().meta.title !== 'Draft only', 'the project keeps its own title');
     eq(b.errors, [], 'no window errors');
   }
-  section('project name: one plan — the title IS the project name (headway.json, marker, folder)');
+  section('project name: one plan — the title IS the project name (headway.json, folder)');
   {
     const S = await openFresh('PN1');
     const b = S.b;
     b.HA.openSetup('timeline');
     ok(!b.doc.querySelector('#suProjectName'), 'one plan: no separate Project name field');
     setDocTitle(b, 'PN One');
-    ok(await until(() => b.info().bundleMarker === OD + 'PN One/PN One.headway'), 'the folder follows the title');
-    ok(await until(() => JSON.parse(S.tauri.files.get(OD + 'PN One/.headway/headway.json')).title === 'PN One'), 'headway.json title follows too');
-    eq(JSON.parse(S.tauri.files.get(OD + 'PN One/PN One.headway')).title, 'PN One', 'marker title');
+    ok(await until(() => b.info().bundleMarker === OD + 'PN One.headway'), 'the folder follows the title');
+    ok(await until(() => JSON.parse(S.tauri.files.get(OD + 'PN One.headway/headway.json')).title === 'PN One'), 'headway.json title follows too');
+    ok(!S.tauri.files.has(OD + 'PN One.headway/.headway/headway.json'), '…the only headway.json, at the top of the folder');
   }
   section('project name: several plans — plan titles are labels; Setup has a Project name field');
   {
     const S = await openFresh('PN2');
     const b = S.b;
     await addPlanB(S);
-    const hw0 = JSON.parse(S.tauri.files.get(S.dir + '/headway.json')).title;
+    const hw0 = JSON.parse(S.tauri.files.get(S.proj + '/headway.json')).title;
     setDocTitle(b, 'Just a label');
     ok(await until(() => b.RB.unwrap(JSON.parse(S.tauri.files.get(S.dir + '/plans/' + S.pid + '/meta.json'))).meta.title === 'Just a label'), 'the plan title lands in its meta');
     await settle(6);
     eq(b.info().bundleMarker, S.marker, 'the folder is NOT renamed');
-    eq(JSON.parse(S.tauri.files.get(S.dir + '/headway.json')).title, hw0, 'the project name is unchanged');
+    eq(JSON.parse(S.tauri.files.get(S.proj + '/headway.json')).title, hw0, 'the project name is unchanged');
     b.HA.openSetup('timeline');
     const pn = b.doc.querySelector('#suProjectName');
     ok(!!pn, 'Setup shows a Project name field');
     eq(pn && pn.value, b.HD.projectTitle(), '…holding the project name');
     pn.value = 'PN Project';
     pn.dispatchEvent(new b.window.Event('change', { bubbles: true }));
-    const NP = OD + 'PN Project';
-    ok(await until(() => b.info().bundleMarker === NP + '/PN Project.headway'), 'the folder follows the project name — ' + b.toasts());
-    ok(await until(() => JSON.parse(S.tauri.files.get(NP + '/.headway/headway.json')).title === 'PN Project'), 'headway.json title');
-    eq(JSON.parse(S.tauri.files.get(NP + '/PN Project.headway')).title, 'PN Project', 'marker title');
+    const NP = OD + 'PN Project.headway';
+    ok(await until(() => b.info().bundleMarker === NP), 'the folder follows the project name — ' + b.toasts());
+    ok(await until(() => JSON.parse(S.tauri.files.get(NP + '/headway.json')).title === 'PN Project'), 'headway.json title');
     eq(b.state().meta.title, 'Just a label', 'the plan title is untouched');
     eq(b.errors, [], 'no window errors');
   }
@@ -1710,7 +1763,7 @@ async function projectFlow() {
     const S = await openFresh('WizTwo');
     const b = S.b;
     await addPlanB(S);
-    const hw0 = S.tauri.files.get(S.dir + '/headway.json');
+    const hw0 = S.tauri.files.get(S.proj + '/headway.json');
     const r0 = S.tauri.log.length;
     b.HA.wizard.open();
     b.HA.wizard.go('project');
@@ -1726,9 +1779,9 @@ async function projectFlow() {
     stray.remove();
     await b.HA.renameProjectFolder('Late Rename');
     await settle(6);
-    eq(b.info().bundleMarker, S.marker, 'the open project keeps its marker');
-    ok(S.tauri.files.has(S.marker), '…on disk');
-    eq(S.tauri.files.get(S.dir + '/headway.json'), hw0, 'headway.json untouched');
+    eq(b.info().bundleMarker, S.marker, 'the open project keeps its folder');
+    ok(S.tauri.files.has(S.marker + '/headway.json'), '…on disk');
+    eq(S.tauri.files.get(S.proj + '/headway.json'), hw0, 'headway.json untouched');
     eq(S.tauri.log.slice(r0).filter((l) => l.op === 'rename' && l.dir).length, 0, 'no folder rename');
     b.HA.wizard.close(true);
     await settle(4);
@@ -1751,7 +1804,7 @@ async function projectFlow() {
     pn.dispatchEvent(new b.window.Event('change', { bubbles: true }));
     ok(await until(() => /Project folder is missing — reconnect or Save as… first/.test(b.toasts())), 'toast says why — ' + b.toasts());
     await settle(4);
-    eq(b.info().bundleMarker, S.marker, 'the marker path is unchanged');
+    eq(b.info().bundleMarker, S.marker, 'the project folder path is unchanged');
     eq(S.tauri.log.slice(r0).filter((l) => l.op === 'rename' || l.op === 'mkdir').length, 0, 'nothing renamed or created');
     ok(![...S.tauri.files.keys()].some((k) => k.indexOf(S.proj + '/') === 0 || k.indexOf('C:/Users/me/OneDrive/Moved While Missing') === 0), 'no folder appears');
     // L-f: Save as… while detached copies only the plan on screen — and says so
@@ -1801,7 +1854,8 @@ async function projectFlow() {
   section('M-2: detached edits are never dropped silently — File → Open… / New / Convert ask; Save as… copies, then continues');
   {
     const picks = [];
-    const S = await openFresh('DetOpen', { dialogOpen: (o) => { picks.push(o || {}); return o && o.directory ? 'C:/Users/me/Rescue2' : null; } });
+    // both pickers are folder pickers: the first (Save as…'s parent) answers, the Open after it is cancelled
+    const S = await openFresh('DetOpen', { dialogOpen: (o) => { picks.push(o || {}); return picks.length === 1 ? 'C:/Users/me/Rescue2' : null; } });
     const b = S.b;
     S.tauri.moveDir(S.proj, 'C:/stash/detopen');
     await b.HD.checkBundleLocation();
@@ -1829,9 +1883,10 @@ async function projectFlow() {
     ok(!!nin, 'Save as… asks for a name');
     nin.value = 'Rescued Two';
     b.click(b.doc.querySelector('#modalHost #optNameOk'));
-    const RP = 'C:/Users/me/Rescue2/Rescued Two';
+    const RP = 'C:/Users/me/Rescue2/Rescued Two.headway';
     ok(await until(() => b.info().bundleDir === RP + '/.headway'), 'saved as a new project — ' + b.toasts());
-    ok(await until(() => picks.some((o) => !o.directory)), 'then the Open picker runs');
+    ok(await until(() => picks.length === 2), 'then the Open picker runs');
+    ok(picks.every((o) => o.directory === true), '…a folder picker, like Save as…\'s');
     const rf = [...S.tauri.files.keys()].find((k) => k.indexOf(RP + '/.headway/plans/') === 0 && k.slice(-(S.vId.length + 5)) === S.vId + '.json');
     ok(rf && JSON.parse(S.tauri.files.get(rf)).fields.notes === 'held edit', 'the held edit is in the copy');
     eq(b.errors, [], 'no window errors');
@@ -1867,7 +1922,7 @@ async function projectFlow() {
     const XL = OD + 'Fallback Name.xlsx';
     tauri.files.set(XL, Uint8Array.from(new Uint8Array(await blob.arrayBuffer())));
     await b.HA.openFromPath(XL);
-    ok(await until(() => b.info().bundleMarker === OD + 'Fallback Name/Fallback Name.headway'), 'named after the file — ' + b.toasts());
+    ok(await until(() => b.info().bundleMarker === OD + 'Fallback Name.headway'), 'named after the file — ' + b.toasts());
   }
   section('conversion beside a workbook in a read-only folder: pick another parent; view prefs only once created');
   {
@@ -1896,7 +1951,7 @@ async function projectFlow() {
     tauri.dirs.add('C:/Users/me/Elsewhere');
     open = 'C:/Users/me/Elsewhere';
     await b.HA.openFromPath(XL);
-    ok(await until(() => b.info().bundleMarker === 'C:/Users/me/Elsewhere/RO Book/RO Book.headway'), 'created in the picked folder — ' + seen.join(' | '));
+    ok(await until(() => b.info().bundleMarker === 'C:/Users/me/Elsewhere/RO Book.headway'), 'created in the picked folder — ' + seen.join(' | '));
     eq(b.info().weekPx, 55, 'the workbook\'s view prefs apply once the project exists');
     eq(b.errors, [], 'no window errors');
   }
@@ -1934,7 +1989,7 @@ async function projectFlow() {
     open = 'C:/Users/me/Saved';
     prompt().value = 'Loose Project';
     b.click(b.doc.querySelector('#modalHost #optNameOk'));
-    ok(await until(() => b.info().bundleMarker === 'C:/Users/me/Saved/Loose Project/Loose Project.headway'), 'saved as a project — ' + b.toasts());
+    ok(await until(() => b.info().bundleMarker === 'C:/Users/me/Saved/Loose Project.headway'), 'saved as a project — ' + b.toasts());
     ok(await until(() => proceeded === 1), '…and then the close / open asked for continues');
     eq(b.errors, [], 'no window errors');
   }

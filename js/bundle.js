@@ -404,10 +404,11 @@
   };
 
   // ------------------------------------------------------------ project folders
-  // A project on disk:
-  //   <Project>/<Project>.headway   marker the user opens (markerText)
-  //   <Project>/.headway/           everything else (headway.json, plans/, …)
-  // The folder is named after the title; these are the pure naming rules.
+  // A project on disk is one folder, named after the title:
+  //   <Project>.headway/            the folder the user opens
+  //     headway.json                docId, title and the plan list
+  //     .headway/                   hidden; everything else (plans/, history/, presence/)
+  // These are the pure naming rules.
   var RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
   var NAME_MAX = 80;
   RMBundle.projectName = function (title) {
@@ -441,17 +442,26 @@
       if (!low[cand.toLowerCase()]) return cand;
     }
   };
-  RMBundle.MARKER_EXT = '.headway';
+  RMBundle.PROJECT_EXT = '.headway';
   RMBundle.DATA_DIR = '.headway';
-  RMBundle.markerText = function (id, title) {
-    return JSON.stringify({ headway: 1, id: String(id), title: title == null ? '' : String(title) }, null, 2) + '\n';
+  var EXT_RE = /\.headway$/i;
+  // the project folder for a title: "Q3 Plan" → "Q3 Plan.headway"
+  RMBundle.projectFolderName = function (title) {
+    return RMBundle.projectName(String(title == null ? '' : title).replace(EXT_RE, '')) + RMBundle.PROJECT_EXT;
   };
-  // null unless the text is a project marker
-  RMBundle.parseMarker = function (text) {
+  // the first free project folder for title among the names in its parent:
+  // "Plan.headway", "Plan (2).headway", … (the suffix goes before the ext)
+  RMBundle.uniqueProjectFolder = function (title, taken) {
+    var stems = (taken || []).filter(function (n) { return EXT_RE.test(String(n)); })
+      .map(function (n) { return String(n).replace(EXT_RE, ''); });
+    return RMBundle.uniqueName(RMBundle.projectFolderName(title).replace(EXT_RE, ''), stems) + RMBundle.PROJECT_EXT;
+  };
+  // {id, title} from a project's headway.json text; null unless it is one
+  RMBundle.parseProject = function (text) {
     var o;
     try { o = JSON.parse(text); } catch (e) { return null; }
-    if (!isObj(o) || o.headway == null || !(+o.headway >= 1) || o.id == null || o.id === '') return null;
-    return { headway: +o.headway, id: String(o.id), title: o.title == null ? '' : String(o.title) };
+    if (!isObj(o) || o.docId == null || o.docId === '' || !Array.isArray(o.plans)) return null;
+    return { id: String(o.docId), title: o.title == null ? '' : String(o.title) };
   };
 
   // a plan's meta envelope with meta.title set (Save as… copies); only the

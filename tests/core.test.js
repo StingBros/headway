@@ -3218,7 +3218,7 @@ section('sprint moves');
     'unscheduling a story clears its timeline and moves it last');
 }
 
-section('project folders (RMBundle.projectName / markerText / parseMarker / uniqueName)');
+section('project folders (RMBundle.projectName / projectFolderName / uniqueProjectFolder / parseProject)');
 eq(RB.projectName('Q1 Platform Roadmap'), 'Q1 Platform Roadmap', 'a plain title is the folder name');
 eq(RB.projectName('  a/b\\c:d*e?f"g<h>i|j  '), 'a b c d e f g h i j', 'path-hostile characters become spaces');
 eq(RB.projectName('Q3/Q4 Plan'), 'Q3 Q4 Plan', 'a slash separates words (Q3/Q4 → "Q3 Q4", not "Q3Q4")');
@@ -3241,14 +3241,17 @@ ok(RB.projectName(new Array(300).join('x')).length === 80, 'long titles are capp
 eq(RB.uniqueName('Plan', []), 'Plan', 'a free name is kept');
 eq(RB.uniqueName('Plan', ['plan']), 'Plan (2)', 'a taken name gets " (2)" (case-insensitive: macOS/Windows)');
 eq(RB.uniqueName('Plan', ['Plan', 'Plan (2)', 'Plan (3)']), 'Plan (4)', 'the first free suffix wins');
-var mk = RB.markerText('doc-abc', 'My Plan');
-eq(JSON.parse(mk), { headway: 1, id: 'doc-abc', title: 'My Plan' }, 'marker JSON shape');
-ok(/\n$/.test(mk), 'marker ends with a newline');
-eq(RB.parseMarker(mk), { headway: 1, id: 'doc-abc', title: 'My Plan' }, 'marker round-trips');
-eq(RB.parseMarker('not json'), null, 'garbage is not a marker');
-eq(RB.parseMarker('{"headway":1}'), null, 'a marker needs an id');
-eq(RB.parseMarker('{"id":"x"}'), null, 'a marker needs the headway key');
-eq(RB.parseMarker('{"headway":"1","id":7}'), { headway: 1, id: '7', title: '' }, 'loose types are coerced');
+eq(RB.projectFolderName('Q3/Q4 Plan'), 'Q3 Q4 Plan.headway', 'a project folder is the sanitised title + .headway');
+eq(RB.projectFolderName('Plan.headway'), 'Plan.headway', 'a title ending in .headway is not doubled');
+eq(RB.projectFolderName(''), 'Roadmap.headway', 'an empty title falls back');
+eq(RB.uniqueProjectFolder('Plan', ['Other.headway', 'plan']), 'Plan.headway', 'a plain folder named like the stem does not collide');
+eq(RB.uniqueProjectFolder('Plan', ['plan.headway', 'Plan (2).headway']), 'Plan (3).headway', 'the suffix goes before the extension');
+var hwText = JSON.stringify({ format: RB.FORMAT, docId: 'doc-abc', title: 'My Plan', plans: [] });
+eq(RB.parseProject(hwText), { id: 'doc-abc', title: 'My Plan' }, 'parseProject: docId + title from headway.json');
+eq(RB.parseProject('not json'), null, 'garbage is not a project');
+eq(RB.parseProject('{"docId":"x"}'), null, 'a project needs a plan list');
+eq(RB.parseProject('{"plans":[]}'), null, 'a project needs a docId');
+eq(RB.parseProject('{"docId":7,"plans":[]}'), { id: '7', title: '' }, 'loose types are coerced');
 var rtSrc = mkState([{ num: 1, feature: 'a' }]);
 rtSrc.meta.title = 'Old';
 var rtEnv = RB.wrapMeta(rtSrc, null, 'ann-1', T0);

@@ -404,3 +404,43 @@ Supersedes the matching bullets of the 2026-09-23 amendment.
   `openBundleDialog`) and the auto-save preference are removed.
 - **Save as copy.** A shard that disappears between the listing and its read is skipped; any
   other failure removes the partly written target folder.
+
+## Amendment (2026-09-24): the project is the folder
+
+Supersedes the *Layout*, *One Open* and *Rename* bullets of the 2026-09-23 amendment, and
+every mention of a marker file. Neither the marker layout nor the PR 1 layout shipped, so
+there is no migration.
+
+- **Layout.** A project is one folder, `<Project>.headway/`
+  (`RMBundle.projectFolderName(title)` = `projectName(title)` + `.headway`;
+  `RMBundle.uniqueProjectFolder` adds `" (2)"` before the extension):
+
+  ```
+  <Project>.headway/
+    headway.json           {format, docId, title, createdAt, plans} — identity + plan list
+    .headway/              hidden: plans/, history/, presence/
+  ```
+
+  `headway.json` replaces the marker: its `docId` finds the project again after a move, and
+  its `title` is the project name. `bundleDir` is still the hidden `.headway/` folder, so shard
+  paths, `classify`, echo suppression and conflict siblings are unchanged relative to it;
+  `headway.json` is `dirname(bundleDir)/headway.json`. The watcher's root is the project
+  folder, so a peer's `headway.json` change arrives as `plansChanged`. Other files in the
+  project folder (`.DS_Store`, …) are ignored.
+- **Open.** File → Open… and the start page's Open… are folder pickers on every platform.
+  `openBundle(projectFolder)` also takes the folder's `headway.json` or `.headway` path. It
+  refuses a folder with no `headway.json`, an invalid one, or no `.headway/` data folder. An
+  `.xlsx` converts through File → Open and Convert Legacy File… or the start page's
+  Convert .xlsx…. Recents and the UI snapshot's `bundleMarker` hold the project folder path.
+- **Create / Save as / Convert** write the data folder first and `headway.json` last, so a
+  folder that opens always has its data. Convert's "already converted" check is
+  `<parent>/<projectFolderName(title)>/headway.json`.
+- **Rename** is one folder rename, `<Old>.headway` → `<New>.headway`; the app then writes the
+  title into `headway.json` (read-merge-write).
+- **Relocation** scans the project folder's siblings for a `headway.json` with the same
+  `docId` whose `.headway/` exists. Re-attaching a detached session needs both the data
+  folder and `headway.json`.
+- **No document in the app.** The desktop no longer stores the document in localStorage
+  (`headway-v1` is removed at boot) and shows no "Continue where you left off" entry. Only
+  project folders come back, through recents or a mid-session reload's `resumeBundle`. The
+  browser build still keeps its local copy.

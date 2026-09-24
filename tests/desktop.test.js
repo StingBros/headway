@@ -58,14 +58,15 @@ const USER = 'tester-abc12';
 const T0 = '2026-09-01T10:00:00.000Z';
 const T1 = '2026-09-01T10:05:00.000Z';
 const T2 = '2026-09-01T10:10:00.000Z';
-// a project: <Project>/<Project>.headway marker + <Project>/.headway/ data
-const PROJ = 'C:/Users/me/OneDrive/Roadmap';
+// a project: the <Project>.headway folder (what the user opens) holding
+// headway.json + a hidden .headway/ data folder
+const PROJ = 'C:/Users/me/OneDrive/Roadmap.headway';
 const DIR = PROJ + '/.headway';            // bundleDir: every shard lives below here
-const MARKER = PROJ + '/Roadmap.headway';  // what the user opens
+const MARKER = PROJ;                       // what the user opens: the project folder
 
 async function main() {
   const tauri = makeFakeTauri();
-  const { window, named, errors, RM, RB, HD } = boot(tauri);
+  const { window, calls, named, errors, RM, RB, HD } = boot(tauri);
 
   section('boot');
   ok(errors.length === 0, 'no window errors during boot' + (errors.length ? ' — ' + errors.join('; ') : ''));
@@ -77,7 +78,7 @@ async function main() {
   });
 
   section('helpers');
-  eq(HD.classify('headway.json').kind, 'plans', 'classify headway.json');
+  eq(HD.classify('headway.json').kind, 'plans', 'classify headway.json (the project\'s, beside the data folder)');
   eq(HD.classify('plans/p1/meta.json').kind, 'meta', 'classify meta.json');
   eq(HD.classify('plans/p1/items/i1-2-abc.json'), { kind: 'item', planId: 'p1', file: 'i1-2-abc.json', stem: 'i1-2-abc', entityKind: 'items', userId: null }, 'classify item shard');
   eq(HD.classify('plans/p1/phases/x.json').kind, 'phase', 'classify phase');
@@ -98,11 +99,11 @@ async function main() {
   const contents = RB.migrateFromState(fixture, USER, T0);
   const pid = contents.headway.plans[0].id;
   const out = await HD.createBundle(PROJ, contents);
-  eq(out, MARKER, 'createBundle resolves the marker path');
-  ok(tauri.files.has(DIR + '/headway.json'), 'headway.json written under .headway/');
-  eq(JSON.parse(tauri.files.get(MARKER)), { headway: 1, id: contents.headway.docId, title: fixture.meta.title }, 'marker at the top: {headway, id, title}');
-  eq([...tauri.files.keys()].filter((f) => f.indexOf(PROJ + '/') === 0 && f.indexOf(DIR + '/') !== 0), [MARKER],
-    'the marker is the ONLY file outside .headway/');
+  eq(out, PROJ, 'createBundle resolves the project folder');
+  eq(JSON.parse(tauri.files.get(PROJ + '/headway.json')).docId, contents.headway.docId, 'headway.json at the top of the project folder');
+  ok(!tauri.files.has(DIR + '/headway.json'), '…not inside .headway/');
+  eq([...tauri.files.keys()].filter((f) => f.indexOf(PROJ + '/') === 0 && f.indexOf(DIR + '/') !== 0), [PROJ + '/headway.json'],
+    'headway.json is the ONLY file outside .headway/');
   ok([...tauri.dirs].filter((d) => d.indexOf(PROJ + '/') === 0).every((d) => d === DIR || d.indexOf(DIR + '/') === 0),
     'every folder lives under .headway/');
   eq(tauri.files.has(DIR + '/plans/' + pid + '/meta.json'), true, 'meta.json written');
@@ -121,11 +122,11 @@ async function main() {
   eq(HD.bundleDir(), DIR, 'bundleDir set');
   eq(HD.activePlanId(), pid, 'activePlanId set');
   eq(HD.markerPath(), MARKER, 'markerPath set');
-  eq(HD.projectDir(), PROJ, 'projectDir is the marker\'s folder');
-  eq(HD.projectTitle(), fixture.meta.title, 'projectTitle from the marker');
-  eq(opened.marker, MARKER, 'openBundle hands back the marker');
-  eq(window.document.title, fixture.meta.title + ' — Headway', 'window title from the marker title');
-  eq(tauri.watchOpts() && tauri.log.filter((l) => l.op === 'watch').slice(-1)[0].path, DIR, 'the watch root is .headway/ (the marker is never watched)');
+  eq(HD.projectDir(), PROJ, 'projectDir is the project folder');
+  eq(HD.projectTitle(), fixture.meta.title, 'projectTitle from headway.json');
+  eq(opened.marker, PROJ, 'openBundle hands back the project folder');
+  eq(window.document.title, fixture.meta.title + ' — Headway', 'window title from headway.json\'s title');
+  eq(tauri.watchOpts() && tauri.log.filter((l) => l.op === 'watch').slice(-1)[0].path, PROJ, 'the watch root is the project folder (headway.json + .headway/)');
   ok(tauri.watching() && tauri.watchOpts().recursive === true, 'recursive watch installed');
   eq(named('noteRecent').slice(-1)[0].args, [MARKER, 'bundle'], 'noteRecent(marker, "bundle")');
 
@@ -270,10 +271,19 @@ async function main() {
 
   section('plans + presence events');
   before = named('plansChanged').length;
-  await tauri.emitPaths(DIR + '/headway.json');
+  await tauri.emitPaths(PROJ + '/headway.json');
   await tick();
-  eq(named('plansChanged').length, before + 1, 'plansChanged called');
+  eq(named('plansChanged').length, before + 1, 'plansChanged called for the project folder\'s headway.json');
   eq(named('plansChanged').slice(-1)[0].args[0].plans[0].id, pid, '…with the parsed headway.json');
+  {
+    // anything else in the project folder (Finder / Explorer litter) is ignored
+    const n0 = calls.length;
+    tauri.files.set(PROJ + '/.DS_Store', 'x');
+    await tauri.emitPaths([PROJ + '/.DS_Store', PROJ + '/desktop.ini'], 'create');
+    await tick();
+    eq(calls.length, n0, 'a .DS_Store / desktop.ini event in the project folder calls nothing');
+    tauri.files.delete(PROJ + '/.DS_Store');
+  }
   HD.setUserId(USER);
   await HD.writePresence(DIR, 'peer-zz999', { name: 'Peer', planId: pid, editing: [idA], ts: 1 });
   await tauri.emitPaths(DIR + '/presence/peer-zz999.json');
@@ -319,28 +329,41 @@ async function main() {
 
   section('openBundle failures');
   let err = null;
-  await HD.openBundle('C:/nowhere/Nope/Nope.headway').catch((e) => { err = e; });
-  ok(err && /No such file/i.test(err.message), 'a missing marker rejects: ' + (err && err.message));
-  tauri.dirs.add('C:/x/Bad');
-  tauri.files.set('C:/x/Bad/Bad.headway', RB.markerText('doc-bad', 'Bad'));
+  await HD.openBundle('C:/nowhere/Nope.headway').catch((e) => { err = e; });
+  ok(err && /Not a Headway project: “Nope\.headway” has no headway\.json/.test(err.message), 'a missing folder rejects: ' + (err && err.message));
+  tauri.dirs.add('C:/x/Plain');
+  tauri.files.set('C:/x/Plain/notes.txt', 'hi');
   err = null;
-  await HD.openBundle('C:/x/Bad/Bad.headway').catch((e) => { err = e; });
-  ok(err && /\.headway folder is missing/.test(err.message), 'a bare marker (no .headway/ beside it) is refused: ' + (err && err.message));
-  tauri.files.set('C:/x/Bad/.headway/headway.json', '{"format":"headway-bundle-v1"}');
+  await HD.openBundle('C:/x/Plain').catch((e) => { err = e; });
+  ok(err && /has no headway\.json/.test(err.message), 'a folder without headway.json is refused: ' + (err && err.message));
+  tauri.dirs.add('C:/x/Bad.headway');
+  tauri.files.set('C:/x/Bad.headway/headway.json', JSON.stringify({ format: 'headway-bundle-v1', docId: 'doc-bad', title: 'Bad', plans: [{ id: 'p1', name: 'P' }] }));
   err = null;
-  await HD.openBundle('C:/x/Bad/Bad.headway').catch((e) => { err = e; });
+  await HD.openBundle('C:/x/Bad.headway').catch((e) => { err = e; });
+  ok(err && /\.headway folder inside it is missing/.test(err.message), 'headway.json without the hidden .headway/ data folder is refused: ' + (err && err.message));
+  tauri.files.set('C:/x/Bad.headway/headway.json', '{"format":"headway-bundle-v1"}');
+  err = null;
+  await HD.openBundle('C:/x/Bad.headway').catch((e) => { err = e; });
   ok(err && /plan list/.test(err.message), 'headway.json without plans rejects');
-  tauri.files.set('C:/x/Junk/Junk.headway', 'hello');
+  tauri.files.set('C:/x/Junk.headway/headway.json', 'hello');
   err = null;
-  await HD.openBundle('C:/x/Junk/Junk.headway').catch((e) => { err = e; });
-  ok(err && /not a Headway project file/.test(err.message), 'a .headway file that is not a marker is refused: ' + (err && err.message));
-  err = null;
-  await HD.openBundle('C:/x/Bad/.headway').catch((e) => { err = e; });
-  ok(err && /open the “\.headway” file/.test(err.message), 'the data folder itself (the PR 1 layout) is not recognised: ' + (err && err.message));
-  err = null;
-  await HD.openBundle(DIR.replace('/.headway', '') + '.headway').catch((e) => { err = e; });
-  ok(err, 'an old <Title>.headway folder path is not recognised');
+  await HD.openBundle('C:/x/Junk.headway').catch((e) => { err = e; });
+  ok(err && /not valid JSON/.test(err.message), 'a headway.json that is not JSON is refused: ' + (err && err.message));
   eq(HD.bundleDir(), null, 'a failed open leaves no bundle state');
+  // the project's headway.json or its data folder picked instead opens the project
+  for (const alt of [PROJ + '/headway.json', DIR, DIR + '/']) {
+    const oa = await HD.openBundle(alt);
+    eq([oa.marker, HD.bundleDir(), HD.markerPath()], [PROJ, DIR, PROJ], 'openBundle(' + alt.slice(PROJ.length) + ') opens the project folder');
+    await HD.closeBundle();
+  }
+  {
+    // the folder name need not end in .headway
+    tauri.moveDir(PROJ, 'C:/Users/me/OneDrive/Renamed by hand');
+    const oa = await HD.openBundle('C:/Users/me/OneDrive/Renamed by hand');
+    eq(oa.marker, 'C:/Users/me/OneDrive/Renamed by hand', 'a project folder without the .headway suffix still opens');
+    await HD.closeBundle();
+    tauri.moveDir('C:/Users/me/OneDrive/Renamed by hand', PROJ);
+  }
 
   section('close hook');
   const closeCalls = named('beforeClose').length;
@@ -489,13 +512,13 @@ async function main() {
   const hw1 = await b8.HD.writeHeadway(DIR, { plans: [entry] });
   eq(hw1.plans.map((p) => p.name), c2.headway.plans.map((p) => p.name).concat('Plan B'), 'a new entry is appended, existing ones kept');
   eq([hw1.format, hw1.docId, hw1.title], ['headway-bundle-v1', c2.headway.docId, c2.headway.title], 'other keys kept');
-  ok(/\n  "plans"/.test(t8.files.get(DIR + '/headway.json')), 'pretty-printed');
-  ok(!t8.files.has(DIR + '/headway.json.tmp'), 'written atomically (no tmp left)');
-  ok(t8.log.some((l) => l.op === 'rename' && l.to === DIR + '/headway.json'), 'tmp → rename observed');
+  ok(/\n  "plans"/.test(t8.files.get(PROJ + '/headway.json')), 'pretty-printed');
+  ok(!t8.files.has(PROJ + '/headway.json.tmp') && !t8.files.has(DIR + '/headway.json'), 'written atomically (no tmp left), beside the data folder — not in it');
+  ok(t8.log.some((l) => l.op === 'rename' && l.to === PROJ + '/headway.json'), 'tmp → rename observed');
   // a peer's concurrent entry on disk survives our write
-  const disk8 = JSON.parse(t8.files.get(DIR + '/headway.json'));
+  const disk8 = JSON.parse(t8.files.get(PROJ + '/headway.json'));
   disk8.plans.push(b8.RB.newPlanEntry('plan-c', 'Peer plan', T1));
-  t8.files.set(DIR + '/headway.json', JSON.stringify(disk8));
+  t8.files.set(PROJ + '/headway.json', JSON.stringify(disk8));
   const hw2 = await b8.HD.writeHeadway(DIR, { plans: [Object.assign({}, entry, { name: 'Plan B2', updatedAt: T2 })] });
   eq(hw2.plans.filter((p) => p.id === 'plan-b')[0].name, 'Plan B2', 'rename lands (later updatedAt wins)');
   ok(hw2.plans.some((p) => p.id === 'plan-c'), 'the peer\'s entry survives our write');
@@ -503,7 +526,7 @@ async function main() {
   eq(hw3.plans.filter((p) => p.id === 'plan-b')[0].deleted, true, 'a tombstone entry lands');
   const hw4 = await b8.HD.writeHeadway(DIR, { plans: [Object.assign({}, entry, { name: 'Late rename', updatedAt: '2026-09-01T11:00:00.000Z' })] });
   eq(hw4.plans.filter((p) => p.id === 'plan-b')[0].deleted, true, 'a later rename does not undelete');
-  eq(JSON.parse(t8.files.get(DIR + '/headway.json')).plans.length, hw4.plans.length, 'what resolved is what is on disk');
+  eq(JSON.parse(t8.files.get(PROJ + '/headway.json')).plans.length, hw4.plans.length, 'what resolved is what is on disk');
 
   section('pickFolder / exportBlob adopt nothing');
   eq(await b8.HD.pickFolder(), 'C:/picked/Parent', 'pickFolder resolves the chosen folder');
@@ -535,7 +558,7 @@ async function main() {
   await t8.emitPaths(DIR + '/plans/other-plan/meta.json');
   await tick();
   eq(b8.named('planShardChanged').length, before + 2, 'a meta shard of another plan reports too');
-  await t8.emitPaths(DIR + '/headway.json');
+  await t8.emitPaths(PROJ + '/headway.json');
   await tick();
   eq(b8.named('planShardChanged').length, before + 2, 'headway.json is not a plan shard');
 
@@ -548,14 +571,14 @@ async function main() {
     tp.dirs.add('C:/work');
     tp.files.set('C:/work/Plan.xlsx', 'xlsx bytes');
     const m1 = await bp.HD.createProject('C:/work', 'Plan', cp);
-    eq(m1, 'C:/work/Plan/Plan.headway', 'first project: <Title>/<Title>.headway');
-    ok(tp.files.has('C:/work/Plan/.headway/headway.json'), '…with its data under .headway/');
+    eq(m1, 'C:/work/Plan.headway', 'first project: <Title>.headway');
+    ok(tp.files.has('C:/work/Plan.headway/headway.json') && [...tp.files.keys()].some((k) => k.indexOf('C:/work/Plan.headway/.headway/plans/') === 0), '…with headway.json at its top and its data under .headway/');
     eq(tp.files.get('C:/work/Plan.xlsx'), 'xlsx bytes', 'the file beside it is untouched');
     const m2 = await bp.HD.createProject('C:/work', 'plan', bp.RB.migrateFromState(fx, USER, T0));
-    eq(m2, 'C:/work/plan (2)/plan (2).headway', 'a taken name (case-insensitive) gets " (2)"');
+    eq(m2, 'C:/work/plan (2).headway', 'a taken name (case-insensitive) gets " (2)" before the extension');
     const m3 = await bp.HD.createProject('C:/work', 'a/b: c?', bp.RB.migrateFromState(fx, USER, T0));
-    eq(m3, 'C:/work/a b c/a b c.headway', 'the title is sanitised for the folder');
-    eq(JSON.parse(tp.files.get(m3)).title, fx.meta.title, 'the marker keeps the document title');
+    eq(m3, 'C:/work/a b c.headway', 'the title is sanitised for the folder');
+    eq(JSON.parse(tp.files.get(m3 + '/headway.json')).title, fx.meta.title, 'headway.json keeps the document title');
   }
 
   section('copyProject (Save as…): a complete copy with a new id; the original untouched');
@@ -566,42 +589,43 @@ async function main() {
     const fx = bc.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
     fx.options = [{ id: 'opt-b', name: 'Plan B', doc: JSON.parse(JSON.stringify(fx)) }];
     const cc = bc.RB.migrateFromState(fx, USER, T0);
-    const SRC = 'C:/w/Orig';
-    const srcMarker = await bc.HD.createBundle(SRC, cc);
+    const SRC = 'C:/w/Orig.headway';
+    const srcProj = await bc.HD.createBundle(SRC, cc);
     await bc.HD.writePresence(SRC + '/.headway', 'peer-1', { name: 'Peer', ts: 1 });
     tc.files.set(SRC + '/.headway/plans/' + cc.headway.plans[0].id + '/items/x.json.tmp', '{');
     const snap = new Map([...tc.files.entries()].filter(([k]) => k.indexOf(SRC + '/') === 0));
-    const newMarker = await bc.HD.copyProject(SRC + '/.headway', 'C:/w/Copy', 'Copy');
-    eq(newMarker, 'C:/w/Copy/Copy.headway', 'resolves the new marker');
-    const mk = JSON.parse(tc.files.get(newMarker));
-    const hwNew = JSON.parse(tc.files.get('C:/w/Copy/.headway/headway.json'));
-    ok(mk.id && mk.id !== cc.headway.docId && hwNew.docId === mk.id, 'a NEW bundle id, in the marker and headway.json');
-    eq([mk.title, hwNew.title], ['Copy', 'Copy'], 'titled with the new name');
+    const newProj = await bc.HD.copyProject(SRC + '/.headway', 'C:/w/Copy.headway', 'Copy');
+    eq(newProj, 'C:/w/Copy.headway', 'resolves the new project folder');
+    const hwNew = JSON.parse(tc.files.get('C:/w/Copy.headway/headway.json'));
+    ok(hwNew.docId && hwNew.docId !== cc.headway.docId, 'a NEW bundle id in headway.json');
+    eq(hwNew.title, 'Copy', 'titled with the new name');
+    ok(!tc.files.has('C:/w/Copy.headway/.headway/headway.json'), 'no headway.json inside the data folder');
+    eq(tc.log.filter((l) => l.op !== 'watch' && String(l.path).indexOf('C:/w/Copy.headway') === 0).slice(-1)[0].path, 'C:/w/Copy.headway/headway.json', 'headway.json lands last');
     eq(hwNew.plans.map((p) => p.id), cc.headway.plans.map((p) => p.id), 'every plan comes along');
     const relOf = (root) => [...tc.files.keys()].filter((k) => k.indexOf(root + '/') === 0).map((k) => k.slice(root.length + 1));
     const srcShards = relOf(SRC + '/.headway').filter((r) => /^plans\/.*\.json$/.test(r)).sort();
-    eq(relOf('C:/w/Copy/.headway').filter((r) => /^plans\/.*\.json$/.test(r)).sort(), srcShards, 'every shard of every plan is copied');
+    eq(relOf('C:/w/Copy.headway/.headway').filter((r) => /^plans\/.*\.json$/.test(r)).sort(), srcShards, 'every shard of every plan is copied');
     ok(srcShards.length > fx.items.length * 2, 'both plans\' shards (' + srcShards.length + ')');
     const itemRel = srcShards.find((r) => /\/items\//.test(r));
-    eq(tc.files.get('C:/w/Copy/.headway/' + itemRel), tc.files.get(SRC + '/.headway/' + itemRel), 'shards are copied verbatim');
-    eq(tc.files.get('C:/w/Copy/.headway/history/' + USER + '.jsonl'), tc.files.get(SRC + '/.headway/history/' + USER + '.jsonl'), 'history copied over');
-    eq(relOf('C:/w/Copy/.headway').filter((r) => /^presence\//.test(r)), [], 'no presence copied');
-    ok(!relOf('C:/w/Copy/.headway').some((r) => /\.tmp$/.test(r)), 'no .tmp copied');
-    // several plans: each keeps its own title (the project name is headway.json + marker + folder)
+    eq(tc.files.get('C:/w/Copy.headway/.headway/' + itemRel), tc.files.get(SRC + '/.headway/' + itemRel), 'shards are copied verbatim');
+    eq(tc.files.get('C:/w/Copy.headway/.headway/history/' + USER + '.jsonl'), tc.files.get(SRC + '/.headway/history/' + USER + '.jsonl'), 'history copied over');
+    eq(relOf('C:/w/Copy.headway/.headway').filter((r) => /^presence\//.test(r)), [], 'no presence copied');
+    ok(!relOf('C:/w/Copy.headway/.headway').some((r) => /\.tmp$/.test(r)), 'no .tmp copied');
+    // several plans: each keeps its own title (the project name is headway.json + folder)
     cc.headway.plans.forEach((p) => {
-      const env = JSON.parse(tc.files.get('C:/w/Copy/.headway/plans/' + p.id + '/meta.json'));
+      const env = JSON.parse(tc.files.get('C:/w/Copy.headway/.headway/plans/' + p.id + '/meta.json'));
       eq(bc.RB.unwrap(env).meta.title, fx.meta.title, 'plan ' + p.name + ': keeps its own title');
     });
     let same = true;
     snap.forEach((v, k) => { if (tc.files.get(k) !== v) same = false; });
     ok(same && [...tc.files.keys()].filter((k) => k.indexOf(SRC + '/') === 0).length === snap.size, 'the original is untouched');
-    eq(JSON.parse(tc.files.get(srcMarker)).id, cc.headway.docId, 'the original keeps its id');
-    const opened = await bc.HD.openBundle(newMarker);
+    eq(JSON.parse(tc.files.get(srcProj + '/headway.json')).docId, cc.headway.docId, 'the original keeps its id');
+    const opened = await bc.HD.openBundle(newProj);
     eq(opened.doc.meta.title, fx.meta.title, 'the copy opens with the plan\'s own title');
     eq(bc.HD.projectTitle(), 'Copy', '…in the project named Copy');
     eq(opened.doc.items.length, fx.items.length, '…and every item');
     let err = null;
-    await bc.HD.copyProject(SRC + '/.headway', 'C:/w/Copy', 'Copy').catch((e) => { err = e; });
+    await bc.HD.copyProject(SRC + '/.headway', 'C:/w/Copy.headway', 'Copy').catch((e) => { err = e; });
     ok(err && /already exists/.test(err.message), 'an existing target folder is refused: ' + (err && err.message));
   }
 
@@ -612,21 +636,27 @@ async function main() {
     bc3.HD.setUserId(USER);
     const fx = bc3.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
     const cc = bc3.RB.migrateFromState(fx, USER, T0);
-    await bc3.HD.createBundle('C:/v/Src', cc);
+    await bc3.HD.createBundle('C:/v/Src.headway', cc);
     const pid = cc.headway.plans[0].id;
-    const gone = 'C:/v/Src/.headway/plans/' + pid + '/items/' + cc.plans[pid].items[0].id + '.json';
+    const gone = 'C:/v/Src.headway/.headway/plans/' + pid + '/items/' + cc.plans[pid].items[0].id + '.json';
     tc.beforeRead = (p) => { if (p === gone) tc.files.delete(p); }; // a peer's sync client removed it after the listing
     let err = null;
-    const mk = await bc3.HD.copyProject('C:/v/Src/.headway', 'C:/v/Copy', 'Copy').catch((e) => { err = e; });
+    const mk = await bc3.HD.copyProject('C:/v/Src.headway/.headway', 'C:/v/Copy.headway', 'Copy').catch((e) => { err = e; });
     tc.beforeRead = null;
-    ok(!err && mk === 'C:/v/Copy/Copy.headway', 'the copy completes: ' + (err && err.message));
-    eq([...tc.files.keys()].filter((k) => k.indexOf('C:/v/Copy/.headway/plans/' + pid + '/items/') === 0).length, cc.plans[pid].items.length - 1, 'every other shard copied');
-    tc.mkdirFails = (p) => (p.indexOf('C:/v/Copy2/.headway/plans') === 0 ? 'Access is denied. (os error 5)' : null);
+    ok(!err && mk === 'C:/v/Copy.headway', 'the copy completes: ' + (err && err.message));
+    eq([...tc.files.keys()].filter((k) => k.indexOf('C:/v/Copy.headway/.headway/plans/' + pid + '/items/') === 0).length, cc.plans[pid].items.length - 1, 'every other shard copied');
+    tc.mkdirFails = (p) => (p.indexOf('C:/v/Copy2.headway/.headway/plans') === 0 ? 'Access is denied. (os error 5)' : null);
     err = null;
-    await bc3.HD.copyProject('C:/v/Src/.headway', 'C:/v/Copy2', 'Copy2').catch((e) => { err = e; });
+    await bc3.HD.copyProject('C:/v/Src.headway/.headway', 'C:/v/Copy2.headway', 'Copy2').catch((e) => { err = e; });
     tc.mkdirFails = null;
     ok(err && /denied/.test(err.message), 'the failure is reported: ' + (err && err.message));
     ok(![...tc.files.keys()].some((k) => k.indexOf('C:/v/Copy2') === 0) && ![...tc.dirs].some((d) => d.indexOf('C:/v/Copy2') === 0), 'no partial folder is left behind');
+    // a source with no headway.json beside its data folder is refused before anything is written
+    tc.files.delete('C:/v/Src.headway/headway.json');
+    err = null;
+    await bc3.HD.copyProject('C:/v/Src.headway/.headway', 'C:/v/Copy3.headway', 'Copy3').catch((e) => { err = e; });
+    ok(err && /headway\.json is missing/.test(err.message), 'a source without headway.json is refused: ' + (err && err.message));
+    ok(![...tc.files.keys()].some((k) => k.indexOf('C:/v/Copy3') === 0) && ![...tc.dirs].some((d) => d.indexOf('C:/v/Copy3') === 0), '…leaving nothing behind');
   }
 
   section('copyProject with several plans: the project is named; every plan keeps its own title');
@@ -637,154 +667,165 @@ async function main() {
     const fx = bc2.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
     fx.meta.title = 'Plan A title';
     const cc = bc2.RB.migrateFromState(fx, USER, T0);
-    await bc2.HD.createBundle('C:/c/Multi', cc);
+    await bc2.HD.createBundle('C:/c/Multi.headway', cc);
     const fb = bc2.RM.clone(fx); fb.meta.title = 'Plan B title';
     const chB = [{ kind: 'meta', id: 'meta', env: bc2.RB.wrapMeta(fb, null, USER, T0), baseRev: 0 }];
-    await bc2.HD.flushShards('C:/c/Multi/.headway', 'plan-b', chB);
-    await bc2.HD.writeHeadway('C:/c/Multi/.headway', { plans: [bc2.RB.newPlanEntry('plan-b', 'Plan B', T0)] });
-    const nm = await bc2.HD.copyProject('C:/c/Multi/.headway', 'C:/c/Copy', 'The Copy');
-    eq(JSON.parse(tc.files.get(nm)).title, 'The Copy', 'marker: the project name');
-    eq(JSON.parse(tc.files.get('C:/c/Copy/.headway/headway.json')).title, 'The Copy', 'headway.json: the project name');
-    const metaTitle = (pid) => bc2.RB.unwrap(JSON.parse(tc.files.get('C:/c/Copy/.headway/plans/' + pid + '/meta.json'))).meta.title;
+    await bc2.HD.flushShards('C:/c/Multi.headway/.headway', 'plan-b', chB);
+    await bc2.HD.writeHeadway('C:/c/Multi.headway/.headway', { plans: [bc2.RB.newPlanEntry('plan-b', 'Plan B', T0)] });
+    const nm = await bc2.HD.copyProject('C:/c/Multi.headway/.headway', 'C:/c/Copy.headway', 'The Copy');
+    eq(nm, 'C:/c/Copy.headway', 'resolves the new project folder');
+    const hwc = JSON.parse(tc.files.get(nm + '/headway.json'));
+    eq(hwc.title, 'The Copy', 'headway.json: the project name');
+    eq(hwc.plans.map((p) => p.id).sort(), [cc.headway.plans[0].id, 'plan-b'].sort(), 'headway.json: both plans');
+    const metaTitle = (pid) => bc2.RB.unwrap(JSON.parse(tc.files.get('C:/c/Copy.headway/.headway/plans/' + pid + '/meta.json'))).meta.title;
     eq([metaTitle(cc.headway.plans[0].id), metaTitle('plan-b')], ['Plan A title', 'Plan B title'], 'plan titles kept');
   }
 
-  section('renameProject: marker + folder follow the title');
+  section('renameProject: the project folder follows the title');
   {
     const tr = makeFakeTauri();
     const br = boot(tr, ['bundleMoved', 'bundleGone', 'bundleDetached', 'bundleReattached']);
     br.HD.setUserId(USER);
     const fx = br.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
     const cr = br.RB.migrateFromState(fx, USER, T0);
-    const m0 = await br.HD.createBundle('C:/w/Alpha', cr);
+    // a peer's sync client moved a project folder: its headway.json keeps the docId, the title follows
+    const retitle = (proj, title) => {
+      const hw = JSON.parse(tr.files.get(proj + '/headway.json'));
+      hw.title = title;
+      tr.files.set(proj + '/headway.json', JSON.stringify(hw));
+    };
+    const m0 = await br.HD.createBundle('C:/w/Alpha.headway', cr);
     const o = await br.HD.openBundle(m0);
-    const nFiles = [...tr.files.keys()].filter((k) => k.indexOf('C:/w/Alpha/') === 0).length;
+    const nFiles = [...tr.files.keys()].filter((k) => k.indexOf('C:/w/Alpha.headway/') === 0).length;
     const res = await br.HD.renameProject('Beta: v2');
-    eq(res, { marker: 'C:/w/Beta v2/Beta v2.headway', dir: 'C:/w/Beta v2/.headway', renamed: true }, 'resolves the new marker + data folder');
+    eq(res, { marker: 'C:/w/Beta v2.headway', dir: 'C:/w/Beta v2.headway/.headway', renamed: true }, 'resolves the new project folder + data folder');
     eq([...tr.files.keys()].filter((k) => k.indexOf('C:/w/Alpha') === 0), [], 'nothing left under the old name');
-    eq([...tr.files.keys()].filter((k) => k.indexOf('C:/w/Beta v2/') === 0).length, nFiles, 'every file moved with the folder');
-    eq(JSON.parse(tr.files.get(res.marker)), { headway: 1, id: cr.headway.docId, title: 'Beta: v2' }, 'marker renamed, same id, title rewritten');
-    eq([br.HD.bundleDir(), br.HD.markerPath(), br.HD.projectTitle()], [res.dir, res.marker, 'Beta: v2'], 'the open project is re-pointed');
+    eq([...tr.files.keys()].filter((k) => k.indexOf('C:/w/Beta v2.headway/') === 0).length, nFiles, 'every file moved with the folder');
+    eq(tr.log.filter((l) => l.op === 'rename' && l.dir).slice(-1)[0], { op: 'rename', from: 'C:/w/Alpha.headway', to: 'C:/w/Beta v2.headway', path: 'C:/w/Beta v2.headway', dir: true }, 'one folder rename');
+    eq(JSON.parse(tr.files.get(res.marker + '/headway.json')).docId, cr.headway.docId, 'headway.json moved with it, same docId (its title is the app\'s writeHeadway)');
+    eq([br.HD.bundleDir(), br.HD.markerPath(), br.HD.projectDir(), br.HD.projectTitle()], [res.dir, res.marker, res.marker, 'Beta: v2'], 'the open project is re-pointed');
     const ws = tr.log.filter((l) => l.op === 'watch');
-    eq(ws.slice(-1)[0].path, res.dir, 'the watcher restarted on the new folder');
+    eq(ws.slice(-1)[0].path, res.marker, 'the watcher restarted on the new project folder');
     ok(tr.watching(), '…and is live');
-    eq(br.named('noteRecent').slice(-1)[0].args, [res.marker, 'bundle'], 'recents told about the new marker');
+    eq(br.named('noteRecent').slice(-1)[0].args, [res.marker, 'bundle'], 'recents told about the new project folder');
     eq(br.window.document.title, 'Beta: v2 — Headway', 'window title follows');
     // writes land in the new folder, never re-create the old one
     const env0 = o.envs.items[0];
     const upd = br.RB.wrap(Object.assign(br.RB.unwrap(env0), { notes: 'after rename' }), env0, USER, T1);
     await br.HD.flushShards(br.HD.bundleDir(), o.planId, [{ kind: 'items', id: env0.id, env: upd, baseRev: env0.rev }]);
     ok(tr.files.has(res.dir + '/plans/' + o.planId + '/items/' + env0.id + '.json'), 'a flush after the rename writes into the new folder');
-    await br.HD.writePresence('C:/w/Alpha/.headway', USER, { ts: 1 });
+    await br.HD.writePresence('C:/w/Alpha.headway/.headway', USER, { ts: 1 });
     ok(![...tr.files.keys()].some((k) => k.indexOf('C:/w/Alpha') === 0) && ![...tr.dirs].some((d) => d.indexOf('C:/w/Alpha') === 0), 'a late heartbeat for the old folder does not re-create it');
 
-    section('renameProject: only the marker title when the folder name does not change');
+    section('renameProject: nothing on disk when the folder name does not change');
+    const l2 = tr.log.length;
     const r2 = await br.HD.renameProject('Beta v2');
-    eq(r2.renamed, false, 'no folder rename');
-    eq(JSON.parse(tr.files.get(res.marker)).title, 'Beta v2', 'the marker title is rewritten');
+    eq(r2, { marker: res.marker, dir: res.dir, renamed: false }, 'no folder rename; same folder handed back');
+    eq(tr.log.slice(l2).filter((l) => l.op !== 'watch' && l.op !== 'unwatch'), [], 'nothing written (the app writes headway.json\'s title)');
+    eq(br.HD.projectTitle(), 'Beta v2', 'the project title is updated');
+    eq(br.window.document.title, 'Beta v2 — Headway', '…and the window title');
 
-    section('renameProject failures keep the old names');
-    tr.dirs.add('C:/w/Taken');
+    section('renameProject failures keep the old name');
+    tr.dirs.add('C:/w/Taken.headway');
     let err = null;
     await br.HD.renameProject('Taken').catch((e) => { err = e; });
     ok(err && /already exists/.test(err.message), 'an existing target folder is refused: ' + (err && err.message));
-    ok(tr.files.has(res.marker) && br.HD.markerPath() === res.marker, 'marker and path unchanged');
-    tr.renameFails = (a, b) => (b === 'C:/w/Gamma' ? 'The process cannot access the file because it is being used by another process. (os error 32)' : null);
+    ok(tr.files.has(res.marker + '/headway.json') && br.HD.markerPath() === res.marker, 'folder and path unchanged');
+    tr.renameFails = (a, b) => (b === 'C:/w/Gamma.headway' ? 'The process cannot access the file because it is being used by another process. (os error 32)' : null);
     err = null;
     await br.HD.renameProject('Gamma').catch((e) => { err = e; });
     ok(err && /used by another process/.test(err.message), 'a folder held by a sync client: the error says why: ' + (err && err.message));
-    ok(tr.files.has(res.marker), 'the marker was put back under its old name');
-    ok(!tr.files.has('C:/w/Beta v2/Gamma.headway'), '…and the renamed marker is gone');
+    ok(tr.files.has(res.marker + '/headway.json') && ![...tr.files.keys()].some((k) => k.indexOf('C:/w/Gamma') === 0), 'the project is still whole under its old name');
     eq([br.HD.bundleDir(), br.HD.markerPath()], [res.dir, res.marker], 'still the old folder');
-    eq(tr.log.filter((l) => l.op === 'watch').slice(-1)[0].path, res.dir, 'the watcher is back on the old folder');
+    eq(tr.log.filter((l) => l.op === 'watch').slice(-1)[0].path, res.marker, 'the watcher is back on the old project folder');
     ok(tr.watching(), '…and live');
     tr.renameFails = null;
     const r3 = await br.HD.renameProject('Gamma');
-    eq(r3.marker, 'C:/w/Gamma/Gamma.headway', 'the same rename succeeds once the folder is free');
+    eq(r3.marker, 'C:/w/Gamma.headway', 'the same rename succeeds once the folder is free');
 
-    section('a peer renamed the folder: followed by bundle id');
-    tr.moveDir('C:/w/Gamma', 'C:/w/Delta');
-    tr.files.delete('C:/w/Delta/Gamma.headway');
-    tr.files.set('C:/w/Delta/Delta.headway', br.RB.markerText(cr.headway.docId, 'Delta'));
-    tr.dirs.add('C:/w/Other');
-    tr.files.set('C:/w/Other/Other.headway', br.RB.markerText('someone-else', 'Other'));
+    section('a peer renamed the folder: followed by docId');
+    tr.moveDir('C:/w/Gamma.headway', 'C:/w/Delta.headway');
+    retitle('C:/w/Delta.headway', 'Delta');
+    // decoys that sort first: another project, and a stray copy of our headway.json with no data folder
+    tr.dirs.add('C:/w/Decoy.headway/.headway');
+    tr.files.set('C:/w/Decoy.headway/headway.json', JSON.stringify({ format: 'headway-bundle-v1', docId: 'someone-else', title: 'Decoy', plans: [] }));
+    tr.dirs.add('C:/w/Copy of Delta.headway');
+    tr.files.set('C:/w/Copy of Delta.headway/headway.json', tr.files.get('C:/w/Delta.headway/headway.json'));
     const presBefore = [...tr.files.keys()].length;
     const hb = await br.HD.writePresence(r3.dir, USER, { ts: 2 });
     eq(hb, false, 'the heartbeat into the vanished folder is skipped');
     ok(![...tr.dirs].some((d) => d.indexOf('C:/w/Gamma') === 0) && ![...tr.files.keys()].some((k) => k.indexOf('C:/w/Gamma') === 0), '…and does not re-create it');
     ok(await (async () => { for (let i = 0; i < 50 && br.named('bundleMoved').length === 0; i++) await tick(); return br.named('bundleMoved').length === 1; })(), 'the app is told the project moved');
-    eq(br.named('bundleMoved')[0].args[0], { marker: 'C:/w/Delta/Delta.headway', dir: 'C:/w/Delta/.headway', from: r3.marker, title: 'Delta' }, '…where to (the marker with the same id, not the other project)');
-    eq([br.HD.bundleDir(), br.HD.markerPath(), br.HD.projectTitle()], ['C:/w/Delta/.headway', 'C:/w/Delta/Delta.headway', 'Delta'], 're-pointed');
-    eq(tr.log.filter((l) => l.op === 'watch').slice(-1)[0].path, 'C:/w/Delta/.headway', 'watching the new folder');
+    eq(br.named('bundleMoved')[0].args[0], { marker: 'C:/w/Delta.headway', dir: 'C:/w/Delta.headway/.headway', from: r3.marker, title: 'Delta' }, '…where to (same docId AND a data folder — not the other project, not the stray headway.json)');
+    eq([br.HD.bundleDir(), br.HD.markerPath(), br.HD.projectTitle()], ['C:/w/Delta.headway/.headway', 'C:/w/Delta.headway', 'Delta'], 're-pointed');
+    eq(tr.log.filter((l) => l.op === 'watch').slice(-1)[0].path, 'C:/w/Delta.headway', 'watching the new project folder');
     eq(await br.HD.checkBundleLocation(), 'ok', 'a check now finds it in place');
     ok([...tr.files.keys()].length >= presBefore, 'nothing was removed');
+    tr.removeDir('C:/w/Copy of Delta.headway');
 
     section('a watch event on the vanished root starts the search too');
-    tr.moveDir('C:/w/Delta', 'C:/w/Epsilon');
-    tr.files.delete('C:/w/Epsilon/Delta.headway');
-    tr.files.set('C:/w/Epsilon/Epsilon.headway', br.RB.markerText(cr.headway.docId, 'Epsilon'));
-    await tr.emitPaths('C:/w/Delta/.headway', 'remove');
+    tr.moveDir('C:/w/Delta.headway', 'C:/w/Epsilon.headway');
+    retitle('C:/w/Epsilon.headway', 'Epsilon');
+    await tr.emitPaths('C:/w/Delta.headway/.headway', 'remove');
     ok(await (async () => { for (let i = 0; i < 50 && br.named('bundleMoved').length < 2; i++) await tick(); return br.named('bundleMoved').length === 2; })(), 'followed after the event');
-    eq(br.HD.markerPath(), 'C:/w/Epsilon/Epsilon.headway', 'on the new marker');
+    eq(br.HD.markerPath(), 'C:/w/Epsilon.headway', 'on the new project folder');
 
     section('headway.json briefly missing (a sync client re-creating it): nothing happens');
     {
-      const hwp = 'C:/w/Epsilon/.headway/headway.json', keep = tr.files.get(hwp);
+      const hwp = 'C:/w/Epsilon.headway/headway.json', keep = tr.files.get(hwp);
       const before = [br.named('bundleMoved').length, br.named('bundleDetached').length, br.named('toast').length];
       tr.files.delete(hwp);
       await tr.emitPaths(hwp, 'remove');
       await tick(30);
       eq(await br.HD.checkBundleLocation(), 'ok', 'the data folder is still there → ok');
       eq([br.named('bundleMoved').length, br.named('bundleDetached').length, br.named('toast').length], before, 'no follow, no detach, no toast');
-      eq(br.HD.bundleDir(), 'C:/w/Epsilon/.headway', 'still on the same folder');
+      eq(br.HD.bundleDir(), 'C:/w/Epsilon.headway/.headway', 'still on the same folder');
       tr.files.set(hwp, keep);
     }
 
     section('the data folder vanishes and is back within the backoff: no state change, no toast');
     {
       const before = [br.named('bundleMoved').length, br.named('bundleDetached').length, br.named('toast').length];
-      tr.moveDir('C:/w/Epsilon/.headway', 'C:/stash/eps');
+      tr.moveDir('C:/w/Epsilon.headway/.headway', 'C:/stash/eps');
       let n = 0;
-      tr.onExists = (p) => { if (p === 'C:/w/Epsilon/.headway' && ++n === 2) tr.moveDir('C:/stash/eps', 'C:/w/Epsilon/.headway'); };
+      tr.onExists = (p) => { if (p === 'C:/w/Epsilon.headway/.headway' && ++n === 2) tr.moveDir('C:/stash/eps', 'C:/w/Epsilon.headway/.headway'); };
       eq(await br.HD.checkBundleLocation(), 'ok', 'back on a retry → ok');
       tr.onExists = null;
       ok(n >= 2, 'it was looked for again (backoff), not given up on at once');
       eq([br.named('bundleMoved').length, br.named('bundleDetached').length, br.named('toast').length], before, 'no follow, no detach, no toast');
-      eq(br.HD.bundleDir(), 'C:/w/Epsilon/.headway', 'still on the same folder');
+      eq(br.HD.bundleDir(), 'C:/w/Epsilon.headway/.headway', 'still on the same folder');
       ok(tr.watching(), 'the watcher was left alone');
     }
 
-    section('a piecemeal peer rename (folder first, headway.json later) is followed once complete');
+    section('a piecemeal peer rename (headway.json first, the data folder later) is followed once complete');
     {
-      const hwKeep = tr.files.get('C:/w/Epsilon/.headway/headway.json');
-      tr.moveDir('C:/w/Epsilon', 'C:/w/Zeta');
-      tr.files.delete('C:/w/Zeta/Epsilon.headway');
-      tr.files.delete('C:/w/Zeta/.headway/headway.json');
-      tr.files.set('C:/w/Zeta/Zeta.headway', br.RB.markerText(cr.headway.docId, 'Zeta'));
+      tr.moveDir('C:/w/Epsilon.headway', 'C:/w/Zeta.headway');
+      retitle('C:/w/Zeta.headway', 'Zeta');
+      tr.moveDir('C:/w/Zeta.headway/.headway', 'C:/stash/zdata');
       const moved0 = br.named('bundleMoved').length;
       let n = 0, movedEarly = false;
       tr.onExists = (p) => {
-        if (p !== 'C:/w/Epsilon/.headway') return;
+        if (p !== 'C:/w/Epsilon.headway/.headway') return;
         n++;
         if (br.named('bundleMoved').length > moved0) movedEarly = true;
-        if (n === 2) tr.files.set('C:/w/Zeta/.headway/headway.json', hwKeep);
+        if (n === 2) tr.moveDir('C:/stash/zdata', 'C:/w/Zeta.headway/.headway');
       };
       eq(await br.HD.checkBundleLocation(), 'moved', 'followed');
       tr.onExists = null;
-      ok(!movedEarly && n >= 2, 'not followed before headway.json landed');
-      eq(br.HD.markerPath(), 'C:/w/Zeta/Zeta.headway', 'on the new marker');
+      ok(!movedEarly && n >= 2, 'not followed before the data folder landed');
+      eq(br.HD.markerPath(), 'C:/w/Zeta.headway', 'on the new project folder');
       eq(br.named('bundleDetached').length, 0, 'never detached on the way');
     }
 
     section('confirmed gone: detached — the session and its path are kept; re-attached when the folder returns');
     {
-      const zdir = 'C:/w/Zeta/.headway';
-      tr.moveDir('C:/w/Zeta', 'C:/stash/zeta');
+      const zdir = 'C:/w/Zeta.headway/.headway';
+      tr.moveDir('C:/w/Zeta.headway', 'C:/stash/zeta');
       eq(await br.HD.checkBundleLocation(), 'detached', 'resolves detached');
       eq(br.named('bundleGone').length, 0, 'bundleGone is never called');
       eq(br.named('bundleDetached').length, 1, 'bundleDetached called once');
-      eq(br.named('bundleDetached')[0].args[0], { marker: 'C:/w/Zeta/Zeta.headway', title: 'Zeta' }, '…with what was open');
-      eq([br.HD.bundleDir(), br.HD.markerPath()], [zdir, 'C:/w/Zeta/Zeta.headway'], 'the session keeps its folder');
+      eq(br.named('bundleDetached')[0].args[0], { marker: 'C:/w/Zeta.headway', title: 'Zeta' }, '…with what was open');
+      eq([br.HD.bundleDir(), br.HD.markerPath()], [zdir, 'C:/w/Zeta.headway'], 'the session keeps its folder');
       ok(br.HD.isDetached(), 'isDetached()');
       ok(!tr.watching(), 'no watcher on a missing folder');
       let err = null;
@@ -795,9 +836,15 @@ async function main() {
       ok(![...tr.dirs].some((d) => d.indexOf('C:/w/Zeta') === 0) && ![...tr.files.keys()].some((k) => k.indexOf('C:/w/Zeta') === 0), 'the missing folder is not re-created');
       eq(await br.HD.checkBundleLocation(), 'detached', 'still missing → still detached');
       eq(br.named('bundleDetached').length, 1, '…without telling the app again');
-      tr.moveDir('C:/stash/zeta', 'C:/w/Zeta');
-      ok(await (async () => { for (let i = 0; i < 100 && br.named('bundleReattached').length === 0; i++) await tick(); return br.named('bundleReattached').length === 1; })(), 'the retry re-attaches once the folder is back');
-      eq(br.named('bundleReattached')[0].args[0], { marker: 'C:/w/Zeta/Zeta.headway', dir: zdir }, '…to the same folder');
+      // back without its headway.json yet: not complete, still detached
+      const hwZ = tr.files.get('C:/stash/zeta/headway.json');
+      tr.files.delete('C:/stash/zeta/headway.json');
+      tr.moveDir('C:/stash/zeta', 'C:/w/Zeta.headway');
+      eq(await br.HD.checkBundleLocation(), 'detached', 'the data folder back but no headway.json → still detached');
+      eq(br.named('bundleReattached').length, 0, '…not re-attached');
+      tr.files.set('C:/w/Zeta.headway/headway.json', hwZ);
+      ok(await (async () => { for (let i = 0; i < 100 && br.named('bundleReattached').length === 0; i++) await tick(); return br.named('bundleReattached').length === 1; })(), 'the retry re-attaches once the folder is complete again');
+      eq(br.named('bundleReattached')[0].args[0], { marker: 'C:/w/Zeta.headway', dir: zdir }, '…to the same folder');
       ok(!br.HD.isDetached() && tr.watching(), 'attached and watched again');
       const upd = br.RB.wrap(Object.assign(br.RB.unwrap(env0), { notes: 'after re-attach' }), env0, USER, T2);
       await br.HD.flushShards(zdir, o.planId, [{ kind: 'items', id: env0.id, env: upd, baseRev: 99 }]);
@@ -814,7 +861,7 @@ async function main() {
     bg.HD.setUserId(USER);
     const fx = bg.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
     const cg = bg.RB.migrateFromState(fx, USER, T0);
-    const og = await bg.HD.openBundle(await bg.HD.createBundle('C:/g/One', cg));
+    const og = await bg.HD.openBundle(await bg.HD.createBundle('C:/g/One.headway', cg));
     const pid = og.planId;
     const peerEdit = (root, env, note) => {
       const p = root + '/.headway/plans/' + pid + '/items/' + env.id + '.json';
@@ -825,46 +872,46 @@ async function main() {
     const [e1, e2, e3] = og.envs.items;
     const applied = () => bg.named('applyExternalEntities').map((c) => c.args[0].map((x) => x.id + ':' + (x.env.fields && x.env.fields.notes)));
     // 1. our own rename: a peer write lands while the watcher is off
-    tg.renameFails = (a, b) => { if (a === 'C:/g/One' && b === 'C:/g/Two') peerEdit('C:/g/One', e1, 'during our rename'); return null; };
+    tg.renameFails = (a, b) => { if (a === 'C:/g/One.headway' && b === 'C:/g/Two.headway') peerEdit('C:/g/One.headway', e1, 'during our rename'); return null; };
     await bg.HD.renameProject('Two');
     tg.renameFails = null;
     await tick(20);
     eq(applied(), [[e1.id + ':during our rename']], 'our rename: the gap\'s peer shard is applied once');
     // 2. a followed peer rename: a shard changed in the new place before we followed
-    tg.moveDir('C:/g/Two', 'C:/g/Three');
-    tg.files.delete('C:/g/Three/Two.headway');
-    tg.files.set('C:/g/Three/Three.headway', bg.RB.markerText(cg.headway.docId, 'Three'));
-    peerEdit('C:/g/Three', e2, 'before we followed');
+    tg.moveDir('C:/g/Two.headway', 'C:/g/Three.headway');
+    peerEdit('C:/g/Three.headway', e2, 'before we followed');
     eq(await bg.HD.checkBundleLocation(), 'moved', 'followed');
     await tick(20);
     eq(applied().slice(1), [[e2.id + ':before we followed']], 'a followed rename: the changed shard is applied, nothing else');
     // 3. re-attached: changed while detached
-    tg.moveDir('C:/g/Three', 'C:/stash/g3');
+    tg.moveDir('C:/g/Three.headway', 'C:/stash/g3');
     eq(await bg.HD.checkBundleLocation(), 'detached', 'detached');
     peerEdit('C:/stash/g3', e3, 'while we were detached');
-    tg.moveDir('C:/stash/g3', 'C:/g/Three');
+    tg.moveDir('C:/stash/g3', 'C:/g/Three.headway');
     eq(await bg.HD.checkBundleLocation(), 'reattached', 're-attached');
     await tick(20);
     eq(applied().slice(2), [[e3.id + ':while we were detached']], 're-attached: the changed shard is applied');
   }
 
-  section('L7: only an event on the watched folder itself (or its project folder) starts a location check');
+  section('L7: only an event on the data folder itself (or its project folder) starts a location check');
   {
     const tw = makeFakeTauri();
     const bw = boot(tw, ['bundleMoved', 'bundleDetached']);
     bw.HD.setUserId(USER);
     const fx = bw.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
-    await bw.HD.openBundle(await bw.HD.createBundle('C:/l/Proj', bw.RB.migrateFromState(fx, USER, T0)));
+    await bw.HD.openBundle(await bw.HD.createBundle('C:/l/Proj.headway', bw.RB.migrateFromState(fx, USER, T0)));
+    eq(tw.log.filter((l) => l.op === 'watch').slice(-1)[0].path, 'C:/l/Proj.headway', 'the watch root is the project folder');
     let checks = 0;
-    tw.onExists = (p) => { if (p === 'C:/l/Proj/.headway') checks++; };
-    await tw.emitPaths(['C:/elsewhere/other.json', '/private/var/folders/x/C:/l/Proj/.headway', 'C:/l/Proj Other/.headway', 'C:/l/Proj/.headway/headway.json'], 'remove');
+    tw.onExists = (p) => { if (p === 'C:/l/Proj.headway/.headway') checks++; };
+    await tw.emitPaths(['C:/elsewhere/other.json', '/private/var/folders/x/C:/l/Proj.headway/.headway', 'C:/l/Proj Other.headway/.headway',
+      'C:/l/Proj.headway/headway.json', 'C:/l/Proj.headway/.DS_Store'], 'remove');
     await tick(30);
-    eq(checks, 0, 'paths outside the folder (a symlink / NFD alias, a sibling) and a file inside start no check');
-    await tw.emitPaths('C:/l/Proj', 'modify');
+    eq(checks, 0, 'paths outside the folder (a symlink / NFD alias, a sibling) and files inside start no check');
+    await tw.emitPaths('C:/l/Proj.headway', 'modify');
     await tick(30);
     ok(checks > 0, 'the project folder entry itself does');
     checks = 0;
-    await tw.emitPaths('C:/l/Proj/.headway/', 'remove');
+    await tw.emitPaths('C:/l/Proj.headway/.headway/', 'remove');
     await tick(30);
     ok(checks > 0, '…and so does the data folder itself');
     tw.onExists = null;
@@ -878,30 +925,31 @@ async function main() {
     bm.HD.setUserId(USER);
     const fx = bm.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
     const cm = bm.RB.migrateFromState(fx, USER, T0);
-    const mk = await bm.HD.createBundle('C:/m/Old', cm);
+    const mk = await bm.HD.createBundle('C:/m/Old.headway', cm);
     const om = await bm.HD.openBundle(mk);
     const envs = om.envs.items.slice(0, 4);
     const changes = envs.map((e) => ({ kind: 'items', id: e.id, env: bm.RB.wrap(Object.assign(bm.RB.unwrap(e), { notes: 'mid-flush ' + e.id }), e, USER, T1), baseRev: e.rev }));
     let moved = false;
     const peerRename = () => {
       moved = true;
-      tm.moveDir('C:/m/Old', 'C:/m/New');
-      tm.files.delete('C:/m/New/Old.headway');
-      tm.files.set('C:/m/New/New.headway', bm.RB.markerText(cm.headway.docId, 'New'));
+      tm.moveDir('C:/m/Old.headway', 'C:/m/New.headway');
+      const hw = JSON.parse(tm.files.get('C:/m/New.headway/headway.json'));
+      hw.title = 'New';
+      tm.files.set('C:/m/New.headway/headway.json', JSON.stringify(hw));
     };
     let n = 0;
     if (how === 'inside a shard write') {
-      tm.beforeWrite = (p) => { if (!moved && /^C:\/m\/Old\/\.headway\/plans\/.*\.json\.tmp$/.test(p) && ++n === 2) peerRename(); };
+      tm.beforeWrite = (p) => { if (!moved && /^C:\/m\/Old\.headway\/\.headway\/plans\/.*\.json\.tmp$/.test(p) && ++n === 2) peerRename(); };
     } else {
-      tm.onExists = (p) => { if (!moved && p === 'C:/m/Old/.headway' && ++n === 2) peerRename(); };
+      tm.onExists = (p) => { if (!moved && p === 'C:/m/Old.headway/.headway' && ++n === 2) peerRename(); };
     }
     const res = await bm.HD.flushShards(om.headway ? bm.HD.bundleDir() : '', om.planId, changes).catch((e) => ({ err: e }));
     tm.beforeWrite = null; tm.onExists = null;
     ok(moved, how + ': the peer rename happened mid-flush');
     ok(!res.err, how + ': the flush resolves: ' + (res.err && res.err.message));
-    eq(res.dir, 'C:/m/New/.headway', how + ': resolves the folder it ended in');
+    eq(res.dir, 'C:/m/New.headway/.headway', how + ': resolves the folder it ended in');
     eq((res.written || []).length, 4, how + ': all four shards written');
-    eq(envs.map((e) => { const f = tm.files.get('C:/m/New/.headway/plans/' + om.planId + '/items/' + e.id + '.json'); return !!f && JSON.parse(f).fields.notes === 'mid-flush ' + e.id; }), [true, true, true, true], how + ': every shard is in New/');
+    eq(envs.map((e) => { const f = tm.files.get('C:/m/New.headway/.headway/plans/' + om.planId + '/items/' + e.id + '.json'); return !!f && JSON.parse(f).fields.notes === 'mid-flush ' + e.id; }), [true, true, true, true], how + ': every shard is in New.headway/');
     ok(![...tm.files.keys()].some((k) => k.indexOf('C:/m/Old') === 0) && ![...tm.dirs].some((d) => d.indexOf('C:/m/Old') === 0), how + ': nothing re-created under Old/');
     eq(bm.named('bundleMoved').length, 1, how + ': the app is told once');
     eq(bm.named('bundleDetached').length, 0, how + ': never detached');
@@ -1003,7 +1051,7 @@ async function main() {
     const realRename = t2.fs.rename;
     let located = null;
     t2.fs.rename = async function (a, b) {
-      if (String(a) === 'C:/r/Race' && String(b) === 'C:/r/Other') {
+      if (String(a) === 'C:/r/Race' && String(b) === 'C:/r/Other.headway') {
         t2.moveDir('C:/r/Race', 'C:/stash/race'); // the folder goes missing mid-rename
         located = await b2.HD.checkBundleLocation();
         throw 'Access is denied. (os error 5)';

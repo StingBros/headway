@@ -4,6 +4,11 @@
 
   var LS_KEY = 'headway-v1';
   var UI_KEY = 'headway-ui-v1';
+  // the desktop keeps a document only in its project folder — nothing of it
+  // is stored in the app, so a launch never brings back a past session
+  // without its folder. The browser (no folders) keeps its local copy.
+  var KEEP_LOCAL_DOC = !window.__TAURI__;
+  if (!KEEP_LOCAL_DOC) { try { localStorage.removeItem(LS_KEY); } catch (e) { /* storage optional */ } }
 
   // ------------------------------------------------------------ theme
   // Personal, per-machine — deliberately NOT part of uiSnapshot(), so a
@@ -277,7 +282,7 @@
     if (readOnly) return; // the exported copy never writes the viewer's storage
     if (wz) return; // the new-project wizard's draft is never stored
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify(state));
+      if (KEEP_LOCAL_DOC) localStorage.setItem(LS_KEY, JSON.stringify(state));
       localStorage.setItem(UI_KEY, JSON.stringify(uiSnapshot()));
       localSaveBroken = false;
     } catch (e) {
@@ -305,7 +310,7 @@
   function loadLocal() {
     try {
       applyUi(JSON.parse(localStorage.getItem(UI_KEY) || 'null'));
-      var raw = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
+      var raw = KEEP_LOCAL_DOC ? JSON.parse(localStorage.getItem(LS_KEY) || 'null') : null;
       if (raw && raw.items) {
         var restored = RM.normalizeState(raw);
         localCapTypeChanges = RM.lastCapTypeChanges || 0;
@@ -1286,7 +1291,7 @@
     if (docKind === 'bundle') return flushBundle().catch(function () { /* toasted already */ });
     return Promise.resolve();
   }
-  // marker = <Project>/<Project>.headway
+  // marker = the <Project>.headway folder
   function openBundleDoc(marker, planId) {
     if (!window.HeadwayDesktop || !HeadwayDesktop.openBundle) return Promise.resolve(null);
     return settleCurrentDoc().then(function () {
@@ -1355,7 +1360,7 @@
         bundleDir = res.dir;
         bundleMarker = res.marker;
         // headway.json carries the project name too (read-merge-write)
-        HeadwayDesktop.writeHeadway(res.dir, { title: title }).catch(function () { /* the marker and folder stand; retried on the next rename */ });
+        HeadwayDesktop.writeHeadway(res.dir, { title: title }).catch(function () { /* the folder name stands; retried on the next rename */ });
         if (res.renamed) {
           if (oldMarker && oldMarker !== res.marker) dropRecent(oldMarker);
           noteRecent(res.marker, 'bundle');
@@ -1756,8 +1761,8 @@
 
   // ---- File menu actions (desktop only — the browser build hides them)
   // st becomes a new project folder inside a parent the user picks:
-  // <parent>/<Title>/<Title>.headway + <Title>/.headway/ (" (2)" when the
-  // name is taken — never written into an existing folder), then it opens.
+  // <parent>/<Title>.headway/ (" (2)" when the name is taken — never written
+  // into an existing folder), then it opens.
   function createSharedFolder(st, title, doneMsg) {
     if (!window.HeadwayDesktop || !HeadwayDesktop.pickFolder) return Promise.resolve(null);
     return settleCurrentDoc().then(function () {
@@ -1779,19 +1784,20 @@
       });
     });
   }
-  // C:/x/Plan (2)/Plan (2).headway → Plan (2)
+  // C:/x/Plan (2).headway → Plan (2).headway
   function projectFolderOf(marker) {
-    return String(marker).replace(/[\\/][^\\/]*$/, '').replace(/^.*[\\/]/, '');
+    return String(marker).replace(/[\\/]+$/, '').replace(/^.*[\\/]/, '');
   }
-  // File → Open… / the start page's Open… on the desktop: one picker for a
-  // project marker (<Project>.headway) or a legacy workbook, which converts
+  // File → Open… / the start page's Open… on the desktop: a folder picker
+  // for a project (<Project>.headway); workbooks convert through File →
+  // Open and Convert Legacy File…
   function openAnyDialog() {
     if (!window.HeadwayDesktop || !HeadwayDesktop.pickOpenPath) return Promise.resolve(null);
     return HeadwayDesktop.pickOpenPath().then(function (p) {
       return p ? openFromPath(p) : null;
     });
   }
-  // a marker opens; an .xlsx is converted beside itself and the copy opens
+  // a project folder opens; an .xlsx is converted beside itself and the copy opens
   function openFromPath(p) {
     if (/\.xlsx$/i.test(String(p))) {
       return HeadwayDesktop.readWorkbookAt(p).then(convertLegacy, function (err) {
@@ -1802,7 +1808,7 @@
     return openBundleDoc(p).catch(function () { return null; }); // toasted by openBundleDoc
   }
   // File → Save as… (desktop): name (prefilled) → parent folder →
-  // <Parent>/<Name>/<Name>.headway + <Name>/.headway/, then the app switches
+  // <Parent>/<Name>.headway/, then the app switches
   // to it. A project is copied whole (plans, shards, history; no presence;
   // a NEW docId so the copies never merge); anything else (a session with no
   // project yet) becomes a new project. An existing target folder is refused.
@@ -1819,7 +1825,7 @@
         : bundle ? 'Copies this project — every plan and its history — into a new folder with this name inside the folder you pick next. The copy is a separate project; this one stays as it is.'
         : 'Creates a project folder with this name inside the folder you pick next.',
       projectName(), function (nm) {
-        var name = RMBundle.projectName(nm);
+        var name = RMBundle.projectFolderName(nm);
         var parent;
         resolve(settleCurrentDoc().then(function () {
           return HeadwayDesktop.pickFolder();
@@ -1907,10 +1913,10 @@
       st.meta.title = own || titleFromFileName(pick.name);
       // converted before? Its project sits beside it: open that (the
       // default) or convert again into a " (2)" folder
-      var name = RMBundle.projectName(st.meta.title);
-      var existing = parent + '/' + name + '/' + name + RMBundle.MARKER_EXT;
-      return HeadwayDesktop.pathExists(existing).then(function (there) {
-        return there ? askOpenOrConvert(name) : 'convert';
+      var name = RMBundle.projectFolderName(st.meta.title);
+      var existing = parent + '/' + name;
+      return HeadwayDesktop.pathExists(existing + '/headway.json').then(function (there) {
+        return there ? askOpenOrConvert(name.replace(/\.headway$/i, '')) : 'convert';
       }).then(function (choice) {
         if (choice === 'open') return openBundleDoc(existing).catch(function () { return null; });
         if (choice !== 'convert') return null;
@@ -10351,8 +10357,8 @@
       else $('#filePick').click();
     });
     var newProject = guarded(openWizard);
-    // the desktop app edits projects (folders) only: one Open for a project
-    // or a legacy .xlsx (which converts), Save is an .xlsx export, Save as…
+    // the desktop app edits projects (folders) only: Open picks a project
+    // folder, a legacy .xlsx converts, Save is an .xlsx export, Save as…
     // copies the project. The browser keeps its workbook flow.
     var desk = !!window.HeadwayDesktop;
     var bundle = docKind === 'bundle';
@@ -13996,7 +14002,7 @@
   function saveRecents(list) {
     try { localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, 12))); } catch (e) { /* storage optional */ }
   }
-  // upsert a project marker (<Project>/<Project>.headway) at the top of the
+  // upsert a project folder (<Project>.headway) at the top of the
   // recents; title comes from the live doc. Anything but kind 'bundle' is
   // ignored: workbooks are import/export only on the desktop.
   function noteRecent(path, kind) {
@@ -14039,7 +14045,7 @@
     if (!host) return;
     var desktop = !!window.HeadwayDesktop;
     var hasLocal = false;
-    try { hasLocal = !!localStorage.getItem(LS_KEY); } catch (e) { /* storage optional */ }
+    if (KEEP_LOCAL_DOC) { try { hasLocal = !!localStorage.getItem(LS_KEY); } catch (e) { /* storage optional */ } }
     var recents = desktop ? loadRecents() : [];
     var rows = recents.map(function (r) {
       var base = String(r.path).replace(/^.*[\\/]/, '').replace(/\.headway$/i, '');
@@ -14051,13 +14057,13 @@
         '<button class="sp-rx" data-sp-drop="' + esc(r.path) + '" title="Remove from this list (keeps the file)"><i data-lucide="x"></i></button>' +
         '</div>';
     }).join('');
-    // a localStorage session without a recents entry (browser, or pre-file
-    // desktop work) can be picked up where it left off
-    var continueCard = hasLocal && (!desktop || !recents.length)
+    // the browser's locally stored session can be picked up where it left
+    // off (the desktop stores none: its recents are project folders only)
+    var continueCard = hasLocal
       ? '<div class="sp-row" role="button" tabindex="0" data-sp-continue>' +
         '<span class="sp-ico"><i data-lucide="history"></i></span>' +
         '<span class="sp-rmain"><span class="sp-rtitle">' + esc((state && state.meta.title) || 'Last session') + '</span>' +
-        '<span class="sp-rpath">Continue where you left off — stored in this ' + (desktop ? 'app' : 'browser') + '</span></span></div>'
+        '<span class="sp-rpath">Continue where you left off — stored in this browser</span></span></div>'
       : '';
     host.innerHTML =
       '<div class="sp-inner">' +
@@ -14070,7 +14076,8 @@
       '</div></div>' +
       '<div class="sp-actions">' +
       '<button class="primary sp-big" data-sp-new><i data-lucide="file-plus-2"></i>New project…</button>' +
-      '<button class="sp-big" data-sp-opendlg' + (desktop ? ' title="Open a project (.headway), or an .xlsx — which is converted to a project beside it"' : '') + '><i data-lucide="folder-open"></i>Open…</button>' +
+      '<button class="sp-big" data-sp-opendlg' + (desktop ? ' title="Open a project folder (.headway). To convert an .xlsx, use File → Open and Convert Legacy File…"' : '') + '><i data-lucide="folder-open"></i>Open…</button>' +
+      (desktop ? '<button class="sp-big" data-sp-convert title="Convert a legacy .xlsx into a project folder beside it"><i data-lucide="file-input"></i>Convert .xlsx…</button>' : '') +
       '</div>' +
       '<div class="sp-recent-hd">Recent</div>' +
       '<div class="sp-recents">' +
@@ -14176,6 +14183,7 @@
     if (open) { guardUnsaved(function () { openRecent(open.dataset.spOpen); }); return; }
     if (e.target.closest('[data-sp-continue]')) { enterEditor(); return; }
     if (e.target.closest('[data-sp-new]')) { guardUnsaved(openWizard); return; }
+    if (e.target.closest('[data-sp-convert]')) { guardUnsaved(convertLegacyDialog); return; }
     if (e.target.closest('[data-sp-opendlg]')) {
       guardUnsaved(function () {
         if (window.HeadwayDesktop) openAnyDialog();
@@ -14216,8 +14224,8 @@
 
   // opts.onDone after the project is adopted; opts.onFail when no folder /
   // file was chosen or the create failed (the wizard reopens with its draft).
-  // The desktop creates a project FOLDER (<Name>/<Name>.headway +
-  // <Name>/.headway/) inside a folder picked next; the browser fires the
+  // The desktop creates a project FOLDER (<Name>.headway/) inside a folder
+  // picked next; the browser fires the
   // .xlsx download the moment it's created.
   function createProjectOnDisk(st, opts) {
     opts = opts || {};
@@ -15017,7 +15025,8 @@
     // fresh launches land on the start page; a mid-session reload (the
     // sessionStorage flag survives those, not app restarts) rejoins the editor
     var inEditor = readOnly;
-    try { inEditor = inEditor || sessionStorage.getItem(SESSION_KEY) === '1'; } catch (e) { /* storage optional */ }
+    // (the desktop only for a project folder to re-link: it stores no document)
+    try { inEditor = inEditor || (sessionStorage.getItem(SESSION_KEY) === '1' && (KEEP_LOCAL_DOC || !!resumeInfo)); } catch (e) { /* storage optional */ }
     if (inEditor) enterEditor();
     else showStart();
   }
