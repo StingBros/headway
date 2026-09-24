@@ -111,6 +111,7 @@
   var localAt = {};          // 'kind/id' → {field: iso}: when THIS machine last changed each unsynced field
   var localVal = {};         // 'kind/id' → {field: canonical}: the value that stamp belongs to
   var planGone = false;      // the active plan was tombstoned and no live plan is left: never flush into it
+  var detached = false;      // the project folder is missing: edits held in memory, nothing flushed, retried
   var pendingHistory = [];   // history not yet on disk: {append: line} | {rewrite: true}
   var ownLines = [];         // this user's history/<userId>.jsonl — the one file we alone write
   var historyCache = null;   // {userId: [lines]} read from history/
@@ -800,7 +801,7 @@
   // changed get a new timestamp), tombstone deletes, hand the batch to the
   // desktop shell (read-merge-write per shard), then write our history lines.
   function scheduleBundleFlush() {
-    if (docKind !== 'bundle' || planGone) return;
+    if (docKind !== 'bundle' || planGone || detached) return;
     clearTimeout(bundleFlushTimer);
     bundleFlushTimer = setTimeout(function () { flushBundle(); }, 1500);
   }
@@ -882,7 +883,8 @@
     });
   }
   function runFlush() {
-    if (docKind !== 'bundle' || !window.HeadwayDesktop || !bundleDir || planGone) return Promise.resolve();
+    // detached: the edits stay pending (docSaved false) until the folder is back or Save as…
+    if (docKind !== 'bundle' || !window.HeadwayDesktop || !bundleDir || planGone || detached) return Promise.resolve();
     // captured at START: this flush lands in this folder/plan even if the
     // document is swapped before it completes
     var dir = bundleDir, pid = activePlanId, uid = userId(), gen = flushGen;
@@ -1214,7 +1216,7 @@
     });
     lastCanon['meta/meta'] = RMBundle.canonicalize(RMBundle.metaEntity(res.doc));
     pendingHistory = []; flushing = false; flushQueued = false; flushGen++;
-    localAt = {}; localVal = {}; planGone = false;
+    localAt = {}; localVal = {}; planGone = false; detached = false;
     ownLines = []; historyCache = null; historyMemo = null;
     planDocCache = {}; planLoading = {}; deferredExternal = []; peers = {};
     compareOptId = opts.compareId || null;
@@ -1307,7 +1309,7 @@
     }).then(function () {
       docKind = 'xlsx'; bundleDir = null; bundleMarker = null; activePlanId = null; planList = [];
       lastCanon = {}; lastEnv = {}; pendingHistory = []; ownLines = [];
-      localAt = {}; localVal = {}; planGone = false;
+      localAt = {}; localVal = {}; planGone = false; detached = false;
       historyCache = null; historyMemo = null; historyLoad = null;
       planDocCache = {}; planLoading = {}; deferredExternal = []; peers = {};
       compareOptId = null; cmpCache = null; resumeInfo = null;
@@ -1345,40 +1347,37 @@
     projectRename = run.then(function () { projectRename = null; }, function () { projectRename = null; });
     return run;
   }
-  // desktop.js lost the folder under us: a peer renamed it (their sync client
-  // moved ours) — follow it; it was moved away or removed — close cleanly
+  // desktop.js lost the folder under us: a peer renamed it (their sync
+  // client moved ours) — follow it; it stayed missing — DETACH: the document
+  // stays open with its edits held in memory (never marked saved, nothing
+  // written), desktop.js keeps looking and re-attaches when it is back;
+  // Save as… keeps the edits in a new project meanwhile
   function bundleMoved(info) {
     if (docKind !== 'bundle' || !info) return;
     var from = bundleMarker;
+    detached = false;
     bundleDir = info.dir;
     bundleMarker = info.marker;
     if (from && from !== info.marker) dropRecent(from);
     noteRecent(info.marker, 'bundle');
     saveLocal();
+    updateSaveBtn();
     toast('The project folder was renamed to “' + projectFolderOf(info.marker) + '” (by someone else, or outside Headway) — following it');
     if (!docSaved) scheduleBundleFlush(); // what failed to land meanwhile goes to the new place
   }
-  function bundleGone(info) {
-    if (docKind !== 'bundle') return;
-    var name = (info && info.title) || (state && state.meta.title) || 'The project';
-    if (info && info.marker) dropRecent(info.marker);
-    toast('“' + name + '” was moved or removed — no project folder with it is beside where it was, so it was closed' +
-      (docSaved ? '' : '; edits not yet synced were not written'), 'err');
-    lostSession();
-    showStart();
-  }
-  // the folder is gone: forget the session without flushing into it
-  function lostSession() {
+  function bundleDetached() {
+    if (docKind !== 'bundle' || detached) return;
+    detached = true;
     clearTimeout(bundleFlushTimer);
-    stopPresence(null, null);
-    docKind = 'xlsx'; bundleDir = null; bundleMarker = null; activePlanId = null; planList = [];
-    lastCanon = {}; lastEnv = {}; pendingHistory = []; ownLines = [];
-    localAt = {}; localVal = {}; planGone = false;
-    historyCache = null; historyMemo = null; historyLoad = null;
-    planDocCache = {}; planLoading = {}; deferredExternal = []; peers = {};
-    compareOptId = null; cmpCache = null; resumeInfo = null;
-    docSaved = true;
-    saveLocal();
+    updateSaveBtn();
+    toast('Project folder is missing — edits are kept in memory; use Save as… to keep them', 'err');
+  }
+  function bundleReattached(info) {
+    if (docKind !== 'bundle' || !detached || (info && info.dir && info.dir !== bundleDir)) return;
+    detached = false;
+    updateSaveBtn();
+    toast('The project folder is back' + (docSaved ? '' : ' — syncing your edits'));
+    if (!docSaved) flushBundle();
   }
   // the window is closing: land pending writes, drop our presence file
   function beforeClose() {
@@ -1762,16 +1761,21 @@
   // to it. A project is copied whole (plans, shards, history; no presence;
   // a NEW docId so the copies never merge); anything else (a session with no
   // project yet) becomes a new project. An existing target folder is refused.
+  // Resolves once the copy is open (its openBundle result), or null when a
+  // step was refused / canceled after the name; a canceled name prompt never
+  // settles (nothing to continue).
   function saveAsProject() {
-    if (!window.HeadwayDesktop || !HeadwayDesktop.pickFolder) return;
+    if (!window.HeadwayDesktop || !HeadwayDesktop.pickFolder) return Promise.resolve(null);
     var bundle = docKind === 'bundle';
+    return new Promise(function (resolve) {
     promptName('Save as', 'Project name',
-      bundle ? 'Copies this project — every plan and its history — into a new folder with this name inside the folder you pick next. The copy is a separate project; this one stays as it is.'
+      bundle && detached ? 'The project folder is missing. Writes this plan as it is on screen — your unsynced edits included — into a new project folder with this name inside the folder you pick next.'
+        : bundle ? 'Copies this project — every plan and its history — into a new folder with this name inside the folder you pick next. The copy is a separate project; this one stays as it is.'
         : 'Creates a project folder with this name inside the folder you pick next.',
       (state && state.meta.title) || 'Roadmap', function (nm) {
         var name = RMBundle.projectName(nm);
         var parent;
-        settleCurrentDoc().then(function () {
+        resolve(settleCurrentDoc().then(function () {
           return HeadwayDesktop.pickFolder();
         }).then(function (p) {
           if (!p) return null;
@@ -1782,7 +1786,8 @@
               toast('A folder named “' + name + '” already exists there — pick another name or folder', 'err');
               return null;
             }
-            if (bundle && bundleDir) {
+            // detached: the folder to copy is missing — write what is in memory
+            if (bundle && bundleDir && !detached) {
               return HeadwayDesktop.copyProject(bundleDir, target, nm).then(function (marker) {
                 return openBundleDoc(marker);
               });
@@ -1799,8 +1804,10 @@
           });
         }).catch(function (err) {
           toast('Could not save as: ' + (err && err.message || err), 'err');
-        });
+          return null;
+        }));
       });
+    });
   }
   // File → Open and Convert Legacy File…: an .xlsx picker, same conversion
   function convertLegacyDialog() {
@@ -13500,9 +13507,16 @@
     if (savingNow) return;
     var bundle = docKind === 'bundle';
     // the mode key carries the kind so a bundle↔xlsx switch repaints the label
-    var mode = flushing ? 'syncing' : (bundle ? 'b:' : 'x:') + (docSaved ? 'saved' : 'save');
+    var mode = flushing ? 'syncing' : bundle && detached ? 'b:detached' : (bundle ? 'b:' : 'x:') + (docSaved ? 'saved' : 'save');
     if (sb.dataset.mode === mode) return;
     sb.dataset.mode = mode;
+    if (mode === 'b:detached') {
+      sb.disabled = false;
+      sb.title = 'The project folder is missing — edits are kept in memory. Save as… keeps them in a new project';
+      sb.innerHTML = '<i data-lucide="triangle-alert"></i>Folder missing — Save as…';
+      if (window.lucide) lucide.createIcons();
+      return;
+    }
     sb.disabled = docSaved || flushing;
     sb.title = bundle ? 'Write pending changes to the project folder'
       : window.HeadwayDesktop ? 'Save as a project folder' : 'Save as .xlsx (styled, re-loadable)';
@@ -13562,7 +13576,7 @@
     });
   }
   $('#btnSave').addEventListener('click', function () {
-    if (docKind === 'bundle') flushBundle(); else doSave(false);
+    if (docKind === 'bundle') { if (detached) saveAsProject(); else flushBundle(); } else doSave(false);
   });
 
   // ------------------------------------------------- unsaved-work guard
@@ -13571,7 +13585,12 @@
   // another project — runs through here first. A shared bundle is never
   // "unsaved" in the xlsx sense: its pending flush is awaited by
   // beforeClose / closeBundleSession, so the question is never asked there.
-  function unsavedNow() { return docKind !== 'bundle' && sessionEdited && !docSaved; }
+  // …except a DETACHED project (its folder is missing): its held edits are
+  // lost on close unless they are saved as a new project
+  function unsavedNow() {
+    if (docKind === 'bundle') return detached && !docSaved;
+    return sessionEdited && !docSaved;
+  }
   function guardUnsaved(proceed) {
     flushPanelEdit(); // typing still in the field counts as an edit too
     if (!unsavedNow()) { proceed(); return; }
@@ -13598,9 +13617,12 @@
         $('[data-m=gdiscard]', host).onclick = function () { closeModal(); proceed(); };
         $('[data-m=gsave]', host).onclick = function () {
           closeModal();
-          (doSave(false) || Promise.resolve()).then(function () {
+          // the desktop saves a project: Save as… (name → folder), awaited;
+          // the close / open asked for continues once it has landed
+          var saving = window.HeadwayDesktop ? saveAsProject() : (doSave(false) || Promise.resolve());
+          saving.then(function () {
             // a canceled Save dialog leaves the doc unsaved — stay put
-            if (docSaved) proceed();
+            if (docSaved && !unsavedNow()) proceed();
           });
         };
       });
@@ -13682,7 +13704,8 @@
     openFromPath: openFromPath,
     saveAsProject: saveAsProject,
     bundleMoved: bundleMoved,
-    bundleGone: bundleGone,
+    bundleDetached: bundleDetached,
+    bundleReattached: bundleReattached,
     renameProjectFolder: renameProjectFolder,
     applyExternalEntities: applyExternalEntities,
     presenceChanged: presenceChanged,
@@ -14261,7 +14284,7 @@
         undoLen: undoStack.length, redoLen: redoStack.length, plans: RM.clone(planList), peers: RM.clone(peers),
         peerByItem: RM.clone(peerByItem), presenceOn: presenceOn,
         pendingHistory: pendingHistory.length, renderCount: renderCount, userId: readUser().id || null,
-        flushing: flushing, planGone: planGone, deferred: deferredExternal.length,
+        flushing: flushing, planGone: planGone, detached: detached, deferred: deferredExternal.length,
         localAt: RM.clone(localAt), lastEnv: RM.clone(lastEnv) };
     },
     releaseNotesFor: releaseNotesFor,

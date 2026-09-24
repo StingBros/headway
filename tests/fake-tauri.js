@@ -77,7 +77,12 @@ module.exports = function makeFakeTauri(opts) {
       }
       return [...names.entries()].sort().map(([name, isDir]) => ({ name, isFile: !isDir, isDirectory: isDir }));
     }),
-    exists: guard('exists', (p) => { p = norm(p); return files.has(p) || hasDir(p); }),
+    exists: guard('exists', (p) => {
+      p = norm(p);
+      // a sync client materialising / restoring things between two checks: tests set this
+      if (typeof api.onExists === 'function') api.onExists(p);
+      return files.has(p) || hasDir(p);
+    }),
     mkdir: guard('mkdir', (p, o) => {
       p = norm(p);
       if (files.has(p)) return Promise.reject('file exists: ' + p);
@@ -156,6 +161,7 @@ module.exports = function makeFakeTauri(opts) {
   const api = {
     fs, dialog, files, dirs, log, deny,
     renameFails: null, // (from, to) → error string to refuse that rename
+    onExists: null,    // (path) → called before every fs.exists answers
     window: { getCurrentWindow: () => win },
     watching: () => !!watchCb,
     watchOpts: () => watchOpts,

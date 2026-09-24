@@ -608,7 +608,7 @@ async function main() {
   section('renameProject: marker + folder follow the title');
   {
     const tr = makeFakeTauri();
-    const br = boot(tr, ['bundleMoved', 'bundleGone']);
+    const br = boot(tr, ['bundleMoved', 'bundleGone', 'bundleDetached', 'bundleReattached']);
     br.HD.setUserId(USER);
     const fx = br.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
     const cr = br.RB.migrateFromState(fx, USER, T0);
@@ -683,15 +683,84 @@ async function main() {
     ok(await (async () => { for (let i = 0; i < 50 && br.named('bundleMoved').length < 2; i++) await tick(); return br.named('bundleMoved').length === 2; })(), 'followed after the event');
     eq(br.HD.markerPath(), 'C:/w/Epsilon/Epsilon.headway', 'on the new marker');
 
-    section('moved away or removed: the app is told, the session closes');
-    tr.removeDir('C:/w/Epsilon');
-    eq(await br.HD.checkBundleLocation(), 'gone', 'resolves gone');
-    eq(br.named('bundleGone').length, 1, 'bundleGone called once');
-    eq(br.named('bundleGone')[0].args[0], { marker: 'C:/w/Epsilon/Epsilon.headway', title: 'Epsilon' }, '…with what was open');
-    eq([br.HD.bundleDir(), br.HD.markerPath()], [null, null], 'the session is left');
-    ok(!tr.watching(), 'no watcher');
-    ok(![...tr.dirs].some((d) => d.indexOf('C:/w/Epsilon') === 0), 'the vanished folder is not re-created');
-    eq(await br.HD.checkBundleLocation(), 'none', 'nothing open → none');
+    section('headway.json briefly missing (a sync client re-creating it): nothing happens');
+    {
+      const hwp = 'C:/w/Epsilon/.headway/headway.json', keep = tr.files.get(hwp);
+      const before = [br.named('bundleMoved').length, br.named('bundleDetached').length, br.named('toast').length];
+      tr.files.delete(hwp);
+      await tr.emitPaths(hwp, 'remove');
+      await tick(30);
+      eq(await br.HD.checkBundleLocation(), 'ok', 'the data folder is still there → ok');
+      eq([br.named('bundleMoved').length, br.named('bundleDetached').length, br.named('toast').length], before, 'no follow, no detach, no toast');
+      eq(br.HD.bundleDir(), 'C:/w/Epsilon/.headway', 'still on the same folder');
+      tr.files.set(hwp, keep);
+    }
+
+    section('the data folder vanishes and is back within the backoff: no state change, no toast');
+    {
+      const before = [br.named('bundleMoved').length, br.named('bundleDetached').length, br.named('toast').length];
+      tr.moveDir('C:/w/Epsilon/.headway', 'C:/stash/eps');
+      let n = 0;
+      tr.onExists = (p) => { if (p === 'C:/w/Epsilon/.headway' && ++n === 2) tr.moveDir('C:/stash/eps', 'C:/w/Epsilon/.headway'); };
+      eq(await br.HD.checkBundleLocation(), 'ok', 'back on a retry → ok');
+      tr.onExists = null;
+      ok(n >= 2, 'it was looked for again (backoff), not given up on at once');
+      eq([br.named('bundleMoved').length, br.named('bundleDetached').length, br.named('toast').length], before, 'no follow, no detach, no toast');
+      eq(br.HD.bundleDir(), 'C:/w/Epsilon/.headway', 'still on the same folder');
+      ok(tr.watching(), 'the watcher was left alone');
+    }
+
+    section('a piecemeal peer rename (folder first, headway.json later) is followed once complete');
+    {
+      const hwKeep = tr.files.get('C:/w/Epsilon/.headway/headway.json');
+      tr.moveDir('C:/w/Epsilon', 'C:/w/Zeta');
+      tr.files.delete('C:/w/Zeta/Epsilon.headway');
+      tr.files.delete('C:/w/Zeta/.headway/headway.json');
+      tr.files.set('C:/w/Zeta/Zeta.headway', br.RB.markerText(cr.headway.docId, 'Zeta'));
+      const moved0 = br.named('bundleMoved').length;
+      let n = 0, movedEarly = false;
+      tr.onExists = (p) => {
+        if (p !== 'C:/w/Epsilon/.headway') return;
+        n++;
+        if (br.named('bundleMoved').length > moved0) movedEarly = true;
+        if (n === 2) tr.files.set('C:/w/Zeta/.headway/headway.json', hwKeep);
+      };
+      eq(await br.HD.checkBundleLocation(), 'moved', 'followed');
+      tr.onExists = null;
+      ok(!movedEarly && n >= 2, 'not followed before headway.json landed');
+      eq(br.HD.markerPath(), 'C:/w/Zeta/Zeta.headway', 'on the new marker');
+      eq(br.named('bundleDetached').length, 0, 'never detached on the way');
+    }
+
+    section('confirmed gone: detached — the session and its path are kept; re-attached when the folder returns');
+    {
+      const zdir = 'C:/w/Zeta/.headway';
+      tr.moveDir('C:/w/Zeta', 'C:/stash/zeta');
+      eq(await br.HD.checkBundleLocation(), 'detached', 'resolves detached');
+      eq(br.named('bundleGone').length, 0, 'bundleGone is never called');
+      eq(br.named('bundleDetached').length, 1, 'bundleDetached called once');
+      eq(br.named('bundleDetached')[0].args[0], { marker: 'C:/w/Zeta/Zeta.headway', title: 'Zeta' }, '…with what was open');
+      eq([br.HD.bundleDir(), br.HD.markerPath()], [zdir, 'C:/w/Zeta/Zeta.headway'], 'the session keeps its folder');
+      ok(br.HD.isDetached(), 'isDetached()');
+      ok(!tr.watching(), 'no watcher on a missing folder');
+      let err = null;
+      const env0 = o.envs.items[0];
+      await br.HD.flushShards(zdir, o.planId, [{ kind: 'items', id: env0.id, env: env0, baseRev: 0 }]).catch((e) => { err = e; });
+      ok(err && /gone/.test(err.message), 'a flush into the missing folder rejects: ' + (err && err.message));
+      eq(await br.HD.writePresence(zdir, USER, { ts: 3 }), false, 'a heartbeat is skipped');
+      ok(![...tr.dirs].some((d) => d.indexOf('C:/w/Zeta') === 0) && ![...tr.files.keys()].some((k) => k.indexOf('C:/w/Zeta') === 0), 'the missing folder is not re-created');
+      eq(await br.HD.checkBundleLocation(), 'detached', 'still missing → still detached');
+      eq(br.named('bundleDetached').length, 1, '…without telling the app again');
+      tr.moveDir('C:/stash/zeta', 'C:/w/Zeta');
+      ok(await (async () => { for (let i = 0; i < 100 && br.named('bundleReattached').length === 0; i++) await tick(); return br.named('bundleReattached').length === 1; })(), 'the retry re-attaches once the folder is back');
+      eq(br.named('bundleReattached')[0].args[0], { marker: 'C:/w/Zeta/Zeta.headway', dir: zdir }, '…to the same folder');
+      ok(!br.HD.isDetached() && tr.watching(), 'attached and watched again');
+      const upd = br.RB.wrap(Object.assign(br.RB.unwrap(env0), { notes: 'after re-attach' }), env0, USER, T2);
+      await br.HD.flushShards(zdir, o.planId, [{ kind: 'items', id: env0.id, env: upd, baseRev: 99 }]);
+      ok(/after re-attach/.test(tr.files.get(zdir + '/plans/' + o.planId + '/items/' + env0.id + '.json')), 'flushes land again');
+      await br.HD.closeBundle();
+      eq(await br.HD.checkBundleLocation(), 'none', 'nothing open → none');
+    }
   }
 
   section('resumeBundle is called once desktop.js has loaded');

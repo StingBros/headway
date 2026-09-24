@@ -749,7 +749,8 @@ async function fixes() {
 
   section('renaming the project renames marker + folder');
   {
-    const S = await openFresh('Ren');
+    let rescueDir = null;
+    const S = await openFresh('Ren', { dialogOpen: () => rescueDir });
     const { b, tauri } = S;
     const seen = [];
     new b.window.MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach((n) => { if (n.textContent) seen.push(n.textContent); })))
@@ -811,16 +812,47 @@ async function fixes() {
     ok(await until(() => { const f = tauri.files.get(PP + '/.headway/plans/' + S.pid + '/items/' + S.vId + '.json'); return f && JSON.parse(f).fields.notes === 'after the peer rename'; }), 'edits flush into the followed folder');
     ok(![...tauri.dirs].some((d) => d.indexOf(NP) === 0) && ![...tauri.files.keys()].some((k) => k.indexOf(NP + '/') === 0), 'the old folder is never re-created');
 
-    section('the folder was moved away or removed: closed cleanly');
-    tauri.removeDir(PP);
+    section('the folder went missing: DETACHED — the document stays open, edits kept, re-attached when it is back');
+    const STASH = 'C:/stash/pp';
+    tauri.moveDir(PP, STASH);
     seen.length = 0;
     await b.HD.checkBundleLocation();
-    ok(await until(() => b.info().docKind !== 'bundle'), 'the session is closed');
-    ok(seen.some((t) => /was moved or removed/.test(t)), 'toast says which: moved or removed — ' + seen.join(' | '));
-    ok(b.doc.body.classList.contains('start'), 'back on the start page');
-    ok(!JSON.parse(b.window.localStorage.getItem('headway-recents-v1')).some((r) => r.path === PM), 'its recent is dropped');
+    ok(await until(() => b.info().detached), 'detached');
+    eq(b.info().docKind, 'bundle', 'the document stays open as the project');
+    ok(!b.doc.body.classList.contains('start'), 'no start page');
+    ok(seen.some((t) => /Project folder is missing — edits are kept in memory; use Save as… to keep them/.test(t)), 'toast says so — ' + seen.join(' | '));
+    ok(JSON.parse(b.window.localStorage.getItem('headway-recents-v1')).some((r) => r.path === PM), 'its recent is kept');
+    S.set('notes', 'kept in memory');
     await settle(6);
+    eq(b.info().docSaved, false, 'the edit is pending, not marked saved');
+    eq(b.state().items.find((i) => i.id === S.vId).notes, 'kept in memory', '…and kept in the document');
     ok(![...tauri.dirs].some((d) => d.indexOf(PP) === 0) && ![...tauri.files.keys()].some((k) => k.indexOf(PP + '/') === 0), 'nothing re-created where it was');
+    ok(!seen.some((t) => /Sync failed/.test(t)), 'no Sync-failed toast per edit');
+    ok(/Folder missing/.test(b.doc.querySelector('#btnSave').textContent), 'the Save button says the folder is missing: ' + b.doc.querySelector('#btnSave').textContent);
+    tauri.moveDir(STASH, PP);
+    ok(await until(() => !b.info().detached), 're-attached once the folder is back');
+    ok(await until(() => { const f = tauri.files.get(PP + '/.headway/plans/' + S.pid + '/items/' + S.vId + '.json'); return f && JSON.parse(f).fields.notes === 'kept in memory'; }), 'the held edit is flushed');
+    ok(await until(() => b.info().docSaved), '…and the document is synced');
+
+    section('detached → Save as… writes the document from memory into a new project');
+    tauri.moveDir(PP, STASH);
+    await b.HD.checkBundleLocation();
+    ok(await until(() => b.info().detached), 'detached again');
+    S.set('notes', 'rescued');
+    await settle(4);
+    tauri.dirs.add('C:/Users/me/Rescue');
+    rescueDir = 'C:/Users/me/Rescue';
+    b.click(b.doc.querySelector('#btnSave'));
+    const nin = b.doc.querySelector('#modalHost #optNameIn');
+    ok(!!nin, 'Save opens the Save as name prompt');
+    nin.value = 'Rescued';
+    b.click(b.doc.querySelector('#modalHost #optNameOk'));
+    const RP = 'C:/Users/me/Rescue/Rescued';
+    ok(await until(() => b.info().bundleDir === RP + '/.headway'), 'now editing the rescued project — toasts: ' + seen.join(' | '));
+    ok(!b.info().detached && b.info().docSaved, 'attached and saved');
+    const rf = [...tauri.files.keys()].find((k) => k.indexOf(RP + '/.headway/plans/') === 0 && k.slice(-(S.vId.length + 5)) === S.vId + '.json');
+    ok(rf && JSON.parse(tauri.files.get(rf)).fields.notes === 'rescued', 'the in-memory edit is in the new project');
+    ok(![...tauri.dirs].some((d) => d.indexOf(PP) === 0) && ![...tauri.files.keys()].some((k) => k.indexOf(PP + '/') === 0), 'the missing folder was never re-created');
     eq(b.errors, [], 'no window errors');
   }
 

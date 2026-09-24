@@ -24,6 +24,8 @@
   var projectId = null;      // the marker's id (= headway.json docId): finds the project again after a move
   var goneDirs = {};         // data folders we know are gone (renamed away): never written again
   var locating = null;       // the in-flight checkBundleLocation()
+  var detached = false;      // the data folder is missing: session kept, nothing written, retried
+  var reattachTimer = null;  // the detached session's next look for its folder
   var activePlanId = null;   // sub-bundle whose entity events are applied live
   var lastShardJson = {};    // rel path → canonical envelope JSON we last read or wrote (echo test)
   var bundleWarnings = [];   // {path, err} — shards skipped on read, never fatal
@@ -206,6 +208,11 @@
   //       than the active one changed (its cached Compare copy is stale).
   //   resumeBundle()                             called once desktop.js has loaded,
   //       so the app can re-link the folder its ui snapshot names.
+  //   bundleMoved({marker, dir, from, title})     the project folder was found
+  //       renamed / moved beside where it was; the session follows it.
+  //   bundleDetached({marker, title})             the data folder stayed missing
+  //       through the retry ladder: nothing is written, the session is kept.
+  //   bundleReattached({marker, dir})             …and it is back (complete).
   var ENTITY_DIRS = { items: 'item', phases: 'phase', team: 'team', costs: 'cost' };
   var RENAME_RETRY_MS = [120, 400, 1200];
   var CLOSE_HOOK_MS = 3000;
@@ -465,6 +472,7 @@
     if (unwatch) { try { unwatch(); } catch (e) { /* already gone */ } unwatch = null; }
     bundleDir = null; activePlanId = null; lastShardJson = {}; bundleWarnings = [];
     markerFile = null; projectTitle = null; projectId = null;
+    detached = false; clearTimeout(reattachTimer); reattachTimer = null;
     if (!dir || !uid || goneDirs[dir]) return Promise.resolve();
     return removePresence(dir, uid).catch(function () { /* best effort */ });
   }
@@ -481,12 +489,15 @@
     if (!dir) return Promise.resolve();
     var kind = evKind(ev), a = app(), pending = [], seen = {};
     var chain = Promise.resolve();
-    // the watched folder itself moved or went (or headway.json did): find
-    // out where the project is now
-    var d0 = norm(dir).toLowerCase();
+    // the watched folder itself (or the project folder holding it) moved or
+    // went: find out where the project is now. Only those two entries count
+    // — a file inside coming and going (a sync client re-creating
+    // headway.json) never does, nor any path outside the folder (a symlinked
+    // or NFD-spelled alias of an unrelated entry).
+    var d0 = norm(dir).replace(/\/+$/, '').toLowerCase(), p0 = dirname(d0);
     if (((ev && ev.paths) || []).some(function (p) {
-      var q = norm(p).toLowerCase();
-      return q === d0 || q.indexOf(d0 + '/') !== 0 || (kind === 'remove' && rel(dir, p) === 'headway.json');
+      var q = norm(p).replace(/\/+$/, '').toLowerCase();
+      return q === d0 || q === p0;
     })) checkBundleLocation().catch(function () { /* checked again on the next write */ });
     ((ev && ev.paths) || []).forEach(function (p) {
       var r = rel(dir, p);
@@ -560,50 +571,104 @@
   var GONE_MSG = 'The project folder is gone — it was moved, renamed or removed';
   function liveRoot(dir) {
     dir = norm(dir).replace(/\/+$/, '');
-    if (goneDirs[dir]) return Promise.reject(new Error(GONE_MSG));
-    return fs.exists(dir + '/headway.json').catch(function () { return true; }).then(function (there) {
+    if (goneDirs[dir]) return Promise.reject(goneError());
+    // the data FOLDER, not headway.json: sync clients delete-then-create files
+    return fs.exists(dir).catch(function () { return true; }).then(function (there) {
       if (there) return;
-      if (bundleDir && norm(bundleDir) === dir) checkBundleLocation();
-      throw new Error(GONE_MSG);
+      if (bundleDir && norm(bundleDir) === dir) checkBundleLocation().catch(function () { /* retried */ });
+      throw goneError();
     });
   }
+  function goneError() { var e = new Error(GONE_MSG); e.gone = true; return e; }
 
-  // The open project's folder vanished (a peer renamed it — their sync
-  // client moved ours — or it was moved / removed). Look beside where it
-  // was for a marker with the same id: found → follow it (watcher, paths,
-  // title) and tell the app bundleMoved({marker, dir, from}); not found →
-  // bundleGone({marker, title}) and the session is left. Resolves 'ok' |
-  // 'moved' | 'gone' | 'none' (no project open).
+  // The open project's data folder vanished (a peer renamed it — their
+  // sync client moved ours — or it was moved / removed, or a sync client is
+  // re-materialising it piecemeal). Look again with backoff before deciding:
+  //   still (or again) there        → 'ok', nothing changes
+  //   a marker with the same id beside where it was, its headway.json
+  //   landed                         → follow it: watcher, paths, title;
+  //                                    bundleMoved({marker, dir, from, title})
+  //   not found after the ladder     → DETACHED: the session keeps its folder
+  //                                    path and the app its edits; nothing is
+  //                                    written; bundleDetached({marker,
+  //                                    title}); retried on focus and every
+  //                                    REATTACH_MS until the folder (complete)
+  //                                    is back → bundleReattached({marker, dir})
+  // Resolves 'ok' | 'moved' | 'detached' | 'reattached' | 'none' (no project).
+  var LOCATE_RETRY_MS = [500, 2000, 5000];
+  var REATTACH_MS = 10000;
   function checkBundleLocation() {
     if (locating) return locating;
     if (!bundleDir || !markerFile) return Promise.resolve('none');
     var dir = bundleDir, marker = markerFile, id = projectId, title = projectTitle;
     var parent = dirname(dirname(marker));
+    var wasDetached = detached;
     function done(v) { locating = null; return v; }
-    locating = fs.exists(dir + '/headway.json').catch(function () { return true; }).then(function (there) {
-      if (there) return 'ok';
-      return findMarker(parent, id).then(function (found) {
-        if (bundleDir !== dir) return 'ok'; // the document changed meanwhile
-        var a = app();
-        goneDirs[dir] = true;
-        if (found) {
-          var ndir = dataDirOf(found.marker);
-          watchGen++;
-          if (unwatch) { try { unwatch(); } catch (e) { /* already gone */ } unwatch = null; }
-          bundleDir = ndir; markerFile = found.marker; projectTitle = found.title || title;
-          delete goneDirs[ndir];
-          markTitle();
-          rewatch();
-          if (a && typeof a.bundleMoved === 'function') a.bundleMoved({ marker: found.marker, dir: ndir, from: marker, title: projectTitle });
-          return 'moved';
-        }
-        leaveBundle();
-        markTitle();
-        if (a && typeof a.bundleGone === 'function') a.bundleGone({ marker: marker, title: title });
-        return 'gone';
+    function present() {
+      return fs.exists(dir).catch(function () { return true; }).then(function (there) {
+        // detached: back only once it is complete again
+        if (!there || !wasDetached) return there;
+        return fs.exists(dir + '/headway.json').catch(function () { return false; });
       });
-    }).then(done, function (err) { done(null); throw err; });
+    }
+    function attempt(n) {
+      return present().then(function (there) {
+        if (bundleDir !== dir) return 'ok'; // the document changed meanwhile
+        if (there) return wasDetached ? reattach(dir, marker) : 'ok';
+        return findMarker(parent, id).then(function (found) {
+          if (bundleDir !== dir) return 'ok';
+          if (found) return follow(dir, marker, title, found);
+          if (wasDetached) return 'detached';
+          if (n < LOCATE_RETRY_MS.length) return wait(LOCATE_RETRY_MS[n]).then(function () { return attempt(n + 1); });
+          detach(dir, marker, title);
+          return 'detached';
+        });
+      });
+    }
+    locating = attempt(0).then(done, function (err) { done(null); throw err; });
     return locating;
+  }
+  function stopWatch() {
+    watchGen++;
+    if (unwatch) { try { unwatch(); } catch (e) { /* already gone */ } unwatch = null; }
+  }
+  function follow(dir, marker, title, found) {
+    var a = app(), ndir = dataDirOf(found.marker);
+    goneDirs[dir] = true;
+    stopWatch();
+    detached = false; clearTimeout(reattachTimer); reattachTimer = null;
+    bundleDir = ndir; markerFile = found.marker; projectTitle = found.title || title;
+    delete goneDirs[ndir];
+    markTitle();
+    rewatch();
+    if (a && typeof a.bundleMoved === 'function') a.bundleMoved({ marker: found.marker, dir: ndir, from: marker, title: projectTitle });
+    return 'moved';
+  }
+  function detach(dir, marker, title) {
+    var a = app();
+    goneDirs[dir] = true; // nothing is written (or re-created) there while it is missing
+    stopWatch();
+    detached = true;
+    scheduleReattach();
+    if (a && typeof a.bundleDetached === 'function') a.bundleDetached({ marker: marker, title: title });
+  }
+  function scheduleReattach() {
+    clearTimeout(reattachTimer);
+    reattachTimer = setTimeout(function () {
+      reattachTimer = null;
+      if (!detached) return;
+      checkBundleLocation().catch(function () { /* next round */ }).then(function () {
+        if (detached && !reattachTimer) scheduleReattach();
+      });
+    }, REATTACH_MS);
+  }
+  function reattach(dir, marker) {
+    var a = app();
+    detached = false; clearTimeout(reattachTimer); reattachTimer = null;
+    delete goneDirs[dir];
+    rewatch();
+    if (a && typeof a.bundleReattached === 'function') a.bundleReattached({ marker: marker, dir: dir });
+    return 'reattached';
   }
   // a <X>/<Y>.headway marker with this id (and its .headway/ beside it)
   // among parent's sub-folders; null when none
@@ -673,7 +738,7 @@
           markerFile = marker;
           projectTitle = mk.title || hw.title || basename(marker).replace(/\.headway$/i, '');
           projectId = mk.id;
-          delete goneDirs[dir];
+          delete goneDirs[dir]; detached = false; clearTimeout(reattachTimer); reattachTimer = null;
           activePlanId = pid;
           // keeps every xlsx path inert: autosave, renameTo, reload all gate on currentPath
           currentPath = null; lastSig = null; lastStateJson = null;
@@ -956,6 +1021,7 @@
       });
     },
     checkBundleLocation: checkBundleLocation,
+    isDetached: function () { return detached; },
     markerPath: function () { return markerFile; },
     projectDir: function () { return markerFile ? dirname(markerFile) : null; },
     projectTitle: function () { return projectTitle; },
