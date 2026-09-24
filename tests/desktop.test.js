@@ -848,6 +848,29 @@ async function main() {
     eq(applied().slice(2), [[e3.id + ':while we were detached']], 're-attached: the changed shard is applied');
   }
 
+  section('L7: only an event on the watched folder itself (or its project folder) starts a location check');
+  {
+    const tw = makeFakeTauri();
+    const bw = boot(tw, ['bundleMoved', 'bundleDetached']);
+    bw.HD.setUserId(USER);
+    const fx = bw.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    await bw.HD.openBundle(await bw.HD.createBundle('C:/l/Proj', bw.RB.migrateFromState(fx, USER, T0)));
+    let checks = 0;
+    tw.onExists = (p) => { if (p === 'C:/l/Proj/.headway') checks++; };
+    await tw.emitPaths(['C:/elsewhere/other.json', '/private/var/folders/x/C:/l/Proj/.headway', 'C:/l/Proj Other/.headway', 'C:/l/Proj/.headway/headway.json'], 'remove');
+    await tick(30);
+    eq(checks, 0, 'paths outside the folder (a symlink / NFD alias, a sibling) and a file inside start no check');
+    await tw.emitPaths('C:/l/Proj', 'modify');
+    await tick(30);
+    ok(checks > 0, 'the project folder entry itself does');
+    checks = 0;
+    await tw.emitPaths('C:/l/Proj/.headway/', 'remove');
+    await tick(30);
+    ok(checks > 0, '…and so does the data folder itself');
+    tw.onExists = null;
+    eq([bw.named('bundleMoved').length, bw.named('bundleDetached').length], [0, 0], 'the folder is there: nothing followed or detached');
+  }
+
   section('a peer rename mid-flush: the old folder is never re-created; every shard lands in the new one');
   for (const how of ['inside a shard write', 'between two shards']) {
     const tm = makeFakeTauri();
