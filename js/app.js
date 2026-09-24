@@ -1886,9 +1886,25 @@
       }).then(function (choice) {
         if (choice === 'open') return openBundleDoc(existing).catch(function () { return null; });
         if (choice !== 'convert') return null;
+        var contents = RMBundle.migrateFromState(st, userId(), new Date().toISOString());
         return settleCurrentDoc().then(function () {
-          if (imported.ui) applyUi(imported.ui); // the workbook carries the view prefs too
-          return createProjectIn(parent, st, 'Converted to');
+          return HeadwayDesktop.createProject(parent, st.meta.title, contents).catch(function (err) {
+            // beside the workbook is not writable (a read-only or synced-only
+            // folder, …): let the user pick where the project goes
+            toast('Can’t create the project beside the workbook (' + (err && err.message || err) + ') — pick where to put it', 'warn');
+            return HeadwayDesktop.pickFolder().then(function (p2) {
+              return p2 ? HeadwayDesktop.createProject(p2, st.meta.title, contents) : null;
+            });
+          });
+        }).then(function (marker) {
+          if (!marker) return null;
+          return openBundleDoc(marker).then(function (res) {
+            // the workbook carries the view prefs too — applied only now that
+            // the project exists (a failed or canceled convert changes nothing)
+            if (res && imported.ui) { applyUi(imported.ui); saveLocal(); render(); }
+            if (res) toast('Converted to “' + projectFolderOf(marker) + '”');
+            return res;
+          });
         });
       });
     }).catch(function (err) {
@@ -14360,6 +14376,7 @@
         peerByItem: RM.clone(peerByItem), presenceOn: presenceOn,
         pendingHistory: pendingHistory.length, renderCount: renderCount, userId: readUser().id || null,
         flushing: flushing, planGone: planGone, detached: detached, deferred: deferredExternal.length,
+        weekPx: weekPx, view: view,
         localAt: RM.clone(localAt), lastEnv: RM.clone(lastEnv) };
     },
     releaseNotesFor: releaseNotesFor,

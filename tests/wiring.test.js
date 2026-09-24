@@ -1696,4 +1696,35 @@ async function projectFlow() {
     await b.HA.openFromPath(XL);
     ok(await until(() => b.info().bundleMarker === OD + 'Fallback Name/Fallback Name.headway'), 'named after the file — ' + b.toasts());
   }
+  section('conversion beside a workbook in a read-only folder: pick another parent; view prefs only once created');
+  {
+    let open = null;
+    const tauri = makeFakeTauri({ dialogOpen: () => open });
+    const b = boot(tauri, { localStorage: { 'headway-user-v2': JSON.stringify(FIXER), 'headway-user-v1': FIXER.name } });
+    const seen = [];
+    new b.window.MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach((n) => { if (n.textContent) seen.push(n.textContent); })))
+      .observe(b.doc.querySelector('#toasts'), { childList: true });
+    const st = b.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    st.meta.title = 'RO Book';
+    const blob = await b.window.RMExcel.exportWorkbook(st, { weekPx: 55 });
+    const XL = 'C:/ro/RO Book.xlsx';
+    tauri.files.set(XL, Uint8Array.from(new Uint8Array(await blob.arrayBuffer())));
+    tauri.mkdirFails = (p) => (p.indexOf('C:/ro/') === 0 ? 'Permission denied (os error 13)' : null);
+    const wp0 = b.info().weekPx;
+    // 1. the picker is canceled: nothing created, nothing opened, prefs untouched
+    open = null;
+    await b.HA.openFromPath(XL);
+    await settle(4);
+    ok(seen.some((t) => /can.t create .*beside the workbook|pick where/i.test(t)), 'says it cannot create there — ' + seen.join(' | '));
+    eq(b.info().docKind, 'xlsx', 'nothing opened');
+    eq(b.info().weekPx, wp0, 'the workbook\'s view prefs were not applied');
+    ok(![...tauri.dirs].some((d) => d.indexOf('C:/ro/') === 0) && ![...tauri.files.keys()].some((k) => k.indexOf('C:/ro/') === 0 && k !== XL), 'nothing written under the read-only folder');
+    // 2. a writable parent is picked: created there, and THEN the prefs apply
+    tauri.dirs.add('C:/Users/me/Elsewhere');
+    open = 'C:/Users/me/Elsewhere';
+    await b.HA.openFromPath(XL);
+    ok(await until(() => b.info().bundleMarker === 'C:/Users/me/Elsewhere/RO Book/RO Book.headway'), 'created in the picked folder — ' + seen.join(' | '));
+    eq(b.info().weekPx, 55, 'the workbook\'s view prefs apply once the project exists');
+    eq(b.errors, [], 'no window errors');
+  }
 }

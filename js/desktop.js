@@ -275,7 +275,13 @@
 
   // plugin permission errors are plain strings such as
   // "fs.rename not allowed. Permissions associated with this command: fs:allow-rename"
-  function isDenied(err) { return /not allowed|permission/i.test(errText(err)); }
+  // a missing Tauri capability ("fs.x not allowed. Permissions associated
+  // with this command: fs:allow-x") — NOT the OS refusing ("Permission
+  // denied (os error 13)"), which is reported as it is
+  function isDenied(err) {
+    var t = errText(err);
+    return /not allowed|fs:allow-|permissions associated/i.test(t) && !/os error \d+/i.test(t);
+  }
   function friendlyFsError(err) {
     var msg = errText(err);
     if (!isDenied(err)) return msg;

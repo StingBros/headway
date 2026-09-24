@@ -86,6 +86,10 @@ module.exports = function makeFakeTauri(opts) {
     }),
     mkdir: guard('mkdir', (p, o) => {
       p = norm(p);
+      if (typeof api.mkdirFails === 'function') {
+        const why = api.mkdirFails(p);
+        if (why) return Promise.reject(why);
+      }
       if (files.has(p)) return Promise.reject('file exists: ' + p);
       if (!(o && o.recursive)) {
         if (dirs.has(p)) return Promise.reject('directory exists: ' + p);
@@ -164,6 +168,7 @@ module.exports = function makeFakeTauri(opts) {
     renameFails: null, // (from, to) → error string to refuse that rename
     onExists: null,    // (path) → called before every fs.exists answers
     beforeWrite: null, // (path) → called before every writeTextFile lands
+    mkdirFails: null,  // (path) → error string to refuse that mkdir (a read-only folder)
     window: { getCurrentWindow: () => win },
     watching: () => !!watchCb,
     watchOpts: () => watchOpts,
