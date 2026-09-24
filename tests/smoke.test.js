@@ -323,15 +323,19 @@ ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidd
   window.HeadwayApp.ai.setView('planning');
 }
 
-// ---------------------------------------------------------------- Setup → Apps (per-project tab switch)
+// ---------------------------------------------------------------- Setup → Views (per-project tab switch)
 {
-  const openApps = () => { click(doc.querySelector('#btnSetup')); click(doc.querySelector('#setupView [data-sutab="apps"]')); };
+  const openApps = () => { click(doc.querySelector('#btnSetup')); click(doc.querySelector('#setupView [data-sutab="views"]')); };
   openApps();
   const tabs = [...doc.querySelectorAll('#setupView .su-tab')].map(b => b.dataset.sutab);
-  ok(tabs.indexOf('apps') === tabs.indexOf('timeline') + 1, 'Apps sits right after Timeline in the Project rail');
+  ok(tabs.indexOf('views') === tabs.indexOf('columns') + 1, 'Views sits right after the project sections');
   const boxes = doc.querySelectorAll('#setupView [data-suapp]');
-  ok(boxes.length === window.RM.APPS.length && [...boxes].every(b => b.checked), 'every app is listed and on by default');
-  ok(doc.querySelector('#setupView [data-suapp="planning"]').disabled, 'Planning cannot be switched off');
+  ok([...boxes].map(b => b.dataset.suapp).join() === 'scoping,prio,reports' && [...boxes].every(b => b.checked),
+    'Scoping, Prioritizing and Reporting have switches, on by default');
+  ok(!doc.querySelector('#setupView [data-suapp="planning"]') && /Always on/.test(doc.querySelector('#setupView [data-suview="planning"]').textContent),
+    'Planning cannot be switched off');
+  ok(/Follows Sprints/.test(doc.querySelector('#setupView [data-suview="sprints"]').textContent) &&
+    /Follows Budgeting/.test(doc.querySelector('#setupView [data-suview="budget"]').textContent), 'Sprinting and Budgeting follow their sections');
   const sc = doc.querySelector('#setupView [data-suapp="scoping"]');
   sc.checked = false; sc.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().meta.apps.scoping === false, 'unchecking Scoping commits to the document');
@@ -340,14 +344,9 @@ ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidd
   ok(window.HeadwayApp.ai.setView('scoping') === false && doc.body.dataset.view !== 'scoping', 'the AI cannot open a hidden app');
   window.HeadwayApp.ai.setView('sprints');
   ok(doc.body.dataset.view === 'sprints', 'Sprinting still opens while on');
-  openApps();
-  const spBox = doc.querySelector('#setupView [data-suapp="sprints"]');
-  spBox.checked = false; spBox.dispatchEvent(new window.Event('change', { bubbles: true }));
-  ok(state().meta.apps.sprints === false && doc.querySelector('#viewTabs [data-view="sprints"]').hidden, 'Sprinting switches off and its tab hides');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
-  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
-  ok(state().meta.apps.scoping === true && state().meta.apps.sprints === true && !doc.querySelector('#viewTabs [data-view="scoping"]').hidden,
-    'undo restores both apps and their tabs');
+  ok(state().meta.apps.scoping === true && !doc.querySelector('#viewTabs [data-view="scoping"]').hidden,
+    'undo restores the app and its tab');
   window.HeadwayApp.ai.setView('planning');
 }
 ok(doc.querySelectorAll('#rows .row.band').length === 6, 'six phase bands rendered');
@@ -737,18 +736,39 @@ const suTab = (k) => {
   if (doc.body.dataset.view !== 'setup') click(doc.querySelector('#btnSetup'));
   click(doc.querySelector('#setupView [data-sutab="' + k + '"]'));
 };
+// Setup → Sizing, priority & risk: one select per field × level
+const schemeSel = (what, level) => doc.querySelector('#setupView select[data-suscheme-kind="' + what + '"][data-kind="' + level + '"]');
+const schemeOpts = (what, level) => [...schemeSel(what, level).options].map(o => o.value);
+const pickScheme = (what, level, v) => {
+  const sel = schemeSel(what, level);
+  sel.value = v;
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+};
 click(doc.querySelector('#resManage'));
 ok(doc.body.dataset.view === 'setup', 'resources "manage" jumps to the Setup view');
 ok(doc.querySelector('#setupView [data-sutab="team"]').classList.contains('on'),
   'resources "manage" lands on the Team tab');
-ok(doc.querySelectorAll('#setupView .su-tab').length === 12 &&
-  doc.querySelectorAll('#setupView .su-rail-hd').length === 2,
-  'settings rail: 11 vertical tabs under Project + Personal sections');
-ok(doc.querySelectorAll('#setupView .su-card').length === 2 && !doc.querySelector('#suCapEnable'),
-  'Team tab keeps roles and the work week only');
-ok(/Roles/.test(doc.querySelector('#setupView .su-card h2').textContent), 'team types renamed to Roles');
+{
+  const keys = [...doc.querySelectorAll('#setupView .su-tab')].map(b => b.dataset.sutab);
+  ok(keys.join() === 'project,sprints,org,est,budget,team,scheduling,columns,views,appearance,prefs,ai,jira',
+    'Setup rail: eight sections, Views, then Personal');
+  ok(doc.querySelectorAll('#setupView .su-rail-hd').length === 1 &&
+    /this computer only/.test(doc.querySelector('#setupView .su-rail-hd').textContent), 'one group heading: Personal');
+  ok([...doc.querySelectorAll('#setupView .su-tab')].every(b => b.querySelector('i[data-lucide]')), 'every rail item has an icon');
+  ok(/Jira Integration/.test(doc.querySelector('#setupView [data-sutab="jira"]').textContent), 'Jira renamed');
+  ok(!!doc.querySelector('#setupView [data-sutab="sprints"] .su-pill'), 'Sprints shows its on/off pill');
+  window.HeadwayApp.openSetup('capacity');
+  ok(doc.querySelector('#setupView [data-sutab="scheduling"]').classList.contains('on'), 'old key capacity opens Scheduling');
+  ok(!/Capacity planning/.test(doc.querySelector('#setupView').textContent), 'no "Capacity planning" copy left');
+  suTab('sprints');
+  ok([...doc.querySelectorAll('#setupView [data-suwps]')].map(b => b.textContent).join() === 'Off,1 week,2 weeks,3 weeks,4 weeks',
+    'Sprints offers Off and 1–4 weeks');
+}
+suTab('budget');
+ok(/Roles/.test(doc.querySelector('#setupView .su-card h2').textContent), 'Budgeting holds the roles and rate card');
 ok(!!doc.querySelector('#setupView [data-rcrate]') && !!doc.querySelector('#setupView [data-rccost]'),
   'rate card inputs per role');
+suTab('project');
 ok(!!doc.querySelector('#suWeekHours') && doc.querySelectorAll('#setupView [data-suwday]').length === 7 &&
   !!doc.querySelector('#suWeekStart'),
   'work week card offers full-time hours, Sun-Sat day checkboxes and a first-day select');
@@ -775,6 +795,7 @@ ok(!!doc.querySelector('#suWeekHours') && doc.querySelectorAll('#setupView [data
 }
 {
   // rate card commit + inheritance shows up in core helpers
+  suTab('budget');
   const rateInp = doc.querySelector('#setupView [data-rcrate]');
   const role0 = rateInp.dataset.rcrate;
   rateInp.value = '175';
@@ -787,6 +808,7 @@ ok(!!doc.querySelector('#suWeekHours') && doc.querySelectorAll('#setupView [data
 }
 {
   // work week commit
+  suTab('project');
   const wh = doc.querySelector('#suWeekHours');
   wh.value = '32';
   wh.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -816,7 +838,7 @@ ok(!!doc.querySelector('#setupView [data-pref="crit"]') &&
   cb2.checked = true;
   cb2.dispatchEvent(new window.Event('change', { bubbles: true }));
 }
-suTab('timeline');
+suTab('project');
 ok(!!doc.querySelector('#suStart') && !!doc.querySelector('#suEnd'), 'timeline start/end editable in setup');
 {
   const end = doc.querySelector('#suEnd');
@@ -829,7 +851,7 @@ ok(!!doc.querySelector('#suStart') && !!doc.querySelector('#suEnd'), 'timeline s
 }
 ok(doc.querySelectorAll('#setupView [data-suholrm]').length === state().meta.holidayRanges.length &&
   state().meta.holidayRanges.length > 0,
-  'holidays listed as a removable named-range table (Timeline tab)');
+  'holidays listed as a removable named-range table (Project section)');
 {
   // add a named range and remove it again
   const before = state().meta.holidayRanges.length;
@@ -847,16 +869,16 @@ ok(doc.querySelectorAll('#setupView [data-suholrm]').length === state().meta.hol
     state().meta.holidays.indexOf('2026-10-07') === -1,
     'removing the range removes its dates');
 }
-suTab('team');
+suTab('budget');
 {
   const inp = doc.querySelector('#suTypeAdd');
   inp.value = 'Data Scientist';
   click(doc.querySelector('#suTypeAddBtn'));
   ok(state().teamTypes.indexOf('Data Scientist') !== -1, 'setup adds a team type');
 }
-suTab('phases');
+suTab('org');
 ok(doc.querySelectorAll('#setupView [data-suphedit]').length === state().phases.length, 'phases listed with edit controls');
-suTab('workstreams');
+suTab('org');
 ok(doc.querySelectorAll('#setupView [data-suwsedit]').length > 0, 'workstreams listed with edit controls');
 
 // picking "Default gray" for a workstream with a seeded default must SURVIVE
@@ -879,7 +901,7 @@ ok(doc.querySelectorAll('#setupView .su-grip').length ===
 // drag the first phase's grip to the bottom of its list (jsdom rects are all
 // zero, so a large clientY resolves to "after the last row")
 {
-  suTab('phases');
+  suTab('org');
   const firstId = state().phases[0].id;
   const grip = doc.querySelector('#setupView [data-sulist="phase"] .su-row .su-grip');
   grip.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
@@ -891,7 +913,7 @@ ok(doc.querySelectorAll('#setupView .su-grip').length ===
 }
 // same machinery drives team types
 {
-  suTab('team');
+  suTab('budget');
   const firstType = state().teamTypes[0];
   const grip = doc.querySelector('#setupView [data-sulist="type"] .su-row .su-grip');
   grip.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
@@ -901,7 +923,7 @@ ok(doc.querySelectorAll('#setupView .su-grip').length ===
 }
 // and workstreams (order persists in state.wsOrder)
 {
-  suTab('workstreams');
+  suTab('org');
   const firstWs = doc.querySelector('#setupView [data-sulist="ws"] .su-row').dataset.key;
   const grip = doc.querySelector('#setupView [data-sulist="ws"] .su-row .su-grip');
   grip.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
@@ -921,6 +943,281 @@ ok(doc.body.dataset.view === 'planning', 'back to planning after setup');
   nameInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 }
 ok(state().team.length === 1, 'role added via the blank add row');
+// ---------------------------------------------------------------- Setup → Budgeting switch + Team table
+{
+  const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  const teamBefore = JSON.stringify([state().team, state().teamTypes, state().roleCapTypes, state().meta.apps]);
+  suTab('budget');
+  const sw = doc.querySelector('#setupView [data-subudget]');
+  ok(!!sw, 'Budgeting has a Track budget switch');
+  const was = window.RM.appEnabled(state(), 'budget');
+  click(sw);
+  ok(window.RM.appEnabled(state(), 'budget') === !was, 'the switch drives the Budgeting tab');
+  if (!window.RM.appEnabled(state(), 'budget')) click(doc.querySelector('#setupView [data-subudget]'));
+  ok(window.RM.appEnabled(state(), 'budget') && !!doc.querySelector('#setupView [data-rcrate]'), 'with budgeting on the rate card shows');
+
+  suTab('team');
+  const rows = doc.querySelectorAll('#setupView .su-team tbody tr[data-mid]');
+  ok(rows.length === state().team.length, 'one row per person');
+  const m0 = state().team[0];
+  const alloc = doc.querySelector('#setupView [data-sutm="capacity"][data-mid="' + m0.id + '"]');
+  alloc.value = '50'; alloc.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().team[0].capacity === 0.5, 'allocation % edits capacity');
+  const name = doc.querySelector('#setupView [data-sutm="name"][data-mid="' + m0.id + '"]');
+  name.value = 'Renamed'; name.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().team[0].name === 'Renamed', 'name is editable');
+  ok(!doc.querySelector('#setupView [data-sutm="capType"]'), 'capacity type is not editable here');
+  ok(!/Paste/.test(doc.querySelector('#setupView .su-team').closest('.su-card').textContent), 'no paste-from-spreadsheet');
+  const wsBtn = doc.querySelector('#setupView [data-sutmws][data-mid="' + m0.id + '"]');
+  if (wsBtn) {
+    click(wsBtn);
+    ok([...doc.querySelectorAll('#popover .menu-list button')].length > 1, 'the Workstreams cell opens the multi-pick menu');
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  }
+  // a role picked here brings its capacity type along
+  const r0 = state().teamTypes[0];
+  window.HeadwayApp.ai.commit('map role', (s) => { window.RM.setRoleCapType(s, r0, s.capTypes[0]); });
+  const roleSel = doc.querySelector('#setupView [data-sutm="type"][data-mid="' + m0.id + '"]');
+  roleSel.value = r0; roleSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().team[0].type === r0 && state().team[0].capType === state().capTypes[0], 'picking a role sets the person\'s capacity type from it');
+  // New role… swaps the select for an inline name input
+  const roleSel2 = doc.querySelector('#setupView [data-sutm="type"][data-mid="' + m0.id + '"]');
+  roleSel2.value = '__new'; roleSel2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const nr = doc.querySelector('#setupView [data-sutmnewrole][data-mid="' + m0.id + '"]');
+  ok(!!nr, 'New role… offers an inline name input');
+  nr.value = 'Wizard role'; nr.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().teamTypes.indexOf('Wizard role') !== -1 && state().team[0].type === 'Wizard role', 'the new role is added and set');
+  const n = state().team.length;
+  click(doc.querySelector('#suTmAdd'));
+  ok(state().team.length === n + 1, 'Add person');
+  click(doc.querySelector('#setupView [data-sutmdel="' + state().team[n].id + '"]'));
+  ok(state().team.length === n, 'delete person');
+  for (let i = 0; i < 9; i++) undo();
+  ok(JSON.stringify([state().team, state().teamTypes, state().roleCapTypes, state().meta.apps]) === teamBefore, 'the team edits undo, nine steps');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+// ---------------------------------------------------------------- new-project wizard over a draft
+{
+  window.localStorage.setItem('headway-onboarded-v1', '1'); // past the first-run Welcome
+  const before = JSON.stringify(state());
+  const lsBefore = window.localStorage.getItem('headway-v1');
+  window.HeadwayApp.wizard.open();
+  ok(doc.body.classList.contains('wizard-open') && !doc.querySelector('#wizard').hidden, 'New project opens the full-screen wizard');
+  ok(!!doc.querySelector('#topbar .tb-mark') && !!doc.querySelector('#wzClose'), 'the app top bar stays (draggable), with a close button');
+  ok(doc.querySelectorAll('#wizard .wz-step').length === 9, 'nine numbered steps');
+  ok(doc.querySelector('#wizard [data-wz="next"]').disabled, 'Continue waits for a preset');
+  ok(doc.querySelectorAll('#wizard .wz-step[disabled]').length === 8, 'later steps wait for a preset too');
+  ok(!!doc.querySelector('#wizard #suTitle') && !doc.querySelector('#setupView #suTitle'), 'the Project section renders in the wizard, once');
+  // edits in the wizard go to the draft only
+  const ti = doc.querySelector('#wizard #suTitle');
+  ti.value = 'Draft title'; ti.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.title === 'Draft title', 'Setup handlers edit the draft');
+  ok(window.localStorage.getItem('headway-v1') === lsBefore, 'nothing from the draft is saved locally');
+  // (a disk reload under the wizard runs through the real file path, in the async tests below)
+  ok(!('reloadForTest' in window.HeadwayApp.wizard), 'no test-only hooks in the shipped wizard API');
+  // the top bar carries the step
+  ok(doc.querySelector('#wzTopStep').textContent === 'Step 1 of 9' && !doc.querySelector('#wizard .wz-kicker'), 'the top bar says Step 1 of 9');
+  window.HeadwayApp.wizard.close(true);
+  const beforeB = JSON.stringify(state());
+  window.HeadwayApp.wizard.open();
+  const ti2 = doc.querySelector('#wizard #suTitle');
+  ti2.value = 'Throwaway'; ti2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#wzClose'));
+  ok(!!doc.querySelector('#modalHost:not([hidden]) [data-m="ok"]'), 'closing after edits asks first (in-app confirm)');
+  click(doc.querySelector('#modalHost [data-m="ok"]'));
+  ok(JSON.stringify(state()) === beforeB, 'closing after draft edits restores the open document exactly');
+  ok(!doc.body.classList.contains('wizard-open') && doc.querySelector('#wizard').hidden, 'wizard gone');
+  // Escape with no edits closes straight away
+  window.HeadwayApp.wizard.open();
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  ok(!doc.body.classList.contains('wizard-open'), 'Escape closes an untouched wizard');
+  ok(JSON.stringify(state()) === beforeB, 'and the document is untouched');
+}
+// ---------------------------------------------------------------- wizard: Welcome, presets, Project, Sprints, Review
+{
+  window.localStorage.removeItem('headway-onboarded-v1');
+  const savedName = window.localStorage.getItem('headway-user-v1');
+  const savedTheme = window.localStorage.getItem('headway-theme-v1');
+  window.localStorage.removeItem('headway-user-v1');
+  window.HeadwayApp.wizard.open();
+  ok(/Welcome to Headway/.test(doc.querySelector('#wizard').textContent), 'first project starts on Welcome');
+  const nm = doc.querySelector('#wzName'); nm.value = 'Sam'; nm.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#wizard [data-wztheme="dark"]'));
+  ok(window.localStorage.getItem('headway-user-v1') === 'Sam', 'name saved per machine');
+  ok(window.localStorage.getItem('headway-theme-v1') === 'dark' && doc.querySelector('#wizard [data-wztheme="dark"]').classList.contains('on'),
+    'theme saved per machine and shown picked');
+  click(doc.querySelector('#wizard [data-wz="next"]'));
+  ok(!doc.querySelector('#wizard [data-wz="back"]').disabled, 'Back returns to Welcome from the Project step');
+  const cards = doc.querySelectorAll('#wizard [data-wzpreset]');
+  ok(cards.length === 4 && [...cards].map(c => c.dataset.wzpreset).join() === 'scrum,ascrum,rapid,minimal', 'four presets');
+  ok([...cards].every(c => c.querySelector('.pc-sketch') && c.querySelector('.pc-sketch').children.length > 3), 'each card has a sketch with bars');
+  ok(!doc.querySelector('#wizard .pc-check'), 'no check mark until one is picked');
+  const ti = doc.querySelector('#wizard #suTitle'); ti.value = 'Wizard project'; ti.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#wizard [data-wzpreset="rapid"]'));
+  ok(doc.querySelector('#wizard [data-wzpreset="rapid"]').classList.contains('on') && !!doc.querySelector('#wizard [data-wzpreset="rapid"] .pc-check') &&
+     !doc.querySelector('#wizard [data-wz="next"]').disabled, 'picking a preset selects it, shows the check and enables Continue');
+  ok(state().meta.weeksPerSprint === 0 && state().meta.capacityEnabled && state().meta.title === 'Wizard project', 'the draft took the preset, and kept the name');
+  ok(doc.querySelectorAll('#wizard .wz-step[disabled]').length === 0, 'with a preset every step opens');
+  // Project in the wizard: work week and holidays fold into one summary row
+  ok(!doc.querySelector('#wizard #suWeekHours') && !!doc.querySelector('#wizard [data-wzexpand]'), 'work week and holidays fold into a summary row');
+  click(doc.querySelector('#wizard [data-wzexpand]'));
+  ok(!!doc.querySelector('#wizard #suWeekHours') && !!doc.querySelector('#wizard #suHolAddBtn'), 'Edit unfolds the full cards');
+  // Sprints: a preview strip of the next sprints, or a note when off
+  click(doc.querySelector('#wizard [data-wz="next"]'));
+  ok(/No sprint numbers on the timeline/.test(doc.querySelector('#wizard').textContent), 'sprints off: the step says what that means');
+  click(doc.querySelector('#wizard [data-suwps="3"]'));
+  ok(state().meta.weeksPerSprint === 3 && doc.querySelectorAll('#wizard .su-spr').length === 6, 'sprints on: six upcoming sprints preview');
+  click(doc.querySelector('#wizard [data-wzgo="project"]'));
+  click(doc.querySelector('#wizard [data-wzpreset="scrum"]'));
+  ok(state().meta.weeksPerSprint === 2 && state().meta.title === 'Wizard project', 'switching preset rewrites its own fields only');
+  window.HeadwayApp.wizard.go('review');
+  const rows = doc.querySelectorAll('#wizard .wz-sum [data-wzgo]');
+  ok(rows.length === 8, 'review lists the eight sections with Edit');
+  ok(!/Views/.test(doc.querySelector('#wizard .wz-sum').textContent), 'no Views on review');
+  ok(/Wizard project/.test(doc.querySelector('#wizard .wz-sum').textContent) && /Scrum preset/.test(doc.querySelector('#wizard .wz-sum').textContent),
+    'review shows the name and preset');
+  ok(doc.querySelector('#wizard [data-wz="next"]').textContent.trim() === 'Create project', 'the last step creates');
+  click(rows[1]);
+  ok(doc.querySelector('#wizard .wz-step.on').dataset.wzgo === 'sprints', 'Edit jumps back to that section');
+  window.HeadwayApp.wizard.close(true);
+  if (savedName) window.localStorage.setItem('headway-user-v1', savedName);
+  if (savedTheme) window.localStorage.setItem('headway-theme-v1', savedTheme); else window.localStorage.removeItem('headway-theme-v1');
+  window.localStorage.setItem('headway-onboarded-v1', '1');
+}
+// ---------------------------------------------------------------- wizard: the open document is safe while it is up
+{
+  const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  window.localStorage.setItem('headway-onboarded-v1', '1');
+  const realTitle = state().meta.title;
+  // a half-typed panel field lands in the open document, not the draft
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+  const it0 = state().items.find((i) => !i.milestone);
+  window.__headway.selectItem(it0.id);
+  const nameTa = doc.querySelector('#panel textarea[data-f="feature"]');
+  nameTa.focus(); nameTa.value = 'Typed before the wizard';
+  window.HeadwayApp.wizard.open();
+  window.HeadwayApp.wizard.close(true);
+  ok(state().items.find((i) => i.id === it0.id).feature === 'Typed before the wizard', 'an in-progress panel edit is kept when the wizard opens');
+  undo();
+  // the AI / Jira hooks act on the open document, never the draft
+  window.HeadwayApp.wizard.open();
+  const draftTitle = state().meta.title;
+  ok(window.HeadwayApp.ai.state().meta.title === realTitle, 'ai.state() reads the open document while the wizard is up');
+  window.HeadwayApp.ai.commit('ai edit under wizard', (s) => { s.meta.vision = 'From the assistant'; });
+  ok(state().meta.title === draftTitle && state().meta.vision !== 'From the assistant', 'ai.commit leaves the draft alone');
+  // native menus are inert while the wizard is up
+  ok(['macApp', 'edit', 'view'].every((n) => window.HeadwayApp.menuItems(n).every((m) => m.sep || m.disabled)), 'every native menu item is disabled');
+  // closing the window / switching documents asks about the wizard first
+  const ti = doc.querySelector('#wizard #suTitle'); ti.value = 'Draft to discard'; ti.dispatchEvent(new window.Event('change', { bubbles: true }));
+  let proceeded = false;
+  window.HeadwayApp.guardUnsaved(() => { proceeded = true; });
+  ok(/Discard this new project/.test(doc.querySelector('#modalHost').textContent), 'guardUnsaved asks about the wizard draft first');
+  click(doc.querySelector('#modalHost [data-m="ok"]'));
+  ok(!window.HeadwayApp.wizard.isOpen(), 'discarding closes the wizard');
+  if (!proceeded) {
+    ok(new RegExp(realTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(doc.querySelector('#modalHost').textContent), 'then the unsaved-changes question names the open document');
+    click(doc.querySelector('#modalHost [data-m="cancel"]'));
+  }
+  ok(state().meta.vision === 'From the assistant', 'the assistant\'s edit landed in the open document');
+  undo();
+  ok(state().meta.vision !== 'From the assistant', 'and it undoes like any edit');
+  // from the start page the wizard still gets the app top bar
+  doc.body.classList.add('start');
+  window.HeadwayApp.wizard.open();
+  ok(!doc.body.classList.contains('start'), 'opened from the start page, the wizard keeps the top bar (start page class lifted)');
+  window.HeadwayApp.wizard.close(true);
+  ok(doc.body.classList.contains('start'), 'closing returns to the start page');
+  doc.body.classList.remove('start');
+}
+// ---------------------------------------------------------------- Organization columns, size reset, Jira label, preset keys
+{
+  const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  suTab('org');
+  ok(doc.querySelectorAll('#setupView .su-org > .su-org-col').length === 3, 'Organization: Phases, Workstreams and Epics side by side');
+  const nPh = state().phases.length;
+  doc.querySelector('#suPhAddIn').value = 'Alpha\n\n  Beta  \nAlpha';
+  click(doc.querySelector('#suPhAddBtn'));
+  ok(state().phases.length === nPh + 2 && state().phases.slice(-2).map((p) => p.name).join() === 'Alpha,Beta', 'a pasted list adds one phase per line (blank and repeated lines skipped)');
+  if (!state().meta.workstreamsEnabled) { const we = doc.querySelector('#suWsEnable'); we.checked = true; we.dispatchEvent(new window.Event('change', { bubbles: true })); }
+  doc.querySelector('#suWsAdd').value = 'Stream one\nStream two';
+  click(doc.querySelector('#suWsAddBtn'));
+  ok(!!state().wsColors['Stream one'] && !!state().wsColors['Stream two'], 'a pasted list adds one workstream per line');
+  doc.querySelector('#suEpAdd').value = 'Epic one\nEpic two';
+  click(doc.querySelector('#suEpAddBtn'));
+  ok(!!doc.querySelector('#setupView [data-suepedit="Epic one"]') && !!doc.querySelector('#setupView [data-suepedit="Epic two"]'), 'epics can be added before any item uses them');
+  const reopened = window.RM.normalizeState(JSON.parse(JSON.stringify(state())));
+  ok(reopened.epicList.indexOf('Epic two') !== -1, 'added epics survive a reload');
+  undo(); undo(); undo();
+  ok(state().phases.length === nPh, 'the adds undo');
+  // size scales: Custom remembers its scheme and resets to it
+  suTab('est');
+  pickScheme('size', 'feature', 'fibonacci');
+  ok(!doc.querySelector('#setupView [data-suszreset]:not([data-kind])'), 'no Reset while the scale is the scheme\'s own');
+  const lbl = doc.querySelector('#setupView [data-suszlabel="13"]:not([data-kind])');
+  lbl.value = '21'; lbl.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ok(state().meta.sizeScheme === 'custom' && state().meta.sizeSchemeBase === 'fibonacci', 'editing marks it Custom and remembers the scheme');
+  const rst = doc.querySelector('#setupView [data-suszreset]:not([data-kind])');
+  ok(!!rst && /Story points|Fibonacci/i.test(rst.textContent), 'Reset names the scheme');
+  click(rst);
+  ok(state().meta.sizeScheme === 'fibonacci' && state().meta.sizeOrder.indexOf('13') !== -1 && state().meta.sizeOrder.indexOf('21') === -1, 'Reset puts the scheme\'s scale back');
+  undo(); undo(); undo();
+  // Jira Integration keeps a note that the mapping lives in the project
+  suTab('jira');
+  ok(/Saved in this project/.test(doc.querySelector('#setupView').textContent), 'Jira mapping says it is saved in this project');
+  // preset cards: arrow keys move the choice (radio group)
+  window.HeadwayApp.wizard.open();
+  const cards = () => [...doc.querySelectorAll('#wizard [data-wzpreset]')];
+  ok(cards()[0].tabIndex === 0 && cards().slice(1).every((c) => c.tabIndex === -1), 'one tab stop in the preset group');
+  cards()[0].focus();
+  cards()[0].dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+  ok(state().meta.preset === 'ascrum' && doc.activeElement === doc.querySelector('#wizard [data-wzpreset="ascrum"]'), 'ArrowRight picks and focuses the next preset');
+  doc.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+  doc.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+  ok(state().meta.preset === 'minimal', 'arrows wrap around');
+  window.HeadwayApp.wizard.go('sprints');
+  ok(doc.querySelector('#wzTopStep').textContent === 'Step 2 of 9', 'the top bar step follows');
+  window.HeadwayApp.wizard.close(true);
+  ok(!doc.querySelector('#wzTopStep'), 'and leaves with the wizard');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
+// ---------------------------------------------------------------- Setup → Scheduling roles + explainer, column delete
+{
+  const undo = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+  suTab('scheduling');
+  ok(!doc.querySelector('#setupView [data-sucaprow]'), 'no Tracked checkboxes');
+  ok(!/Tracked/.test(doc.querySelector('#setupView').textContent), 'no "Tracked" copy');
+  const t = state().capTypes[0];
+  const addRole = doc.querySelector('#setupView [data-suroleadd="' + t + '"]');
+  ok(!!addRole && doc.querySelectorAll('#setupView [data-suroleadd]').length === state().capTypes.length, 'each capacity type row has + Role');
+  click(addRole);
+  const roleBtn = [...doc.querySelectorAll('#popover .menu-list button')].find((b) => b.textContent.indexOf(state().teamTypes[0]) !== -1);
+  ok(!!roleBtn, '+ Role lists the roles');
+  const role = state().teamTypes[0];
+  click(roleBtn);
+  ok(state().roleCapTypes[role] === t, 'role → type saved');
+  ok(state().team.filter(m => m.type === role).every(m => m.capType === t), 'people follow their role');
+  ok(!!doc.querySelector('#setupView [data-surolerm="' + role + '"]') &&
+    doc.querySelector('#setupView [data-surolerm="' + role + '"]').closest('.su-row').dataset.key === t, 'the role shows as a Supplied by chip on its type');
+  click(doc.querySelector('#setupView [data-surolerm="' + role + '"]'));
+  ok(!state().roleCapTypes[role], 'the chip\'s × stops the role supplying it');
+  undo();
+  ok(/How scheduling works/.test(doc.querySelector('#setupView').textContent), 'explainer card present');
+  undo();
+
+  suTab('columns');
+  doc.querySelector('#suColAdd').value = 'Delete me';
+  click(doc.querySelector('#suColAddBtn'));
+  const dels = [...doc.querySelectorAll('#setupView [data-sucoldel]')];
+  ok(dels.length === doc.querySelectorAll('#setupView [data-sulist="scol"] .su-row').length && dels.filter(b => b.disabled).length > 0,
+    'every column shows a delete; built-ins show it disabled');
+  const live = dels.find(b => !b.disabled && state().meta.scopeCols.some(c => c.key === b.dataset.sucoldel && c.label === 'Delete me'));
+  const k = live.dataset.sucoldel;
+  click(live);
+  ok(!state().meta.scopeCols.some(c => c.key === k), 'deleting a custom column removes it');
+  undo(); undo();
+  ok(!state().meta.scopeCols.some(c => c.label === 'Delete me'), 'column add and delete undo');
+  click(doc.querySelector('#viewTabs [data-view="planning"]'));
+}
 ok(doc.querySelectorAll('#resGrid .rrow[data-mid]').length === 1, 'resource row rendered for the member');
 ok(doc.querySelectorAll('#resGrid .rh').length === 48, 'hour cells for every week (default 40h)');
 // spreadsheet edit: click a cell, type 24, commit
@@ -1420,7 +1717,7 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
 // ---------------------------------------------------------------- epics in Setup
 {
   click(doc.querySelector('#btnSetup'));
-  suTab('workstreams');
+  suTab('org');
   ok(doc.querySelectorAll('#setupView [data-suepedit]').length > 0, 'Setup lists epics with edit controls');
   click(doc.querySelector('#setupView [data-suepedit]'));
   ok(!doc.querySelector('#modalHost').hidden, 'epic edit modal opens from Setup');
@@ -1431,7 +1728,9 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
 // ---------------------------------------------------------------- hierarchy card in Setup
 {
   click(doc.querySelector('#btnSetup'));
-  suTab('workstreams');
+  suTab('org');
+  ok(!doc.querySelector('#suHierAdd') && !!doc.querySelector('#setupView [data-suhieropen]'), 'Levels & item types starts collapsed');
+  click(doc.querySelector('#setupView [data-suhieropen]'));
   const card = [...doc.querySelectorAll('#setupView .su-card h2')].find(h => h.textContent === 'Hierarchy');
   ok(!!card, 'Hierarchy card renders in the Workstreams tab');
   const bugChip = doc.querySelector('button[data-suhtype="feature:bug"]');
@@ -1466,7 +1765,7 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
 // ---------------------------------------------------------------- level labels drive prominent UI strings
 {
   click(doc.querySelector('#btnSetup'));
-  suTab('workstreams');
+  suTab('org');
   const sl = doc.querySelector('input[data-suhlabel="story"]');
   sl.value = 'Task'; sl.dispatchEvent(new window.Event('change', { bubbles: true }));
   const fl = doc.querySelector('input[data-suhlabel="feature"]');
@@ -1482,7 +1781,7 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
   // reset the labels back to their defaults through Setup, since the inputs
   // do not survive the view switch
   click(doc.querySelector('#btnSetup'));
-  suTab('workstreams');
+  suTab('org');
   const fl2 = doc.querySelector('input[data-suhlabel="feature"]');
   fl2.value = 'Feature'; fl2.dispatchEvent(new window.Event('change', { bubbles: true }));
   const sl2 = doc.querySelector('input[data-suhlabel="story"]');
@@ -1519,7 +1818,7 @@ ok(!!doc.querySelector('#resGrid [data-bact="ws"]'), 'resource rows have a works
 // ---------------------------------------------------------------- capacity feature switch (Setup)
 {
   window.eval("document.querySelector('#btnSetup').click()");
-  suTab('capacity'); // the capacity switch lives on the Capacity tab
+  suTab('scheduling'); // the capacity switch lives on the Capacity tab
   const capChk = doc.querySelector('#suCapEnable');
   ok(capChk && capChk.checked, 'Setup capacity checkbox reflects the enabled fixture');
   capChk.checked = false;
@@ -2010,9 +2309,9 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 // ---------------------------------------------------------------- sizing approaches
 {
   click(doc.querySelector('#btnSetup'));
-  suTab('sizing');
-  ok(doc.querySelectorAll('#setupView .su-scheme').length >= 4, 'Sizing offers approach presets');
-  click(doc.querySelector('#setupView [data-suscheme="fibonacci"]'));
+  suTab('est');
+  ok(schemeOpts('size', 'feature').length >= 4, 'Sizing offers approach presets');
+  pickScheme('size', 'feature', 'fibonacci');
   ok(state().meta.sizeScheme === 'fibonacci' &&
     state().meta.sizeOrder.join(',') === '0.5,1,2,3,5,8,13',
     'Story points preset applies its scale');
@@ -2023,19 +2322,33 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   lblInp.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().meta.sizeScheme === 'custom' && state().meta.sizeOrder.indexOf('21') !== -1,
     'editing options flips the approach to Custom');
-  click(doc.querySelector('#setupView [data-suscheme="none"]'));
+  pickScheme('size', 'feature', 'none');
   ok(state().meta.sizeScheme === 'none' && state().meta.sizeOrder.length === 0, 'No sizing empties the scale');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
   ok(!doc.querySelector('#rows .row.item [data-act="size"]'), 'no size chips while sizing is off');
   ok(doc.body.classList.contains('no-size'), 'body carries the no-size flag');
   click(doc.querySelector('#btnSetup'));
-  click(doc.querySelector('#setupView [data-suscheme="tshirt"]'));
+  pickScheme('size', 'feature', 'tshirt');
   ok(state().meta.sizeOrder.join(',') === 'XS,S,M,L,XL', 'T-shirt preset restores the classic scale');
+}
+{
+  suTab('est');
+  const cells = doc.querySelectorAll('#setupView .su-grid select[data-suscheme-kind]');
+  ok(cells.length === 6, 'grid: size, priority, risk × feature, story');
+  ok(schemeOpts('prio', 'story').indexOf('rice') === -1, 'RICE is not offered for stories');
+  ok(schemeOpts('risk', 'story').indexOf('auto') === -1, 'Risk (auto) is not offered for stories');
+  const riskBefore = state().meta.storyRiskScheme;
+  pickScheme('risk', 'story', 'confidence');
+  ok(state().meta.storyRiskScheme === 'confidence', 'story risk scheme is set from the grid');
+  ok(doc.querySelectorAll('#setupView .su-chip').length > 0, 'priority / risk levels show as read-only chips');
+  ok(!doc.querySelector('#setupView .su-chip input'), 'chips are not editable');
+  ok(!!doc.querySelector('#setupView [data-susz]'), 'size options stay editable');
+  pickScheme('risk', 'story', riskBefore);
 }
 
 // ---------------------------------------------------------------- workstream feature toggle
 {
-  suTab('workstreams');
+  suTab('org');
   const wsChk = doc.querySelector('#suWsEnable');
   ok(!!wsChk && wsChk.checked, 'Workstreams tab offers the feature switch (on by default)');
   wsChk.checked = false;
@@ -2044,7 +2357,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
   ok(!doc.querySelector('#hdrSprints [data-col="workstream"]'), 'Scoping hides the Workstream column when off');
   click(doc.querySelector('#btnSetup'));
-  suTab('workstreams');
+  suTab('org');
   const wsChk2 = doc.querySelector('#suWsEnable');
   wsChk2.checked = true;
   wsChk2.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -2195,7 +2508,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 
 // default workstream: setup row + modal rename/recolor
 {
-  suTab('workstreams');
+  suTab('org');
   ok(!!doc.querySelector('#setupView .su-defws'), 'default workstream row leads the Workstreams tab');
   click(doc.querySelector('#setupView [data-sudefws]'));
   ok(!!doc.querySelector('#modalHost #dwsName'), 'default workstream modal opens');
@@ -2210,15 +2523,14 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 
 // risk scheme card: switching to MoSCoW relabels the scoping column
 {
-  suTab('sizing');
-  const riskCards = doc.querySelectorAll('#setupView [data-surisk]');
-  ok(riskCards.length === 4, 'four risk schemes offered (none, risk, auto, confidence)');
-  click(Array.from(riskCards).find(b => b.dataset.surisk === 'confidence'));
+  suTab('est');
+  ok(schemeOpts('risk', 'feature').length === 4, 'four risk schemes offered (none, risk, auto, confidence)');
+  pickScheme('risk', 'feature', 'confidence');
   ok(state().meta.riskScheme === 'confidence', 'Confidence scheme commits');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
   // scheme none removes the column
-  suTab('sizing');
-  click(Array.from(doc.querySelectorAll('#setupView [data-surisk]')).find(b => b.dataset.surisk === 'none'));
+  suTab('est');
+  pickScheme('risk', 'feature', 'none');
   ok(state().meta.riskScheme === 'none', 'scheme none commits');
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
   ok(!doc.querySelector('#rows .row.item .r-risk'), 'no assessment chips when the scheme is none');
@@ -2227,7 +2539,7 @@ ok(!doc.querySelector('#rows .ghost-pill'), 'no ghost pill on unscheduled rows')
 
 // role rename from Setup propagates everywhere
 {
-  suTab('team');
+  suTab('budget');
   const nameInp = doc.querySelector('#setupView [data-rcname]');
   ok(!!nameInp, 'role names are editable inputs');
   const oldRole = nameInp.dataset.rcname;
@@ -2624,11 +2936,10 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 }
 // ------------------------------------------------------- RICE priority scheme
 {
-  suTab('sizing');
-  const priCards = doc.querySelectorAll('#setupView [data-supri]:not([data-kind])');
-  ok(priCards.length === 4, 'four priority schemes (none, MoSCoW, levels, RICE)');
-  ok(doc.querySelectorAll('#setupView [data-supri][data-kind="story"]').length === 3, 'stories offer three (no RICE)');
-  click(Array.from(priCards).find(b => b.dataset.supri === 'rice'));
+  suTab('est');
+  ok(schemeOpts('prio', 'feature').length === 4, 'four priority schemes (none, MoSCoW, levels, RICE)');
+  ok(schemeOpts('prio', 'story').length === 3, 'stories offer three (no RICE)');
+  pickScheme('prio', 'feature', 'rice');
   ok(state().meta.priorityScheme === 'rice', 'RICE scheme commits');
   // prio cards now carry the priority chip; clicking it opens RICE dropdowns
   click(doc.querySelector('#viewTabs [data-view="prio"]'));
@@ -2679,10 +2990,9 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 // ---------------------------------------------------------------- batch 6: priority, story cells, columns tab
 {
   // priority column: enable MoSCoW in Setup, chip appears in Scoping
-  suTab('sizing');
-  const priCards = doc.querySelectorAll('#setupView [data-supri]:not([data-kind])');
-  ok(priCards.length === 4, 'four priority schemes (none, MoSCoW, levels, RICE)');
-  click(Array.from(priCards).find(b => b.dataset.supri === 'moscow'));
+  suTab('est');
+  ok(schemeOpts('prio', 'feature').length === 4, 'four priority schemes (none, MoSCoW, levels, RICE)');
+  pickScheme('prio', 'feature', 'moscow');
   ok(state().meta.priorityScheme === 'moscow', 'MoSCoW priority commits');
   click(doc.querySelector('#viewTabs [data-view="scoping"]'));
   ok(!!doc.querySelector('#hdrSprints [data-col="priority"]'), 'Priority column renders when enabled');
@@ -2735,7 +3045,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   click(doc.querySelector('#suColAddBtn'));
   ok(state().meta.scopeCols.some(c => c.label === 'Reviewer'), 'column added from Setup');
   const revKey = state().meta.scopeCols.find(c => c.label === 'Reviewer').key;
-  click(doc.querySelector('#setupView [data-sucolrm="' + revKey + '"]'));
+  click(doc.querySelector('#setupView [data-sucoldel="' + revKey + '"]'));
   ok(!state().meta.scopeCols.some(c => c.label === 'Reviewer'), 'column removed from Setup');
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
@@ -3213,7 +3523,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
 
   // the Workstream column follows the project-wide switch, like every other view
   click(doc.querySelector('#btnSetup'));
-  click(doc.querySelector('#setupView [data-sutab="workstreams"]'));
+  click(doc.querySelector('#setupView [data-sutab="org"]'));
   const plWsSw = doc.querySelector('#suWsEnable');
   plWsSw.checked = false;
   plWsSw.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -3221,7 +3531,7 @@ ok(typeof window.RM_EXPORT.toBlob === 'function', 'PNG export exposes a blob ren
   ok(!doc.querySelector('#hlCols i[data-plcol="ws"]') && !doc.querySelector('#rows .row.item .r-ws-col'),
     'Workstreams off hides the column even though it is switched on');
   click(doc.querySelector('#btnSetup'));
-  click(doc.querySelector('#setupView [data-sutab="workstreams"]'));
+  click(doc.querySelector('#setupView [data-sutab="org"]'));
   const plWsSw2 = doc.querySelector('#suWsEnable');
   plWsSw2.checked = true;
   plWsSw2.dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -4210,7 +4520,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   scopeSel.value = 'story';
   scopeSel.dispatchEvent(new window.Event('change', { bubbles: true }));
   ok(state().meta.scopeCols.find(c => c.key === zed.key).scope === 'story', 'Setup scope control commits');
-  click(doc.querySelector('#setupView [data-sucolrm="' + zed.key + '"]'));
+  click(doc.querySelector('#setupView [data-sucoldel="' + zed.key + '"]'));
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
 }
 
@@ -4394,12 +4704,12 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   click(doc.querySelector('#popover .menu-list [data-mi="0"]')); // back to Feature detail
   // Setup → Sizing: "Roll up from stories" leads the feature list, never the story list
   click(doc.querySelector('#btnSetup'));
-  suTab('sizing');
-  const featSchemes = [...doc.querySelectorAll('#setupView [data-suscheme]:not([data-kind="story"])')].map(b => b.dataset.suscheme);
-  ok(featSchemes[0] === 'rollup' && !doc.querySelector('#setupView [data-suscheme="rollup"][data-kind="story"]'),
+  suTab('est');
+  const featSchemes = schemeOpts('size', 'feature');
+  ok(featSchemes[0] === 'rollup' && schemeOpts('size', 'story').indexOf('rollup') === -1,
     'Roll up from stories is the first feature option and absent for stories');
   ok(state().meta.sizeScheme === 'tshirt', 'T-shirt sizes stay the default');
-  click(doc.querySelector('#setupView [data-suscheme="rollup"]'));
+  pickScheme('size', 'feature', 'rollup');
   ok(state().meta.sizeScheme === 'rollup' && !!doc.querySelector('#setupView .m-hint') && !doc.querySelector('#setupView [data-susz]:not([data-kind="story"])'),
     'picking it explains the rollup instead of a size-options table');
   window.HeadwayApp.ai.commit('size stories', (s) => {
@@ -4421,8 +4731,8 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   window.__headway.selectItem(hostF.id);
   ok(!!doc.querySelector('#panel .p-rollup') && !doc.querySelector('#panel [data-f="size"]'), 'the panel shows the rolled-up total instead of size buttons');
   click(doc.querySelector('#btnSetup'));
-  suTab('sizing');
-  click(doc.querySelector('#setupView [data-suscheme="tshirt"]:not([data-kind="story"])'));
+  suTab('est');
+  pickScheme('size', 'feature', 'tshirt');
   ok(state().meta.sizeScheme === 'tshirt' && state().items.every(i => !i.size), 'back on T-shirt sizes the derived sizes are cleared');
   undo(); undo(); undo();
   ok(state().meta.sizeScheme === 'tshirt' && state().items.some(i => i.size), 'undo restores the hand-picked sizes');
@@ -4436,7 +4746,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   ok(state().capTypes.slice(0, 3).join(',') === 'Development,Design,QA', 'a document starts with the default capacity types');
   // Setup → Capacity: capacity types list (rename / add / remove / reorder) + planning level + capacity row options
   click(doc.querySelector('#btnSetup'));
-  suTab('capacity');
+  suTab('scheduling');
   ok(doc.querySelectorAll('#setupView [data-sulist="captype"] .su-row').length === state().capTypes.length &&
     !!doc.querySelector('#setupView [data-sulist="captype"] .su-grip'), 'the Capacity tab lists the capacity types with reorder grips');
   doc.querySelector('#suCapTypeAdd').value = 'Research';
@@ -4484,7 +4794,9 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   const capChip = doc.querySelector('#rows [data-mid="' + person2.id + '"] [data-bact="cap"]');
   ok(!!capChip && capChip.textContent.trim() === 'Development', 'the Budgeting / Resources rows show a Capacity type chip');
   click(capChip);
-  ok(menuBtns().some(b => /Design/.test(b.textContent)) && menuBtns()[0].textContent.indexOf('general') !== -1, 'the chip picks from the capacity types (or general)');
+  ok(state().team[1].type ? menuBtns().length === 1 && /Setup › Scheduling/.test(menuBtns()[0].textContent)
+    : menuBtns().some(b => b.textContent.indexOf(state().teamTypes[0]) !== -1),
+    'the chip is read-only: it points to the role\'s type in Setup › Scheduling (or picks a role)');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   click(doc.querySelector('#viewTabs [data-view="planning"]'));
   window.__headway.selectItem(hostC.id);
@@ -4609,8 +4921,8 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     const bucketPhases = window.HeadwayApp.ai.state().phases.filter((p) => p.bucket);
     ok(realPhases.every((p) => !!zapOf(p.id)), 'every real phase band has an Auto timeline button');
     ok(bucketPhases.every((p) => !zapOf(p.id)), 'a backlog bucket has none');
-    ok(realPhases.every((p) => zapOf(p.id).disabled && /capacity planning/.test(zapOf(p.id).getAttribute('title') || zapOf(p.id).dataset.tip || '')),
-      'with capacity planning off every button is disabled and says why');
+    ok(realPhases.every((p) => zapOf(p.id).disabled && /scheduling/.test(zapOf(p.id).getAttribute('title') || zapOf(p.id).dataset.tip || '')),
+      'with scheduling off every button is disabled and says why');
     ok(!!zapOf(realPhases[0].id).querySelector('[data-lucide="zap"], svg'), 'the button carries the zap icon');
     const ph0 = realPhases[0].id;
     let lockedId = null, lockedStart = null;
@@ -4976,8 +5288,11 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
       'per-person mode shows the × seat chip and no points column');
     // untyped people supply nothing: a "set type" prompt instead of the chips
     window.HeadwayApp.ai.commit('untyped person', (s) => {
-      s.team[0].capType = ''; s.team[0].capacity = 2; s.team[0].points = 50;
+      s.team[0].capType = ''; s.team[0].type = ''; s.team[0].capacity = 2; s.team[0].points = 50;
       if (s.team[1]) s.team[1].capType = 'Development';
+      // a role that supplies Development, for the untyped person to pick
+      s.roleCapTypes = {}; s.roleCapTypes[s.teamTypes[0]] = 'Development';
+      if (s.team[1]) s.team[1].type = s.teamTypes[0];
     });
     const utId = state().team[0].id;
     const utRow = () => doc.querySelector('#resGrid .rrow[data-mid="' + utId + '"]');
@@ -5001,7 +5316,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     if (ptsInp) ptsInp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     // … and the type picker for an untyped person
     click(rowMenu(utRow(), /Capacity/));
-    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'for an untyped person Capacity… opens the type picker');
+    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'for an untyped person with no role Capacity… opens the role picker, showing each role\'s type');
     esc();
     undo();
     // the placeholder answers the keyboard too
@@ -5012,10 +5327,10 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'and so does Space');
     esc();
     click(utRow().querySelector('.res-untyped'));
-    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'the placeholder opens the capacity-type picker');
+    ok(menuBtns().some((b) => /Development/.test(b.textContent)), 'the placeholder opens the role picker');
     click(menuBtns().find((b) => /Development/.test(b.textContent)));
     ok(state().team[0].capType === 'Development' && !!utRow().querySelector('[data-rcap]') &&
-      /^2×$/.test(utRow().querySelector('[data-rcap]').textContent.trim()), 'picking a type brings back the kept × seat');
+      /^2×$/.test(utRow().querySelector('[data-rcap]').textContent.trim()), 'picking a role brings its type and the kept × seat');
     undo(); undo();
     undo();
     window.HeadwayApp.ai.commit('cap off', (s) => { s.meta.capacityEnabled = false; });
@@ -5196,12 +5511,12 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     window.RM.sizeOrderOf(state()).join(',') !== window.RM.sizeOrderOf(state(), 'story').join(','),
     'the story scale is separate from the feature scale');
   click(doc.querySelector('#btnSetup'));
-  suTab('sizing');
-  ok(!!doc.querySelector('#setupView [data-suscheme="tshirt"][data-kind="story"]'), 'Setup → Sizing offers a story scale picker');
-  click(doc.querySelector('#setupView [data-suscheme="tshirt"][data-kind="story"]'));
+  suTab('est');
+  ok(schemeOpts('size', 'story').indexOf('tshirt') !== -1, 'Setup → Sizing offers a story scale picker');
+  pickScheme('size', 'story', 'tshirt');
   ok(state().meta.storySizeScheme === 'tshirt' && state().meta.sizeScheme !== 'none' &&
     window.RM.sizeOrderOf(state(), 'story').indexOf('XL') !== -1, 'picking a story scale leaves the feature scale alone');
-  click(doc.querySelector('#setupView [data-supri="moscow"][data-kind="story"]'));
+  pickScheme('prio', 'story', 'moscow');
   ok(state().meta.storyPriorityScheme === 'moscow' && state().meta.priorityScheme !== 'moscow',
     'story priority scheme is independent of the feature scheme');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
@@ -5268,7 +5583,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
   click(doc.querySelector('#setupView [data-pref-snap="story:sprint"]'));
 
   // holidays edit in place
-  suTab('timeline');
+  suTab('project');
   {
     const nm = doc.querySelector('#setupView [data-suholname="0"]');
     ok(!!nm && !!doc.querySelector('#setupView [data-suholstart="0"]'), 'holiday rows expose name + date inputs');
@@ -5300,7 +5615,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     const usedRole = state().teamTypes[0];
     ok(state().items.find(i => i.id === roleRow.dataset.id).teamType === usedRole, 'a feature now carries a role');
     click(doc.querySelector('#btnSetup'));
-    suTab('team');
+    suTab('budget');
     click(doc.querySelector('#setupView [data-suttrm="' + usedRole + '"]'));
     ok(state().teamTypes.indexOf(usedRole) === -1, 'an in-use role can be removed');
     ok(!state().team.some(m => m.type === usedRole) && !state().items.some(i => i.teamType === usedRole),
@@ -5412,7 +5727,7 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
     ok(window.RM.colorMode() === 'workstream', 'the prefs segment switches back');
     // Hierarchy card: a color input per type commits the type color
     click(doc.querySelector('#btnSetup'));
-    click(doc.querySelector('#setupView [data-sutab="workstreams"]'));
+    click(doc.querySelector('#setupView [data-sutab="org"]'));
     const cin = doc.querySelector('#setupView input[type="color"][data-suhtcolor="bug"]');
     ok(!!cin, 'Hierarchy types table has a color input per type');
     cin.value = '#112233';
@@ -5738,9 +6053,10 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
       !hd().classList.contains('over'), 'points capacity with a non-numeric story scheme: the plain count, no "0 / Y"');
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
     window.HeadwayApp.ai.commit('sprints off', (s) => { s.meta.weeksPerSprint = 0; });
-    ok([...doc.querySelectorAll('#sprintView .spv-ct')].every((c) => c.textContent.indexOf('/') === -1),
-      'with sprints off no total reads X / Y');
+    ok(doc.body.dataset.view === 'planning' && doc.querySelector('#viewTabs [data-view="sprints"]').hidden,
+      'with sprints off Sprinting hides and the view falls back to Planning');
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+    window.HeadwayApp.ai.setView('sprints');
     window.HeadwayApp.ai.commit('person mode', (s) => { s.meta.capMode = 'person'; });
     ok(/^\d+(\.\d)? pt$/.test(hd().textContent.trim()) && !hd().classList.contains('over'),
       'per-person mode: the heading shows just the points total');
@@ -6353,6 +6669,22 @@ tagFilterChecks().then(manualOrderRoundTrip).catch((e) => {
         'story numbers survive an xlsx round trip');
     });
 }).then(() => {
+  // the desktop file watcher reloading the open file while the wizard is up:
+  // the stashed document takes the reload, the draft and the wizard stay
+  window.localStorage.setItem('headway-onboarded-v1', '1');
+  const onDisk = window.RM.clone(state());
+  onDisk.meta.title = 'Reloaded under wizard';
+  window.HeadwayApp.wizard.open();
+  const draftTitle = state().meta.title;
+  return window.RMExcel.exportWorkbook(onDisk)
+    .then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
+    .then((ab) => window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), 'Reloaded under wizard.xlsx', true))
+    .then(() => {
+      ok(window.HeadwayApp.wizard.isOpen() && state().meta.title === draftTitle, 'a disk reload leaves the wizard and its draft alone');
+      window.HeadwayApp.wizard.close(true);
+      ok(state().meta.title === 'Reloaded under wizard', 'closing the wizard shows the reloaded document');
+    });
+}).then(() => {
   // opening a document lays nothing out until someone clicks Auto timeline,
   // and auto-order is a render-time sort: the rows read in start order on
   // screen while the document's own order (and saved state) is untouched
@@ -6475,6 +6807,95 @@ tagFilterChecks().then(manualOrderRoundTrip).catch((e) => {
   ok(/⌘\+/.test(doc.querySelector('#modalHost').textContent) && /⌘−/.test(doc.querySelector('#modalHost').textContent),
     'the help dialog mentions ⌘+ / ⌘−');
   window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+}).then(() => {
+  // a reload under the wizard is a real reload: no undo back into the old copy
+  window.HeadwayApp.ai.commit('local edit', (s) => { s.meta.vision = 'LOCAL'; });
+  const onDisk = window.RM.clone(state());
+  onDisk.meta.vision = 'REMOTE';
+  window.HeadwayApp.wizard.open();
+  return window.RMExcel.exportWorkbook(onDisk)
+    .then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
+    .then((ab) => window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), state().meta.title + '.xlsx', true))
+    .then(() => {
+      window.HeadwayApp.wizard.close(true);
+      ok(state().meta.vision === 'REMOTE', 'the reloaded document comes back');
+      window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true }));
+      ok(state().meta.vision === 'REMOTE', 'and Undo cannot step back past the reload');
+    });
+}).then(() => {
+  // Create that fails (or a canceled Save dialog) keeps the draft: back at Review
+  window.localStorage.removeItem('headway-onboarded-v1');
+  window.localStorage.setItem('headway-user-v1', 'Probe');
+  const realExport = window.RMExcel.exportWorkbook;
+  window.RMExcel.exportWorkbook = () => Promise.reject(new Error('disk full'));
+  window.HeadwayApp.wizard.open();
+  const t = doc.querySelector('#wizard #suTitle'); t.value = 'Keep me on failure'; t.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#wizard [data-wzpreset="minimal"]'));
+  window.HeadwayApp.wizard.go('review');
+  click(doc.querySelector('#wizard [data-wz="next"]'));
+  return new Promise((res) => setTimeout(res, 50)).then(() => {
+    window.RMExcel.exportWorkbook = realExport;
+    ok(window.HeadwayApp.wizard.isOpen() && state().meta.title === 'Keep me on failure' && state().meta.preset === 'minimal' &&
+      doc.querySelector('#wizard .wz-step.on').dataset.wzgo === 'review', 'a failed Create reopens the wizard at Review with the draft');
+    ok(!window.localStorage.getItem('headway-onboarded-v1'), 'and does not mark onboarding done');
+    window.HeadwayApp.wizard.close(true);
+    window.localStorage.setItem('headway-onboarded-v1', '1');
+  });
+}).then(() => {
+  // Create: the draft becomes the open project (browser path: a download)
+  if (!window.URL.createObjectURL) window.URL.createObjectURL = () => 'blob:probe';
+  if (!window.URL.revokeObjectURL) window.URL.revokeObjectURL = () => {};
+  window.HeadwayApp.wizard.open();
+  const t = doc.querySelector('#wizard #suTitle'); t.value = 'Made by wizard'; t.dispatchEvent(new window.Event('change', { bubbles: true }));
+  click(doc.querySelector('#wizard [data-wzpreset="ascrum"]'));
+  window.HeadwayApp.wizard.go('review');
+  click(doc.querySelector('#wizard [data-wz="next"]'));
+  ok(!window.HeadwayApp.wizard.isOpen(), 'Create closes the wizard');
+  const until = (fn, ms) => new Promise((res) => { const t0 = Date.now(); (function poll() { if (fn() || Date.now() - t0 > ms) res(); else setTimeout(poll, 25); })(); });
+  return until(() => state().meta.title === 'Made by wizard', 5000).then(() => {
+    ok(state().meta.title === 'Made by wizard' && state().meta.preset === 'ascrum' && state().meta.riskScheme === 'risk' && state().meta.storyRiskScheme === 'risk',
+      'the created project is the draft, preset and all');
+    ok(window.localStorage.getItem('headway-onboarded-v1') === '1', 'after the first Create, Welcome is not shown again');
+  });
+}).then(() => {
+  // an older file (no role → type map): roles take their people's most common
+  // type, and the open says how many people moved
+  const old = window.RM.clone(state());
+  delete old.roleCapTypes;
+  old.teamTypes = ['Engineer'];
+  old.capTypes = ['Development', 'Design'];
+  old.team = [
+    { id: 'rA', name: 'A', type: 'Engineer', capType: 'Development', weekHours: {} },
+    { id: 'rB', name: 'B', type: 'Engineer', capType: 'Development', weekHours: {} },
+    { id: 'rC', name: 'C', type: 'Engineer', capType: 'Design', weekHours: {} },
+    { id: 'rD', name: 'D', type: '', capType: 'Design', weekHours: {} }
+  ];
+  [...doc.querySelectorAll('#toasts .toast')].forEach((t) => t.remove());
+  return window.RMExcel.exportWorkbook(old)
+    .then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
+    .then((ab) => window.HeadwayApp.loadBuffer(Buffer.from(new Uint8Array(ab)), 'Roles.xlsx'))
+    .then(() => {
+      ok(state().roleCapTypes.Engineer === 'Development' && state().team.map((m) => m.capType).join() === 'Development,Development,Development,Design',
+        'on open: the role takes its majority type; a person with no role keeps theirs');
+      ok([...doc.querySelectorAll('#toasts .toast')].some((t) => /1 person now takes the capacity type of their role/.test(t.textContent)),
+        'on open: a toast says how many people changed type');
+      return window.RMExcel.exportWorkbook(old).then((b) => (b.arrayBuffer ? b.arrayBuffer() : b))
+        .then((ab) => window.RMExcel.importWorkbook(Buffer.from(new Uint8Array(ab))))
+        .then((r) => ok(r.capTypeChanges === 1, 'the import result carries how many people changed type'));
+    }).then(() => {
+      // a browser session restored from this machine's local copy says so too
+      const dom2 = new JSDOM(html, { url: 'http://localhost/roadmapping/index.html', runScripts: 'outside-only', pretendToBeVisual: true });
+      const w2 = dom2.window;
+      w2.ExcelJS = ExcelJS;
+      w2.localStorage.setItem('headway-v1', JSON.stringify(old));
+      w2.localStorage.setItem('headway-user-v1', 'Probe');
+      for (const f of ['js/core.js', 'js/excel.js', 'js/export-png.js', 'js/export-pptx.js', 'js/export-jira.js', 'js/jira.js', 'js/ai.js', 'js/app.js']) {
+        w2.eval(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+      }
+      ok([...w2.document.querySelectorAll('#toasts .toast')].some((t) => /1 person now takes the capacity type of their role/.test(t.textContent)),
+        'restoring the local copy: the same toast');
+      w2.close();
+    });
 }).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);

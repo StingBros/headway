@@ -81,7 +81,7 @@
   var plColOrder = null;     // planning left-pane column order
   var plColHide = {};        // planning left-pane columns hidden
   var autoOrder = true;      // after move/resize, reorder rows by start day (stable)
-  var setupTab = 'timeline';   // active vertical tab in the Setup view
+  var setupTab = 'project';    // active section in the Setup view
   var filterText = '';       // planning/scoping row filter (⌘F); transient
   var multiSel = null;       // multi-selection: item ids (null = single-select mode; selectedId stays the anchor)
   var docSaved = false;      // doc matches its last save/open (Save button shows ✓)
@@ -248,7 +248,7 @@
     panelW = ui.panelW > 280 ? ui.panelW : 372;
     repCollapsed = ui.repCollapsed !== false; // default collapsed
     repMode = ['workstream', 'phase', 'phase-ws'].indexOf(ui.repMode) !== -1 ? ui.repMode : 'workstream';
-    setupTab = typeof ui.setupTab === 'string' ? ui.setupTab : 'timeline';
+    setupTab = normSetupTab(typeof ui.setupTab === 'string' ? ui.setupTab : 'project');
     panelOpen = ui.panelOpen !== false; // panel is persistent by default
     leftCollapsed = ui.leftCollapsed === true;
     prioGroup = ['ws', 'epic'].indexOf(ui.prioGroup) !== -1 ? ui.prioGroup : 'none';
@@ -275,6 +275,7 @@
   var localSaveBroken = false;
   function saveLocal() {
     if (readOnly) return; // the exported copy never writes the viewer's storage
+    if (wz) return; // the new-project wizard's draft is never stored
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(state));
       localStorage.setItem(UI_KEY, JSON.stringify(uiSnapshot()));
@@ -296,11 +297,20 @@
     }
   }
 
+  // people now take their role's capacity type: say so when that moved anyone
+  function capTypeToast(n) {
+    if (n > 0) toast(n + (n === 1 ? ' person now takes' : ' people now take') + ' the capacity type of their role \u2014 check Setup \u203a Scheduling');
+  }
+  var localCapTypeChanges = 0; // set by loadLocal, announced once the app is up
   function loadLocal() {
     try {
       applyUi(JSON.parse(localStorage.getItem(UI_KEY) || 'null'));
       var raw = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
-      if (raw && raw.items) return RM.normalizeState(raw);
+      if (raw && raw.items) {
+        var restored = RM.normalizeState(raw);
+        localCapTypeChanges = RM.lastCapTypeChanges || 0;
+        return restored;
+      }
     } catch (e) { /* corrupted local copy — fall back to seed */ }
     return null;
   }
@@ -596,7 +606,7 @@
   }
   // { disabled, tip } for the band button, the band menu entry and the dialog
   function autoPhaseStatus(phaseId) {
-    if (!state.meta.capacityEnabled) return { disabled: true, tip: 'Turn on capacity planning in Setup \u2192 Capacity' };
+    if (!state.meta.capacityEnabled) return { disabled: true, tip: 'Turn on scheduling in Setup \u2192 Scheduling' };
     var ph = state.phases.filter(function (p) { return p.id === phaseId; })[0];
     if (!ph || ph.bucket) return { disabled: true, tip: 'A backlog bucket is never auto-scheduled' };
     if (!autoPhaseDryRun(phaseId).changed) return { disabled: true, tip: 'Everything in this phase is already in place' };
@@ -672,6 +682,8 @@
   }
   function commit(label, mutate) {
     if (readOnly) { viewOnlyToast(); return; }
+    // the new-project wizard edits a draft: no undo, history or saving
+    if (wz) { if (mutate) mutate(state); wz.dirty = true; RM.applySizeRollup(state); renderWizard(); return; }
     var prev = JSON.stringify(state);
     undoStack.push(prev);
     if (undoStack.length > 120) undoStack.shift();
@@ -686,6 +698,7 @@
   }
   function replaceState(label, next) {
     if (readOnly) { viewOnlyToast(); return; }
+    if (wz) { state = next; wz.dirty = true; renderWizard(); return; }
     var prev = JSON.stringify(state);
     undoStack.push(prev);
     if (undoStack.length > 120) undoStack.shift();
@@ -717,7 +730,7 @@
   // the first change someone saves (autosave included) must carry an author:
   // ask for their name once, and stamp this session's anonymous entries
   function maybeAskName() {
-    if (userName() || namePromptShown) return;
+    if (wz || userName() || namePromptShown) return;
     namePromptShown = true;
     openModal(
       '<div class="modal" style="width:420px">' +
@@ -755,13 +768,13 @@
       });
   }
   function undo() {
-    if (!undoStack.length) return;
+    if (wz || !undoStack.length) return;
     redoStack.push(JSON.stringify(state));
     state = JSON.parse(undoStack.pop());
     afterChange();
   }
   function redo() {
-    if (!redoStack.length) return;
+    if (wz || !redoStack.length) return;
     undoStack.push(JSON.stringify(state));
     state = JSON.parse(redoStack.pop());
     afterChange();
@@ -788,7 +801,7 @@
   // changed get a new timestamp), tombstone deletes, hand the batch to the
   // desktop shell (read-merge-write per shard), then write our history lines.
   function scheduleBundleFlush() {
-    if (docKind !== 'bundle' || planGone || detached) return;
+    if (docKind !== 'bundle' || planGone || detached || wz) return;
     clearTimeout(bundleFlushTimer);
     bundleFlushTimer = setTimeout(function () { flushBundle(); }, 1500);
   }
@@ -871,7 +884,8 @@
   }
   function runFlush() {
     // detached: the edits stay pending (docSaved false) until the folder is back or Save as…
-    if (docKind !== 'bundle' || !window.HeadwayDesktop || !bundleDir || planGone || detached) return Promise.resolve();
+    // the wizard: `state` is its draft — the project's edits wait until it closes
+    if (docKind !== 'bundle' || !window.HeadwayDesktop || !bundleDir || planGone || detached || wz) return Promise.resolve();
     // captured at START: this flush lands in this folder/plan even if the
     // document is swapped before it completes
     var dir = bundleDir, pid = activePlanId, uid = userId(), gen = flushGen;
@@ -1005,8 +1019,10 @@
   // Any drag holds every peer change until pointer-up: a peer's row landing
   // mid-drag re-renders the rows under the pointer (row, grip, fill, marquee
   // and pan drags index the rendered rows), not just the dragged entity's.
+  // The new-project wizard holds a DRAFT in `state`: peer changes wait for
+  // it to close too (they belong to the document stashed behind it).
   function dragTouches() {
-    return !!drag;
+    return !!drag || !!wz;
   }
   // opts.merged: env already IS the disk truth (from flushShards) — skip the
   // merge with our base
@@ -1151,7 +1167,7 @@
   function drainDeferred() {
     if (!deferredExternal.length) return;
     setTimeout(function () {
-      if (drag || !deferredExternal.length) return;
+      if (drag || wz || !deferredExternal.length) return;
       var held = deferredExternal;
       deferredExternal = [];
       applyEnvelopes(held);
@@ -1188,6 +1204,7 @@
   // document; closeBundleSession flushes and forgets the folder.
   function adoptBundle(res, opts) {
     opts = opts || {};
+    if (wz) closeWizard(true); // opening a project ends the wizard (its stash is not this document)
     var dir = HeadwayDesktop.bundleDir();
     clearTimeout(bundleFlushTimer);
     docKind = 'bundle';
@@ -1555,7 +1572,7 @@
   // the project has ONE name: headway.json's title = the marker's title = the
   // folder. With one plan the title field edits it; with several, Setup's
   // Project name does and plan titles are labels
-  function severalPlans() { return docKind === 'bundle' && livePlans().length > 1; }
+  function severalPlans() { return !wz && docKind === 'bundle' && livePlans().length > 1; }
   function projectName() {
     return (docKind === 'bundle' && window.HeadwayDesktop && HeadwayDesktop.projectTitle && HeadwayDesktop.projectTitle()) ||
       (state && state.meta.title) || 'Roadmap';
@@ -2676,13 +2693,13 @@
   function scopeFixedCols() {
     return SCOPE_FIXED.filter(function (c) {
       if (c[0] === 'size') return RM.sizingEnabled(state);
-      if (c[0] === 'risk') return RM.riskEnabled(state);
+      if (c[0] === 'risk') return RM.riskEnabled(state) || RM.riskEnabled(state, 'story');
       if (c[0] === 'priority') return RM.priorityEnabled(state);
       if (c[0] === 'workstream') return state.meta.workstreamsEnabled;
       return true;
     }).map(function (c) {
       if (c[0] !== 'risk') return c;
-      return [c[0], RM.riskColLabel(state), c[2], c[3]];
+      return [c[0], RM.riskColLabel(state, RM.riskEnabled(state) ? 'feature' : 'story'), c[2], c[3]];
     });
   }
   // human labels for the assessment column's one-letter values, per scheme
@@ -2714,8 +2731,8 @@
     return t === -1 ? RM.PALETTE.neutral : RM.PRIORITY_RAMP[t];
   }
 
-  function riskValueLabel(v) {
-    var mp = RISK_VALUE_LABELS[RM.riskSchemeOf(state)] || {};
+  function riskValueLabel(v, kind) {
+    var mp = RISK_VALUE_LABELS[RM.riskSchemeOf(state, kind)] || {};
     return mp[v] || v || '';
   }
   // profile avatar: deterministic color + initials. Name, free-text role, and
@@ -2875,6 +2892,7 @@
   }
 
   function render() {
+    if (wz) { renderWizard(); return; } // the app behind the wizard waits
     renderCount++;
     presenceTouch(); // every selection change renders; the write itself is throttled
     var sx = board.scrollLeft, sy = board.scrollTop;
@@ -3368,11 +3386,11 @@
       })));
   }
   function storyRiskMenu(anchor, itemId, stId) {
-    if (RM.riskSchemeOf(state) === 'auto') return; // computed for features only
+    if (!RM.riskEnabled(state, 'story')) return;
     var cur = (storyById(RM.itemById(state, itemId) || {}, stId) || {}).risk;
     openDropdown(anchor, [{ label: '<i>None</i>', checked: !cur, fn: function () { setStoryRisk(itemId, stId, null); } }]
-      .concat(RM.riskOrderOf(state).map(function (rv) {
-        return { icon: LEVEL_GLYPHS[rv], label: esc(riskValueLabel(rv)), checked: cur === rv,
+      .concat(RM.riskOrderOf(state, 'story').map(function (rv) {
+        return { icon: LEVEL_GLYPHS[rv], label: esc(riskValueLabel(rv, 'story')), checked: cur === rv,
           fn: function () { setStoryRisk(itemId, stId, rv); } };
       })));
   }
@@ -3424,10 +3442,9 @@
         (st.priority ? (RM.prioritySchemeOf(state, 'story') === 'levels' ? levelGlyph(st.priority) : esc(st.priority)) : blank) + '</span>';
     }
     if (key === 'risk') {
-      if (!RM.riskEnabled(state)) return '';
-      if (RM.riskSchemeOf(state) === 'auto') return '<span class="r-risk rk-none" title="Dependency risk is computed per feature"></span>';
+      if (!RM.riskEnabled(state, 'story')) return '';
       return '<span class="r-risk rk-none' + (st.risk ? ' has-risk' : '') + '" tabindex="0" role="button" ' + attr + '="st-risk" title="' +
-        esc(RM.riskColLabel(state) + (st.risk ? '\nNow: ' + riskValueLabel(st.risk) : '')) + '">' +
+        esc(RM.riskColLabel(state, 'story') + (st.risk ? '\nNow: ' + riskValueLabel(st.risk, 'story') : '')) + '">' +
         (st.risk ? levelGlyph(st.risk) : blank) + '</span>';
     }
     if (key === 'dur') {
@@ -3705,19 +3722,19 @@
     var out = [];
     if (RM.priorityEnabled(state, 'story')) out.push('priority');
     if (RM.sizingEnabled(state, 'story')) out.push('size');
-    if (RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto') out.push('risk');
+    if (RM.riskEnabled(state, 'story')) out.push('risk');
     return out;
   }
   function prStoryColLabel(v) {
     if (v === '') return 'Unset';
     if (prioStoryCol === 'priority') return priorityValueLabel(v, 'story');
-    if (prioStoryCol === 'risk') return riskValueLabel(v);
+    if (prioStoryCol === 'risk') return riskValueLabel(v, 'story');
     return v;
   }
   // [{ key, name }] — the field's ladder in scheme order, then Unset
   function prStoryColumns() {
     var vals = prioStoryCol === 'priority' ? RM.priorityOrderOf(state, 'story')
-      : prioStoryCol === 'risk' ? RM.riskOrderOf(state) : RM.sizeOrderOf(state, 'story');
+      : prioStoryCol === 'risk' ? RM.riskOrderOf(state, 'story') : RM.sizeOrderOf(state, 'story');
     return vals.map(function (v) { return { key: v, name: prStoryColLabel(v) }; }).concat(prioHideUnset ? [] : [{ key: '', name: 'Unset' }]);
   }
   // the story's value for the column field; anything the ladder does not
@@ -5035,7 +5052,7 @@
     });
     capRowsHtml.push('<div class="hdr-line hdr-cap">' +
       '<div class="hdr-left"><span class="cap-row-lab" title="' +
-      esc((bySprint ? 'Each sprint: ' : 'Each week: ') + unitWord + ' asked / available across every capacity type — Setup → Capacity') + '">' +
+      esc((bySprint ? 'Each sprint: ' : 'Each week: ') + unitWord + ' asked / available across every capacity type — Setup → Scheduling') + '">' +
       'Capacity (' + unitWord + ')</span></div>' +
       '<div class="hdr-lane">' + hcc.join('') + '</div></div>');
     // phase lane above the dates: user-pinned dates win, otherwise the span
@@ -5307,6 +5324,7 @@
     // the feature's risk chip — same markup in the Scoping grid and the
     // Planning row: computed under the auto scheme, picked otherwise
     function riskChipHtml() {
+      if (!RM.riskEnabled(state)) return ''; // the column is up for story risk only
       var sch = RM.riskSchemeOf(state);
       if (sch === 'auto') {
         var autoTitle = rk.level === 'none' ? 'No dependency risk detected'
@@ -5646,7 +5664,7 @@
                   return '<div class="sc-cell sc-fix" data-col="' + key + '" style="width:' + w + 'px">' + inner + '</div>';
                 }
                 if (key === 'size' && RM.sizingEnabled(state, 'story')) return stFix(storyChipHtml('size', st, 'data-act', ''));
-                if (key === 'risk' && RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto') return stFix(storyChipHtml('risk', st, 'data-act', ''));
+                if (key === 'risk' && RM.riskEnabled(state, 'story')) return stFix(storyChipHtml('risk', st, 'data-act', ''));
                 if (key === 'assignees') {
                   return stFix('<span class="r-ws sc-chip" tabindex="0" role="button" data-act="st-asg" title="Story assignees">' +
                     (avatarStack(st.assignees) || '<i class="dws">+</i>') + '</span>');
@@ -6341,7 +6359,7 @@
       timeline = '<div class="m-hint">No timeline — double-click the story’s lane on the Planning tab to add one.</div>';
     }
     timeline += estRangeHtml(st, 'stf');
-    // estimate: the story's own size / priority / risk scales (Setup → Sizing)
+    // estimate: the story's own size / priority / risk scales (Setup → Sizing, priority & risk)
     var stSizeBtns = RM.sizingEnabled(state, 'story')
       ? '<label class="p-lab">Size</label><div class="seg">' +
         ['<button data-stf="size" data-v=""' + (!st.size ? ' class="on"' : '') + ' title="Not set">—</button>']
@@ -6359,12 +6377,12 @@
               ' title="' + esc(priorityValueLabel(pv, 'story')) + '">' + (stPriLevels ? levelGlyph(pv) : pv) + '</button>';
           })).join('') + '</div>'
       : '';
-    var stRiskBtns = RM.riskEnabled(state) && RM.riskSchemeOf(state) !== 'auto'
-      ? '<label class="p-lab" style="margin-top:10px">' + esc(RM.riskColLabel(state)) + '</label><div class="seg">' +
+    var stRiskBtns = RM.riskEnabled(state, 'story')
+      ? '<label class="p-lab" style="margin-top:10px">' + esc(RM.riskColLabel(state, 'story')) + '</label><div class="seg">' +
         ['<button data-stf="risk" data-v=""' + (!st.risk ? ' class="on"' : '') + ' title="Not set">None</button>']
-          .concat(RM.riskOrderOf(state).map(function (rv) {
+          .concat(RM.riskOrderOf(state, 'story').map(function (rv) {
             return '<button data-stf="risk" data-v="' + rv + '"' + (st.risk === rv ? ' class="on"' : '') +
-              ' title="' + esc(riskValueLabel(rv)) + '">' + levelGlyph(rv) + '</button>';
+              ' title="' + esc(riskValueLabel(rv, 'story')) + '">' + levelGlyph(rv) + '</button>';
           })).join('') + '</div>'
       : '';
     var estimate = stSizeBtns + stPriBtns + stRiskBtns;
@@ -6651,6 +6669,7 @@
     state.items.forEach(function (it) {
       if (it.epic && !seen[it.epic]) { seen[it.epic] = true; out.push(it.epic); }
     });
+    (state.epicList || []).forEach(function (ep) { if (!seen[ep]) { seen[ep] = true; out.push(ep); } });
     out.sort(function (a, b) { return a.localeCompare(b); });
     return out;
   }
@@ -6710,6 +6729,8 @@
             var name2 = newName || epicName;
             if (name2 !== epicName) {
               s.items.forEach(function (x) { if (x.epic === epicName) x.epic = name2; });
+              s.epicList = (s.epicList || []).map(function (e) { return e === epicName ? name2 : e; })
+                .filter(function (e, i, a) { return a.indexOf(e) === i; });
               if (s.epicIcons[epicName] != null) { s.epicIcons[name2] = s.epicIcons[epicName]; delete s.epicIcons[epicName]; }
               if (s.epicTypes[epicName] != null) { s.epicTypes[name2] = s.epicTypes[epicName]; delete s.epicTypes[epicName]; }
               delete s.epicJira[epicName];
@@ -8002,7 +8023,7 @@
     items.push({ sep: true });
     items.push({ icon: 'settings-2', label: 'Holiday settings\u2026', fn: function () {
       view = 'setup';
-      setupTab = 'timeline';
+      setupTab = 'project';
       saveLocal();
       render();
     } });
@@ -8398,6 +8419,7 @@
       'Delete', function () {
         commit('delete epic', function (s) {
           s.items.forEach(function (x) { if (x.epic === epicName) x.epic = ''; });
+          s.epicList = (s.epicList || []).filter(function (e) { return e !== epicName; });
           delete s.epicColors[epicName];
           delete s.epicTypes[epicName];
         });
@@ -10273,7 +10295,21 @@
   }
 
   // menu bar (File / Edit / View)
+  // while the new-project wizard is up every menu item is inert (the wizard
+  // has its own Back / Continue / Close)
   function menuItems(name) {
+    var items = menuItemsFor(name);
+    if (!wz) return items;
+    return items.map(function (m) {
+      if (m.sep) return m;
+      var c = {};
+      Object.keys(m).forEach(function (k) { c[k] = m[k]; });
+      c.disabled = true;
+      c.fn = function () {};
+      return c;
+    });
+  }
+  function menuItemsFor(name) {
     var isMacDesktop = !!window.HeadwayDesktop && navigator.platform.indexOf('Mac') === 0;
     function openProject() {
       if (window.HeadwayDesktop) openAnyDialog();
@@ -10301,7 +10337,7 @@
       // MultipleDocuments etc. are full-colour pictograms and look out of
       // place next to the template ones, so those items carry no icon.
       return [
-        { icon: 'file-plus-2', nativeIcon: 'Add', label: 'New project…', fn: newProjectModal },
+        { icon: 'file-plus-2', nativeIcon: 'Add', label: 'New project', fn: openWizard },
         openItem,
         convertItem,
         { icon: 'file-spreadsheet', label: 'Download template', fn: downloadTemplate },
@@ -10320,7 +10356,7 @@
       return [
         { icon: 'house', label: 'Start page', fn: showStart },
         { sep: true },
-        { icon: 'file-plus-2', label: 'New project…', fn: newProjectModal },
+        { icon: 'file-plus-2', label: 'New project…', fn: openWizard },
         openItem,
         convertItem,
         { sep: true },
@@ -10794,7 +10830,7 @@
       if (plHidden(k)) return false;
       if (k === 'size') return RM.sizingEnabled(state) || RM.sizingEnabled(state, 'story');
       if (k === 'pri') return RM.priorityEnabled(state) || RM.priorityEnabled(state, 'story');
-      if (k === 'risk') return RM.riskEnabled(state);
+      if (k === 'risk') return RM.riskEnabled(state) || RM.riskEnabled(state, 'story');
       if (k === 'cap') return !!state.meta.capacityEnabled;
       if (k === 'mult') return !!state.meta.capacityEnabled && state.meta.capMode !== 'points';
       if (k === 'ws') return !!state.meta.workstreamsEnabled;
@@ -11019,7 +11055,7 @@
         '" style="width:var(--bu-w-type)" tabindex="0" role="button" data-bact="type">' +
         (m.type ? esc(shorten(m.type, 13)) : '—') + '</span>',
       cap: '<span class="r-ws sc-chip bu-col bu-chip' + (m.capType ? '' : ' empty') +
-        '" style="width:var(--bu-w-cap)" tabindex="0" role="button" data-bact="cap" title="Capacity type">' +
+        '" style="width:var(--bu-w-cap)" tabindex="0" role="button" data-bact="cap" title="Capacity type (from the role)">' +
         (m.capType ? esc(shorten(m.capType, 13)) : '—') + '</span>',
       ws: '<span class="r-ws sc-chip bu-col bu-chip' + (mws.length ? '' : ' empty') +
         '" style="width:var(--bu-w-ws)" tabindex="0" role="button" data-bact="ws">' +
@@ -11363,31 +11399,26 @@
         s.team.forEach(function (x) { if (x.id === roleId) x.type = ''; });
       });
     } }];
+    var rct = state.roleCapTypes || {};
     state.teamTypes.forEach(function (t) {
-      items.push({ label: esc(t), checked: m.type === t, fn: function () {
+      items.push({ label: esc(t) + (rct[t] ? ' <small>' + esc(rct[t]) + '</small>' : ''), checked: m.type === t, fn: function () {
         commit('rate card role', function (s) {
           s.team.forEach(function (x) { if (x.id === roleId) x.type = t; });
+          RM.syncMemberCapTypes(s); // the role brings its capacity type
         });
       } });
     });
     openDropdown(chip, items);
   }
+  // a person's capacity type comes from their role: with no role, pick one;
+  // with a role, the menu points to where the role's type is set
   function openMemberCapDropdown(chip, roleId) {
     var m = memberById(roleId);
     if (!m) return;
-    var items = [{ label: '<i>\u2014 general \u2014</i>', checked: !m.capType, fn: function () {
-      commit('capacity type', function (s) {
-        s.team.forEach(function (x) { if (x.id === roleId) x.capType = ''; });
-      });
-    } }];
-    RM.capTypesOf(state).forEach(function (t) {
-      items.push({ label: esc(t), checked: m.capType === t, fn: function () {
-        commit('capacity type', function (s) {
-          s.team.forEach(function (x) { if (x.id === roleId) x.capType = t; });
-        });
-      } });
-    });
-    openDropdown(chip, items);
+    if (!m.type) { openMemberTypeDropdown(chip, roleId); return; }
+    openDropdown(chip, [{ icon: 'gauge',
+      label: esc(m.capType ? m.type + ' supplies ' + m.capType : m.type + ' supplies no capacity type') + ' \u2014 change in Setup \u203a Scheduling\u2026',
+      fn: function () { setupTab = 'scheduling'; view = 'setup'; saveLocal(); render(); } }]);
   }
   function openMemberWsDropdown(chip, roleId) {
     var m = memberById(roleId);
@@ -11661,28 +11692,13 @@
       '<div class="m-hint">This plan\u2019s own title \u2014 a label; it does not rename the project.</div>' +
       '</section>';
   }
-  function renderSetup() {
+  // every Setup section's cards, keyed by section; the wizard shows the same
+  // bodies one step at a time
+  function setupBodies(mode) {
     var m = state.meta;
-    var host = $('#setupView');
 
-    // sizing approach picker + a fully editable option table (label → days);
-    // editing options flips the scheme to Custom
-    // features and stories each pick a scale; the story controls carry
-    // data-kind="story" and share the feature handlers
-    function schemeRowsFor(kind) {
-      var kAttr = kind === 'story' ? ' data-kind="story"' : '';
-      var cur = m[RM.sizeKeys(kind).scheme];
-      return RM.sizeSchemesFor(kind).map(function (k) {
-        var sch = RM.SIZE_SCHEMES[k];
-        return '<button class="su-scheme' + (cur === k ? ' on' : '') + '" data-suscheme="' + k + '"' + kAttr + '>' +
-          '<span class="su-scheme-check"><i data-lucide="' + (cur === k ? 'circle-check' : 'circle') + '"></i></span>' +
-          '<span class="su-scheme-main"><b>' + esc(sch.name) + '</b><span>' + esc(sch.hint) + '</span></span>' +
-          '</button>';
-      }).join('') + (cur === 'custom'
-        ? '<div class="su-scheme on static"><span class="su-scheme-check"><i data-lucide="circle-check"></i></span>' +
-          '<span class="su-scheme-main"><b>Custom</b><span>Your own options and day values</span></span></div>'
-        : '');
-    }
+    // the size option tables stay editable (label → days); editing options
+    // flips the scheme to Custom. Story controls carry data-kind="story".
     function sizeOptRowsFor(kind) {
       var kAttr = kind === 'story' ? ' data-kind="story"' : '';
       var days = m[RM.sizeKeys(kind).days] || {};
@@ -11706,7 +11722,11 @@
         ? '<section class="su-card"><h2>' + label + '</h2>' +
           '<table class="hol-table"><thead><tr><th>Label</th><th>Working days</th><th></th></tr></thead>' +
           '<tbody>' + sizeOptRowsFor(kind) + '</tbody></table>' +
-          '<button id="suSzAdd' + (kind === 'story' ? 'Story' : '') + '" style="margin-top:8px"><i data-lucide="plus"></i> Add option</button>' +
+          '<div class="p-row" style="margin-top:8px"><button id="suSzAdd' + (kind === 'story' ? 'Story' : '') + '"><i data-lucide="plus"></i> Add option</button>' +
+          (m[RM.sizeKeys(kind).scheme] === 'custom' && m[RM.sizeKeys(kind).base]
+            ? '<button data-suszreset="' + esc(m[RM.sizeKeys(kind).base]) + '"' + (kind === 'story' ? ' data-kind="story"' : '') + '><i data-lucide="rotate-ccw"></i> Reset to ' +
+              esc(RM.SIZE_SCHEMES[m[RM.sizeKeys(kind).base]].name) + '</button>'
+            : '') + '</div>' +
           (kind === 'story'
             ? '<div class="m-hint">A sized story that lands on the timeline takes its size in working days; unsized stories take one sprint.</div>'
             : '<div class="m-hint">Working days drive scheduling and the duration estimate; the risk rating stays a separate L/M/H flag.</div>') +
@@ -11715,32 +11735,19 @@
           '<div class="m-hint">Sizing is off — set durations directly ' + (kind === 'story' ? 'on stories' : 'on items') + ' when you need them.</div>' +
           '</section>';
     }
-    var schemeRows = schemeRowsFor('feature');
-    var storySchemeRows = schemeRowsFor('story');
-    var storySizingCards = sizingCardsFor('story');
-    var riskRows = RM.RISK_SCHEME_ORDER.map(function (k) {
-      var rs = RM.RISK_SCHEMES[k];
-      var on = RM.riskSchemeOf(state) === k;
-      return '<button class="su-scheme' + (on ? ' on' : '') + '" data-surisk="' + k + '">' +
-        '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
-        '<span class="su-scheme-main"><b>' + esc(rs.name) + '</b><span>' + esc(rs.desc) + '</span></span>' +
-        '</button>';
-    }).join('');
-    function priRowsFor(kind) {
-      var kAttr = kind === 'story' ? ' data-kind="story"' : '';
-      var list = kind === 'story' ? RM.STORY_PRIORITY_SCHEME_ORDER : RM.PRIORITY_SCHEME_ORDER;
-      return list.map(function (k) {
-        var ps = RM.PRIORITY_SCHEMES[k];
-        var on = RM.prioritySchemeOf(state, kind) === k;
-        return '<button class="su-scheme' + (on ? ' on' : '') + '" data-supri="' + k + '"' + kAttr + '>' +
-          '<span class="su-scheme-check"><i data-lucide="' + (on ? 'circle-check' : 'circle') + '"></i></span>' +
-          '<span class="su-scheme-main"><b>' + esc(ps.name) + '</b><span>' + esc(ps.desc) + '</span></span>' +
-          '</button>';
-      }).join('');
+    // priority and risk ladders are fixed: shown as chips, not edited
+    function ladderCardFor(kind) {
+      function line(label, sch, order, labelFn) {
+        return '<div class="su-ladder"><label class="p-lab">' + esc(label) + '</label>' +
+          (order.length ? ladderChips(order, labelFn) : '<div class="m-hint">' + esc(sch.desc) + '</div>') + '</div>';
+      }
+      return '<section class="su-card"><h2>' + esc(lvl(kind) + ' priority & risk') + '</h2>' +
+        line('Priority', RM.PRIORITY_SCHEMES[RM.prioritySchemeOf(state, kind)], RM.priorityOrderOf(state, kind),
+          function (v) { return priorityValueLabel(v, kind); }) +
+        line(RM.riskColLabel(state, kind), RM.RISK_SCHEMES[RM.riskSchemeOf(state, kind)], RM.riskOrderOf(state, kind),
+          function (v) { return riskValueLabel(v, kind); }) +
+        '</section>';
     }
-    var priRows = priRowsFor('feature');
-    var storyPriRows = priRowsFor('story');
-    var sizingCards = sizingCardsFor('feature');
 
     // every range edits in place: name is free text, the dates open the calendar
     var holRows = (m.holidayRanges || []).map(function (r, i) {
@@ -11813,6 +11820,9 @@
     var capTypeRows = RM.capTypesOf(state).map(function (t) {
       return '<div class="su-row" data-key="' + esc(t) + '">' + grip() +
         '<input class="su-name su-name-in" data-capname="' + esc(t) + '" value="' + esc(t) + '" title="Rename capacity type">' +
+        '<span class="su-supplied">' + RM.capTypeRoles(state, t).map(function (r) {
+          return '<span class="su-chip su-rolechip">' + esc(r) + '<button data-surolerm="' + esc(r) + '" title="Stop ' + esc(r) + ' supplying ' + esc(t) + '" aria-label="Remove ' + esc(r) + '">\u00d7</button></span>';
+        }).join('') + '<button class="su-roleadd" data-suroleadd="' + esc(t) + '" title="Pick a role that supplies ' + esc(t) + '">+ Role</button></span>' +
         '<span class="band-count" title="People supplying it">' + (capTypeCounts[t] || 0) + '</span>' +
         '<button data-sucaprm="' + esc(t) + '" class="danger" title="Remove capacity type"><i data-lucide="x"></i></button>' +
         '</div>';
@@ -11859,8 +11869,8 @@
       '<div class="m-hint">Behavior follows the level, not the type: a Bug at the ' + esc(RM.levelLabel(state, 'feature')) + ' level is a bar on the timeline like any other. The Jira name is what sync and the CSV export use.</div>' +
       '</section>';
 
-    // one card set per vertical tab
-    var tabBodies = {
+    // the cards, then grouped into sections below
+    var parts = {
       timeline:
         projectNameCardHtml() +
         '<section class="su-card"><h2>Timeline</h2>' +
@@ -11868,10 +11878,11 @@
         '<div><label class="p-lab">Start (' + firstDayName + ')</label><input type="text" readonly class="cal-in" id="suStart" value="' + esc(m.timelineStart) + '" style="width:100%"></div>' +
         '<div><label class="p-lab">End (last working day)</label><input type="text" readonly class="cal-in" id="suEnd" value="' + esc(m.endDate || '') + '" style="width:100%"></div>' +
         '</div>' +
-        '</section>' +
+        '</section>',
+      sprints:
         '<section class="su-card"><h2>Sprints</h2>' +
         '<div><label class="p-lab">Sprint length</label>' +
-        '<div class="seg">' + [[0, 'Disabled'], [1, '1 week'], [2, '2 weeks'], [4, '4 weeks']].map(function (o) {
+        '<div class="seg">' + [[0, 'Off'], [1, '1 week'], [2, '2 weeks'], [3, '3 weeks'], [4, '4 weeks']].map(function (o) {
           return '<button data-suwps="' + o[0] + '"' + (m.weeksPerSprint === o[0] ? ' class="on"' : '') + '>' + o[1] + '</button>';
         }).join('') + '</div></div>' +
         (RM.sprintsEnabled(m)
@@ -11879,8 +11890,10 @@
             '<div><label class="p-lab">Sprint starts on (' + firstDayName + ')</label><input type="text" readonly class="cal-in" id="suAnchor" value="' + esc(m.sprintAnchor || m.timelineStart) + '" style="width:100%"></div>' +
             '<div><label class="p-lab">…and is sprint #</label><input type="number" id="suAnchorNum" step="1" value="' + (m.sprintAnchorNum != null ? m.sprintAnchorNum : 1) + '" style="width:100%"></div>' +
             '</div>'
-          : '<div class="m-hint">No sprints — the header shows plain weeks.</div>') +
-        '</section>' +
+          : '<div class="m-hint">No sprint numbers on the timeline, and the Sprinting tab is hidden.</div>') +
+        (RM.sprintsEnabled(m) ? sprintStripHtml() : '') +
+        '</section>',
+      holidays:
         '<section class="su-card"><h2>Holidays</h2>' +
         (holRows
           ? '<table class="hol-table"><thead><tr><th>Name</th><th>Dates</th><th></th></tr></thead><tbody>' + holRows + '</tbody></table>'
@@ -11893,31 +11906,39 @@
         '</div>' +
         '<div class="m-hint">Single days or ranges (e.g. Christmas Eve through New Year’s). Non-working days stretch bars that span them.</div>' +
         '</section>',
-      phases:
-        '<section class="su-card"><h2>Phases</h2>' +
+      // Organization: three lists side by side, each with an Add box that
+      // takes a pasted list (one per line); levels & item types fold away
+      org:
+        '<div class="su-org">' +
+        '<section class="su-card su-org-col"><h2>Phases</h2>' +
         '<div class="su-rows" data-sulist="phase">' + phaseRows + '</div>' +
-        '<button id="suPhAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add phase</button>' +
-        '</section>',
-      workstreams:
-        '<section class="su-card"><h2>Workstreams</h2>' +
-        '<label class="p-check" title="Color-codes items and enables workstream grouping"><input type="checkbox" id="suWsEnable"' + (m.workstreamsEnabled ? ' checked' : '') + '> Use workstreams in this project</label>' +
+        addListHtml('suPhAddIn', 'suPhAddBtn', 'New phases, one per line') +
+        '</section>' +
+        '<section class="su-card su-org-col"><h2>Workstreams</h2>' +
+        '<label class="p-check" title="Color-codes items and enables workstream grouping"><input type="checkbox" id="suWsEnable"' + (m.workstreamsEnabled ? ' checked' : '') + '> Use workstreams</label>' +
         (m.workstreamsEnabled
           ? '<div class="su-rows" style="margin-top:10px">' + defaultWsRow + '</div>' +
             '<div class="su-rows" data-sulist="ws">' + (wsRows || '') + '</div>' +
-            '<div class="p-row" style="margin-top:8px"><input id="suWsAdd" placeholder="New workstream…"><button id="suWsAddBtn" class="fixed">Add</button></div>'
+            addListHtml('suWsAdd', 'suWsAddBtn', 'New ones, one per line')
           : '<div class="m-hint">Workstreams are off — items keep a neutral color and the Scoping column is hidden.</div>') +
         '</section>' +
-        '<section class="su-card"><h2>Epics</h2>' +
-        '<div class="su-rows">' + (epicRows || '<div class="m-hint">none yet — set an epic on any item to create one</div>') + '</div>' +
+        '<section class="su-card su-org-col"><h2>Epics</h2>' +
+        '<div class="su-rows">' + (epicRows || '<div class="m-hint">None yet.</div>') + '</div>' +
+        addListHtml('suEpAdd', 'suEpAddBtn', 'New epics, one per line') +
         '</section>' +
-        hierCard,
+        '</div>' +
+        (orgHierOpen ? hierCard
+          : '<section class="su-card su-fold"><div><h2>Levels &amp; item types</h2><div class="m-hint">' +
+            esc(hier.levels.map(function (lv) { return lv.label; }).join(' › ')) + ' · ' + RM.itemTypes(state).length + ' item types</div></div>' +
+            '<button data-suhieropen>Customize</button></section>'),
       team:
         '<section class="su-card"><h2>Roles &amp; rate card</h2>' +
         '<div class="su-rc-head"><span></span><span>Cost/h</span><span>Rate/h</span><span></span></div>' +
         '<div class="su-rows" data-sulist="type">' + typeRows + '</div>' +
         '<div class="p-row" style="margin-top:8px"><input id="suTypeAdd" placeholder="New role, e.g. Data Scientist"><button id="suTypeAddBtn" class="fixed">Add</button></div>' +
         '<div class="m-hint">People inherit their role’s hourly cost and bill rate; either can be overridden per person in Budgeting.</div>' +
-        '</section>' +
+        '</section>',
+      workweek:
         '<section class="su-card"><h2>Work week</h2>' +
         '<div class="p-grid2">' +
         '<div><label class="p-lab">Full-time hours per week</label>' +
@@ -11936,9 +11957,9 @@
         '<div class="m-hint">Defines what one full-time person means — the schedule plans across exactly the days checked (1–7); bars keep their calendar dates when this changes.</div>' +
         '</section>',
       capacity:
-        '<section class="su-card"><h2>Capacity planning</h2>' +
-        '<label class="p-check" title="The roster limits scheduling and validation; shows the capacity row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Enable capacity planning</label>' +
-        '<div class="m-hint">People, their capacity type and weekly hours live in the Resources panel under the timeline. Auto timeline (per phase) and Place at earliest slot need this on.</div>' +
+        '<section class="su-card"><h2>Schedule against capacity</h2>' +
+        '<label class="p-check" title="The roster limits scheduling and validation; shows the capacity row"><input type="checkbox" id="suCapEnable"' + (m.capacityEnabled ? ' checked' : '') + '> Schedule against capacity</label>' +
+        '<div class="m-hint">People and their weekly hours live in Setup \u203a Team and the Resources panel; each person supplies their role\u2019s capacity type (Supplied by, under Capacity types). Auto timeline (per phase) and Place at earliest slot need this on.</div>' +
         '</section>' +
         '<section class="su-card"><h2>Planning level</h2><div class="su-schemes">' +
         [['feature', esc(lvl('feature', true)), 'Capacity follows the ' + esc(lvl('feature', true).toLowerCase()) + ' and their capacity type; ' + esc(lvl('story', true).toLowerCase()) + ' need no details'],
@@ -11965,14 +11986,14 @@
         '<section class="su-card"><h2>Capacity types</h2>' +
         '<div class="su-rows" data-sulist="captype">' + capTypeRows + '</div>' +
         '<div class="p-row" style="margin-top:8px"><input id="suCapTypeAdd" placeholder="New capacity type, e.g. Data"><button id="suCapTypeAddBtn" class="fixed">Add</button></div>' +
-        '<div class="m-hint">A ' + esc(lvl('story').toLowerCase()) + '\u2019s capacity type says what it drains and who can take it; a person\u2019s says what they supply. Drag the grips to reorder.</div>' +
-        '</section>',
+        '<div class="m-hint">A ' + esc(lvl('story').toLowerCase()) + '\u2019s capacity type says what it drains and who can take it. Each role supplies one type (Supplied by) and its people supply it. Drag the grips to reorder.</div>' +
+        '</section>' + schedExplainerHtml(),
       columns: (function () {
         var offNotes = [];
-        if (!RM.sizingEnabled(state) && !RM.sizingEnabled(state, 'story')) offNotes.push('Size (enable in Sizing)');
-        if (!RM.riskEnabled(state)) offNotes.push('Risk (pick a scheme in Sizing)');
-        if (!RM.priorityEnabled(state) && !RM.priorityEnabled(state, 'story')) offNotes.push('Priority (pick a scheme in Sizing)');
-        if (!state.meta.workstreamsEnabled) offNotes.push('Workstream (enable in Workstreams)');
+        if (!RM.sizingEnabled(state) && !RM.sizingEnabled(state, 'story')) offNotes.push('Size (enable in Sizing, priority & risk)');
+        if (!RM.riskEnabled(state) && !RM.riskEnabled(state, 'story')) offNotes.push('Risk (pick a scheme in Sizing, priority & risk)');
+        if (!RM.priorityEnabled(state) && !RM.priorityEnabled(state, 'story')) offNotes.push('Priority (pick a scheme in Sizing, priority & risk)');
+        if (!state.meta.workstreamsEnabled) offNotes.push('Workstream (enable in Organization)');
         var colRows = allScopeCols().map(function (c) {
           var fixed = isFixedColKey(c[0]);
           return '<div class="su-row" data-key="' + esc(c[0]) + '">' + grip() +
@@ -11984,7 +12005,9 @@
                 return '<option value="' + sc + '"' + (((scopeColDef(c[0]) || {}).scope || 'both') === sc ? ' selected' : '') + '>' +
                   esc(scopeScopeLabel(sc)) + '</option>';
               }).join('') + '</select>') +
-            (fixed ? '' : '<button data-sucolrm="' + esc(c[0]) + '" class="danger" title="Remove column"><i data-lucide="x"></i></button>') +
+            (fixed
+              ? '<button data-sucoldel="' + esc(c[0]) + '" class="danger" disabled title="Built-in columns can\u2019t be deleted"><i data-lucide="x"></i></button>'
+              : '<button data-sucoldel="' + esc(c[0]) + '" class="danger" title="Delete column"><i data-lucide="x"></i></button>') +
             '</div>';
         }).join('');
         return '<section class="su-card"><h2>Scoping columns</h2>' +
@@ -11995,9 +12018,7 @@
           '</section>';
       })(),
       sizing:
-        '<section class="su-card"><h2>' + esc(lvl('feature') + ' sizing') + '</h2>' +
-        '<div class="su-schemes">' + schemeRows + '</div>' +
-        '</section>' + sizingCards +
+        estGridHtml() +
         (function () {
           var rangeOn = RM.rangeEnabled(state);
           var unit = RM.estUnit(state);
@@ -12027,30 +12048,22 @@
             '</section>';
           function def1(k) { return k === 'points' ? 'point' : k === 'hours' ? 'hour' : 'day'; }
         })() +
-        '<section class="su-card"><h2>' + esc(lvl('story') + ' sizing') + '</h2>' +
-        '<div class="su-schemes">' + storySchemeRows + '</div>' +
-        '<div class="m-hint">Stories estimate on their own scale — story points by default.</div>' +
-        '</section>' + storySizingCards +
-        '<section class="su-card"><h2>Risk column</h2>' +
-        '<div class="su-schemes">' + riskRows + '</div>' +
-        '<div class="m-hint">Risk measures uncertainty, for features and stories alike. Most projects track nothing here — pick a scheme only if your team actually reviews it.</div>' +
-        '</section>' +
-        '<section class="su-card"><h2>' + esc(lvl('feature') + ' priority') + '</h2>' +
-        '<div class="su-schemes">' + priRows + '</div>' +
-        '<div class="m-hint">Priority ranks importance — separate from risk.</div>' +
-        '</section>' +
-        '<section class="su-card"><h2>' + esc(lvl('story') + ' priority') + '</h2>' +
-        '<div class="su-schemes">' + storyPriRows + '</div>' +
-        '<div class="m-hint">Stories rank on their own ladder — Critical / High / Medium / Low by default. RICE scores features only.</div>' +
-        '</section>',
-      apps:
-        '<section class="su-card"><h2>Apps</h2>' +
-        '<div class="m-hint" style="margin:0 0 10px">Which tabs this project shows. Turning an app off hides its tab; its data stays in the document.</div>' +
+        sizingCardsFor('feature') + ladderCardFor('feature') +
+        sizingCardsFor('story') + ladderCardFor('story'),
+      views:
+        '<section class="su-card"><h2>Views</h2>' +
+        '<div class="m-hint" style="margin:0 0 10px">Which tabs this project shows. Turning a view off hides its tab; its data stays in the document.</div>' +
         RM.APPS.map(function (a) {
-          var fixed = a[0] === 'planning';
-          return '<label class="p-check su-app' + (fixed ? ' fixed' : '') + '" title="' + esc(a[3]) + '">' +
-            '<input type="checkbox" data-suapp="' + a[0] + '"' + (RM.appEnabled(state, a[0]) ? ' checked' : '') + (fixed ? ' disabled' : '') + '> ' +
-            '<i data-lucide="' + a[2] + '"></i>' + esc(a[1]) + '<span class="su-app-desc">' + esc(a[3]) + '</span></label>';
+          // Planning is home; Sprinting and Budgeting follow their sections
+          var fixedPill = a[0] === 'planning' ? 'Always on'
+            : a[0] === 'sprints' ? 'Follows Sprints' : a[0] === 'budget' ? 'Follows Budgeting' : '';
+          var ctl = fixedPill
+            ? '<span class="su-pill">' + fixedPill + '</span>'
+            : '<input type="checkbox" data-suapp="' + a[0] + '"' + (RM.appEnabled(state, a[0]) ? ' checked' : '') + '> ';
+          return '<label class="p-check su-app' + (fixedPill ? ' fixed' : '') + '" data-suview="' + a[0] + '" title="' + esc(a[3]) + '">' +
+            (fixedPill ? '<span class="su-app-sp"></span>' : ctl) +
+            '<i data-lucide="' + a[2] + '"></i>' + esc(a[1]) + '<span class="su-app-desc">' + esc(a[3]) + '</span>' +
+            (fixedPill ? ctl : '') + '</label>';
         }).join('') +
         '</section>',
       appearance:
@@ -12068,7 +12081,222 @@
         (window.HeadwayJira ? HeadwayJira.settingsHtml() : '<div class="m-hint">Jira module not loaded.</div>') +
         '</section>'
     };
-    if (!tabBodies[setupTab]) setupTab = 'timeline';
+    return {
+      project: mode === 'wizard'
+        ? parts.timeline + presetCardsHtml() + (wz && wz.expandWorkWeek ? parts.workweek + parts.holidays : workWeekSummaryHtml())
+        : parts.timeline + parts.workweek + parts.holidays,
+      sprints: parts.sprints,
+      org: parts.org,
+      est: parts.sizing,
+      budget: '<section class="su-card">' +
+        '<label class="p-check"><input type="checkbox" data-subudget' + (RM.appEnabled(state, 'budget') ? ' checked' : '') + '> Track budget</label>' +
+        '<div class="m-hint">Adds the Budgeting tab: hours and cost by role, week and phase.</div></section>' +
+        (RM.appEnabled(state, 'budget') ? parts.team
+          : '<section class="su-card"><div class="m-hint">Roles are named on the Team section as you add people.</div></section>'),
+      team: '<section class="su-card">' + teamTableHtml() + '</section>',
+      scheduling: parts.capacity,
+      columns: parts.columns,
+      views: parts.views,
+      appearance: parts.appearance,
+      prefs: parts.prefs,
+      ai: parts.ai,
+      jira: parts.jira
+    };
+  }
+  // Scheduling: pick a role to supply this capacity type (a role supplies one)
+  function roleSupplyMenu(anchor, capType) {
+    var map = state.roleCapTypes || {};
+    if (!state.teamTypes.length) { openDropdown(anchor, [{ label: '<i>No roles yet \u2014 add them on the Team section</i>', fn: function () {} }]); return; }
+    openDropdown(anchor, state.teamTypes.map(function (r) {
+      var cur = map[r];
+      return { label: esc(r) + (cur && cur !== capType ? ' <small>now ' + esc(cur) + '</small>' : ''), checked: cur === capType,
+        fn: function () { commit('role capacity type', function (s2) { RM.setRoleCapType(s2, r, capType); }); } };
+    }));
+  }
+  // an Add box that takes one name or a pasted list (one per line)
+  function addListHtml(inId, btnId, ph) {
+    return '<div class="p-row su-addlist"><textarea id="' + inId + '" rows="1" placeholder="' + esc(ph) + '"></textarea>' +
+      '<button id="' + btnId + '" class="fixed">Add</button></div>';
+  }
+  function addListNames(v, existing) {
+    var out = [];
+    String(v || '').split(/\r?\n/).forEach(function (l) {
+      l = l.trim();
+      if (l && out.indexOf(l) === -1 && (existing || []).indexOf(l) === -1) out.push(l);
+    });
+    return out;
+  }
+  var orgHierOpen = false; // Setup → Organization: Levels & item types unfolded
+  function sectionBody(key, mode) { return setupBodies(mode)[key] || ''; }
+  // Setup → Team: everyone on the project, every field editable but the
+  // capacity type, which comes from the role (Setup → Scheduling)
+  var teamNewRoleFor = null; // member id whose Role cell is naming a new role
+  function teamTableHtml() {
+    var cap = !!state.meta.capacityEnabled;
+    var pts = cap && state.meta.capMode === 'points';
+    var bud = RM.appEnabled(state, 'budget');
+    var wsOn = !!state.meta.workstreamsEnabled;
+    var head = ['Name', 'Title', 'Role'].concat(cap ? ['Capacity type'] : [], wsOn ? ['Workstreams'] : [], ['Allocation'],
+      pts ? ['Points / sprint'] : [], bud ? ['Rate/h', 'Cost/h'] : [], ['']);
+    function roleOpts(cur) {
+      return '<option value="">\u2014</option>' + state.teamTypes.map(function (r) {
+        return '<option value="' + esc(r) + '"' + (r === cur ? ' selected' : '') + '>' + esc(r) + '</option>';
+      }).join('') + '<option value="__new">New role\u2026</option>';
+    }
+    var rc = state.meta.rateCard || {};
+    if (!state.team.length) {
+      return '<div class="m-hint">No one yet \u2014 add the people who work on this project.</div>' +
+        '<button id="suTmAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add person</button>';
+    }
+    return '<div class="su-team-wrap"><table class="hol-table su-team"><thead><tr>' + head.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead><tbody>' +
+      state.team.map(function (m) {
+        var id = ' data-mid="' + esc(m.id) + '"';
+        var card = rc[m.type] || {};
+        var roleCell = teamNewRoleFor === m.id
+          ? '<input data-sutmnewrole' + id + ' placeholder="New role name" aria-label="New role name">'
+          : '<select data-sutm="type"' + id + ' aria-label="Role">' + roleOpts(m.type) + '</select>';
+        return '<tr' + id + '>' +
+          '<td><input data-sutm="name"' + id + ' value="' + esc(m.name) + '" placeholder="Name" aria-label="Name"></td>' +
+          '<td><input data-sutm="role"' + id + ' value="' + esc(m.role || '') + '" placeholder="Title" aria-label="Title"></td>' +
+          '<td>' + roleCell + '</td>' +
+          (cap ? '<td class="su-tm-cap" title="' + (m.type ? 'From the role \u2014 change it in Setup \u203a Scheduling' : 'Pick a role to set it') + '">' +
+            esc(m.capType || '\u2014') + '</td>' : '') +
+          (wsOn ? '<td class="su-tm-ws"><button class="su-tm-wsbtn' + (RM.memberWorkstreams(m).length ? '' : ' empty') + '" data-sutmws' + id +
+            ' title="Workstreams">' + esc(RM.memberWorkstreams(m).join(', ') || '\u2014') + '</button></td>' : '') +
+          '<td class="su-tm-num"><input type="number" min="0" step="5" data-sutm="capacity"' + id + ' value="' + Math.round((m.capacity != null ? m.capacity : 1) * 100) + '" aria-label="Allocation percent"> %</td>' +
+          (pts ? '<td class="su-tm-num"><input type="number" min="0" data-sutm="points"' + id + ' value="' + (m.points == null ? '' : m.points) + '" placeholder="' + state.meta.defaultPoints + '" aria-label="Points per sprint"></td>' : '') +
+          (bud ? '<td class="su-tm-num"><input type="number" min="0" data-sutm="rate"' + id + ' value="' + (m.rate || '') + '" placeholder="' + (card.rate || '') + '" aria-label="Hourly rate"></td>' +
+                 '<td class="su-tm-num"><input type="number" min="0" data-sutm="cost"' + id + ' value="' + (m.cost || '') + '" placeholder="' + (card.cost || '') + '" aria-label="Hourly cost"></td>' : '') +
+          '<td class="hol-x"><button data-sutmdel="' + esc(m.id) + '" title="Remove person"><i data-lucide="x"></i></button></td></tr>';
+      }).join('') + '</tbody></table></div>' +
+      '<button id="suTmAdd" style="margin-top:8px"><i data-lucide="plus"></i> Add person</button>' +
+      '<div class="m-hint">Allocation here is each person\u2019s default. You can change allocation and hours week by week later in the Resources panel under the timeline.</div>';
+  }
+  function renderSetupHost() { if (wz) renderWizard(); else renderSetup(); }
+  // Setup → Sprints: the next six sprints from the anchor, with their dates
+  function sprintStripHtml() {
+    var m = state.meta, si = RM.sprintInfo(m), wd = RM.workDaysOf(m);
+    var out = [];
+    for (var i = 0; i < 6; i++) {
+      var wk = si.anchorWeek + i * si.wps;
+      var start = RM.weekStartDate(m, wk), end = RM.weekStartDate(m, wk + si.wps);
+      end.setUTCDate(end.getUTCDate() - 1);
+      for (var g = 0; g < 7 && wd.indexOf(end.getUTCDay()) === -1; g++) end.setUTCDate(end.getUTCDate() - 1);
+      out.push('<span class="su-spr"><b>S' + RM.sprintNumForWeek(m, wk) + '</b>' + RM.fmtShort(start) + ' – ' + RM.fmtShort(end) + '</span>');
+    }
+    return '<div class="su-sprs" aria-label="Upcoming sprints">' + out.join('') + '</div>';
+  }
+  // wizard Project step: work week and holidays fold into one line
+  function workWeekSummaryHtml() {
+    var m = state.meta;
+    var DN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    var days = RM.workDaysOf(m).map(function (d) { return DN[d]; }).join(', ');
+    var nHol = (m.holidayRanges || []).length;
+    return '<section class="su-card wz-fold"><div><h2>Work week &amp; holidays</h2><div class="m-hint">' + esc(days) + ' · ' +
+      m.weekHours + ' h per week · ' + nHol + (nHol === 1 ? ' holiday' : ' holidays') + '</div></div>' +
+      '<button data-wzexpand>Edit</button></section>';
+  }
+  // wizard Project step: the required preset, each card with a tiny timeline
+  function pcBar(cls, x, w, y, tx) { return '<span class="pc-' + cls + '" style="left:' + x + '%;width:' + w + '%;top:' + y + 'px">' + esc(tx || '') + '</span>'; }
+  function pcFeat(x, w, y, tx) { return pcBar('feat', x, w, y, tx); }
+  function pcHull(x, w, y, tx) { return pcBar('hull', x, w, y, tx); }
+  function pcStory(x, w, y, tx) { return pcBar('story', x, w, y, tx); }
+  function pcRisk(x, y) { return pcBar('risk', x, 2.2, y, ''); }
+  function pcSprints() { return [0, 1, 2, 3, 4].map(function (i) { return pcBar('hdr', 1 + i * 19.6, 19, 4, 'S' + (i + 1)); }).join(''); }
+  function pcMonths() { return ['Oct', 'Nov', 'Dec', 'Jan', 'Feb'].map(function (mo, i) { return pcBar('mon', 1 + i * 19.6, 19, 4, mo); }).join(''); }
+  var PC_SKETCH = {
+    scrum: pcSprints() + pcHull(1, 44, 26, 'Checkout') + pcStory(1, 13, 46, '3') + pcStory(15, 11, 46, '5') + pcStory(27, 18, 46, '2') +
+      pcHull(40, 56, 66, 'Search') + pcStory(40, 22, 86, '8') + pcStory(63, 16, 86, '3'),
+    ascrum: pcSprints() + pcFeat(1, 44, 26, 'Checkout · L · Must') + pcRisk(42, 30) + pcStory(1, 13, 46, '3 H') + pcStory(15, 11, 46, '5 M') +
+      pcStory(27, 18, 46, '2 L') + pcFeat(40, 56, 66, 'Search · XL · Should') + pcRisk(93, 70) + pcStory(40, 22, 86, '8 M') + pcStory(63, 16, 86, '3 L'),
+    rapid: pcMonths() + pcFeat(1, 30, 26, 'Login · M') + pcFeat(32, 44, 26, 'Billing · L') + pcFeat(1, 18, 48, 'Export · S') +
+      pcFeat(20, 30, 48, 'Search · M') + pcFeat(51, 26, 48, 'Alerts · M') + pcFeat(78, 20, 70, 'Admin · S'),
+    minimal: pcMonths() + pcFeat(1, 30, 26, 'Login · M') + pcFeat(24, 44, 46, 'Billing · L') + pcFeat(8, 18, 66, 'Export · S') +
+      pcFeat(60, 36, 86, 'Search · M')
+  };
+  function presetCardsHtml() {
+    var cur = state.meta.preset;
+    return '<section class="su-card"><h2>Start from a preset <span class="req" aria-hidden="true">*</span></h2>' +
+      '<div class="m-hint">Pick how you work. It fills in the next steps, and you can change any of it on the way.</div>' +
+      '<div class="pc-grid" role="radiogroup" aria-label="Preset">' + RM.PRESETS.map(function (p, i) {
+        var on = cur === p.key;
+        var stop = on || (!cur && i === 0); // one tab stop; arrows move within
+        return '<button class="pcard' + (on ? ' on' : '') + '" role="radio" aria-checked="' + on + '" tabindex="' + (stop ? 0 : -1) + '" data-wzpreset="' + p.key + '">' +
+          (on ? '<span class="pc-check" aria-hidden="true">✓</span>' : '') +
+          '<b>' + esc(p.name) + '</b><span class="pc-desc">' + esc(p.desc) + '</span>' +
+          '<span class="pc-sketch" aria-hidden="true">' + PC_SKETCH[p.key] + '</span></button>';
+      }).join('') + '</div>' + (cur ? '' : '<div class="m-hint req-hint">Choose a preset to continue.</div>') + '</section>';
+  }
+  // Setup → Scheduling: supply and demand, drawn on a small fixed example
+  function schedExplainerHtml() {
+    var SUP = [2, 2, 2, 1.2, 2, 2, 2, 2, 2, 2];
+    function chart(title, note, dem) {
+      return '<div class="su-sched-chart"><div><b>' + title + '</b> <span class="m-hint">' + note + '</span></div><div class="su-sched-bars">' +
+        dem.map(function (d, i) {
+          var fit = Math.min(d, SUP[i]), over = Math.max(0, d - SUP[i]);
+          return '<div class="su-sched-wk"><i class="over" style="height:' + Math.round(over * 36) + 'px"></i><i class="ok" style="height:' + Math.round(fit * 36) + 'px"></i>' +
+            '<i class="sup" style="bottom:' + Math.round(SUP[i] * 36) + 'px"></i></div>';
+        }).join('') + '</div></div>';
+    }
+    return '<section class="su-card"><h2>How scheduling works</h2>' +
+      '<div class="m-hint">Every week, for each capacity type, the work in flight has to fit inside what the people supply.</div>' +
+      '<div class="su-sched-keys">' +
+      '<div><b>Supply</b><div class="m-hint">Each person gives their role\u2019s capacity type their weekly hours, or points per sprint. Holidays and time off lower it.</div></div>' +
+      '<div><b>Demand</b><div class="m-hint">Each ' + esc(lvl(RM.planLevel(state)).toLowerCase()) + ' in flight asks its capacity type for one person \u00d7 its multiplier, or its points spread over its weeks.</div></div>' +
+      '<div><b>Over capacity</b><div class="m-hint">Demand above the line shows red on the timeline. Auto timeline moves work to the first week with room, after its dependencies.</div></div></div>' +
+      '<div class="su-sched-charts">' + chart('As drawn', 'weeks 3\u20134 over capacity', [1, 2, 3, 3, 1, 1, 0, 0, 0, 0]) +
+      chart('After Auto timeline', 'overflow moved to weeks 5\u20137', [1, 2, 2, 1.2, 2, 2, 0.8, 0, 0, 0]) + '</div></section>';
+  }
+  // Sizing, priority & risk: one select per field × level
+  function schemeSelect(what, level, cur, options) {
+    return '<select data-suscheme-kind="' + what + '" data-kind="' + level + '" aria-label="' + esc(lvl(level) + ' ' + what) + '">' +
+      options.map(function (o) {
+        return '<option value="' + o[0] + '"' + (o[0] === cur ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
+      }).join('') + '</select>';
+  }
+  function estGridHtml() {
+    var m = state.meta;
+    function sizeOpts(kind) {
+      var o = RM.sizeSchemesFor(kind).map(function (k) { return [k, RM.SIZE_SCHEMES[k].name]; });
+      if (m[RM.sizeKeys(kind).scheme] === 'custom') o.push(['custom', 'Custom']);
+      return o;
+    }
+    function prioOpts(kind) {
+      return (kind === 'story' ? RM.STORY_PRIORITY_SCHEME_ORDER : RM.PRIORITY_SCHEME_ORDER)
+        .map(function (k) { return [k, RM.PRIORITY_SCHEMES[k].name]; });
+    }
+    function riskOpts(kind) {
+      return RM.RISK_SCHEME_ORDER.filter(function (k) { return kind !== 'story' || RM.STORY_RISK_SCHEMES.indexOf(k) !== -1; })
+        .map(function (k) { return [k, RM.RISK_SCHEMES[k].name]; });
+    }
+    var rows = [
+      ['Size', 'Sets bar length', 'size', function (k) { return m[RM.sizeKeys(k).scheme]; }, sizeOpts],
+      ['Priority', 'Ranks the backlog', 'prio', function (k) { return RM.prioritySchemeOf(state, k); }, prioOpts],
+      ['Risk', 'Flags what may slip', 'risk', function (k) { return RM.riskSchemeOf(state, k); }, riskOpts]
+    ];
+    return '<section class="su-card"><div class="su-grid"><span></span><b>' + esc(lvl('feature')) + ' level</b><b>' + esc(lvl('story')) + ' level</b>' +
+      rows.map(function (r) {
+        return '<div><b>' + r[0] + '</b><div class="m-hint">' + r[1] + '</div></div>' +
+          schemeSelect(r[2], 'feature', r[3]('feature'), r[4]('feature')) +
+          schemeSelect(r[2], 'story', r[3]('story'), r[4]('story'));
+      }).join('') + '</div></section>';
+  }
+  function ladderChips(order, labelFn) {
+    return '<div class="su-chips">' + order.map(function (v) { return '<span class="su-chip">' + esc(labelFn(v)) + '</span>'; }).join('') + '</div>';
+  }
+  // the rail's on/off note for sections that switch a feature
+  function setupPill(key) {
+    if (key === 'sprints') return RM.sprintsEnabled(state.meta) ? state.meta.weeksPerSprint + ' wk' : 'Off';
+    if (key === 'budget') return RM.appEnabled(state, 'budget') ? 'On' : 'Off';
+    if (key === 'scheduling') return state.meta.capacityEnabled ? 'On' : 'Off';
+    return '';
+  }
+
+  function renderSetup() {
+    if (wz) { renderWizard(); return; }
+    var host = $('#setupView');
+    setupTab = normSetupTab(setupTab);
+    var tabBodies = setupBodies();
 
     // view-only copies keep the theme and nothing else
     var sections = readOnly
@@ -12078,10 +12306,11 @@
       : SETUP_SECTIONS;
     if (readOnly) setupTab = 'appearance';
     var rail = sections.map(function (sec) {
-      return '<div class="su-rail-hd">' + sec[0] + '</div>' +
+      return (sec[0] ? '<div class="su-rail-hd">' + esc(sec[0]) + '</div>' : '') +
         sec[1].map(function (t) {
+          var pill = setupPill(t[0]);
           return '<button class="su-tab' + (setupTab === t[0] ? ' on' : '') + '" data-sutab="' + t[0] + '">' +
-            '<i data-lucide="' + t[2] + '"></i>' + t[1] + '</button>';
+            '<i data-lucide="' + t[2] + '"></i>' + esc(t[1]) + (pill ? '<span class="su-pill">' + pill + '</span>' : '') + '</button>';
         }).join('');
     }).join('');
 
@@ -12097,43 +12326,386 @@
       '<nav class="su-rail" aria-label="Settings sections">' + rail + '</nav>' +
       '<div class="su-content"><h1 class="su-page">' + esc(pageTitle) + '</h1>' + tabBodies[setupTab] + '</div>' +
       '</div>';
+    var nrIn = teamNewRoleFor && host.querySelector('[data-sutmnewrole]');
+    if (nrIn) nrIn.focus();
     if (setupTab === 'ai' && window.HeadwayAI) HeadwayAI.wireSettings($('#aiSettingsCard', host));
     if (setupTab === 'jira' && window.HeadwayJira) HeadwayJira.wireSettings($('#jiraSettingsCard', host));
     if (window.lucide) lucide.createIcons();
   }
 
   var SETUP_SECTIONS = [
-    ['Project', [
-      ['timeline', 'Timeline', 'calendar-range'],
-      ['apps', 'Apps', 'layout-grid'],
-      ['phases', 'Phases', 'flag'],
-      ['workstreams', 'Workstreams', 'layers'],
+    ['', [
+      ['project', 'Project', 'calendar-range'],
+      ['sprints', 'Sprints', 'repeat'],
+      ['org', 'Organization', 'layers'],
+      ['est', 'Sizing, priority & risk', 'ruler'],
+      ['budget', 'Budgeting', 'wallet'],
       ['team', 'Team', 'users'],
-      ['capacity', 'Capacity', 'gauge'],
-      ['columns', 'Columns', 'columns-3'],
-      ['sizing', 'Sizing', 'ruler'],
-      ['jira', 'Jira', 'link']
+      ['scheduling', 'Scheduling', 'gauge'],
+      ['columns', 'Custom columns', 'columns-3'],
+      ['views', 'Views', 'layout-grid']
     ]],
-    ['Personal', [
+    ['Personal \u00b7 this computer only', [
       ['appearance', 'Appearance', 'palette'],
       ['prefs', 'Preferences', 'sliders-horizontal'],
-      ['ai', 'AI assistant', 'sparkles']
+      ['ai', 'AI assistant', 'sparkles'],
+      ['jira', 'Jira Integration', 'link']
     ]]
   ];
+  // section keys from before the regroup (UI snapshots, links)
+  var SETUP_KEY_MAP = { timeline: 'project', phases: 'org', workstreams: 'org', sizing: 'est',
+    capacity: 'scheduling', apps: 'views' };
+  function normSetupTab(k) {
+    k = SETUP_KEY_MAP[k] || k;
+    var all = [];
+    SETUP_SECTIONS.forEach(function (sec) { sec[1].forEach(function (t) { all.push(t[0]); }); });
+    return all.indexOf(k) !== -1 ? k : 'project';
+  }
 
+  // ------------------------------------------------------------ new-project wizard
+  // Full screen under the app's top bar. While it is open the global `state`
+  // IS a draft project: the Setup section bodies and their handlers edit it
+  // unchanged, and commit() only mutates it and re-renders the wizard. The
+  // open document (with its undo, redo and saved flag) waits in wz.stash.
+  var wz = null;
+  var WZ_STEPS = SETUP_SECTIONS[0][1].slice(0, 8).map(function (t) { return t[0]; }).concat(['review']);
+  var ONBOARDED_KEY = 'headway-onboarded-v1';
+  function localStorageGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function openWizard() {
+    if (wz || readOnly) return;
+    flushPanelEdit(); // a half-typed panel field belongs to the open document
+    closePopover();
+    wz = { step: 'project', dirty: false, welcomed: false, stash: {
+      state: state, undo: undoStack.slice(), redo: redoStack.slice(),
+      docSaved: docSaved, sessionEdited: sessionEdited, view: view, reloaded: false,
+      start: document.body.classList.contains('start') } };
+    // the start page hides the top bar; the wizard needs it (drag, close)
+    document.body.classList.remove('start');
+    state = blankState();
+    undoStack.length = 0; redoStack.length = 0;
+    // the first project on this machine starts with a Welcome (name + theme)
+    if (!userName() && !localStorageGet(ONBOARDED_KEY)) wz.step = 'welcome';
+    $('#setupView').innerHTML = ''; // one copy of the section controls on screen
+    document.body.classList.add('wizard-open');
+    var tb = $('#topbar');
+    document.documentElement.style.setProperty('--topbar-h', (tb.offsetHeight || 46) + 'px');
+    var x = document.createElement('button');
+    x.id = 'wzClose';
+    x.title = 'Close';
+    x.setAttribute('aria-label', 'Close');
+    x.innerHTML = '<i data-lucide="x"></i>';
+    tb.insertBefore(x, $('.win-caption', tb) || null);
+    var stepLbl = document.createElement('span');
+    stepLbl.id = 'wzTopStep';
+    stepLbl.className = 'wz-topstep';
+    $('#docTitle').insertAdjacentElement('afterend', stepLbl);
+    $('#docTitle').value = 'New project';
+    $('#wizard').hidden = false;
+    renderWizard();
+    if (window.HeadwayDesktop && HeadwayDesktop.syncMenu) HeadwayDesktop.syncMenu();
+  }
+  // the desktop watcher reloaded the open file while the wizard is up: the
+  // stash takes it, and closing adopts it the way any reload does
+  function wizardStashReload(next) {
+    wz.stash.state = next;
+    wz.stash.docSaved = true;
+    wz.stash.reloaded = true;
+  }
+  // AI / Jira hooks act on the open document even while the wizard is up:
+  // run fn with the stash swapped in, then put the draft back
+  function withStash(fn) {
+    var w = wz, draft = state, du = undoStack.slice(), dr = redoStack.slice();
+    state = w.stash.state;
+    undoStack.length = 0; Array.prototype.push.apply(undoStack, w.stash.undo);
+    redoStack.length = 0; Array.prototype.push.apply(redoStack, w.stash.redo);
+    wz = null;
+    try { return fn(); } finally {
+      w.stash.state = state;
+      w.stash.undo = undoStack.slice(); w.stash.redo = redoStack.slice();
+      w.stash.docSaved = docSaved; w.stash.sessionEdited = sessionEdited;
+      state = draft;
+      undoStack.length = 0; Array.prototype.push.apply(undoStack, du);
+      redoStack.length = 0; Array.prototype.push.apply(redoStack, dr);
+      wz = w;
+      $('#setupView').innerHTML = ''; // one copy of the section controls on screen
+      document.body.classList.remove('start');
+      renderWizard();
+    }
+  }
+  // discard: true drops the draft; false hands it back (Create)
+  function closeWizard(discard) {
+    if (!wz) return null;
+    var st = wz.stash, draft = state;
+    state = st.state;
+    undoStack.length = 0; Array.prototype.push.apply(undoStack, st.undo);
+    redoStack.length = 0; Array.prototype.push.apply(redoStack, st.redo);
+    docSaved = st.docSaved; sessionEdited = st.sessionEdited; view = st.view;
+    wz = null;
+    if (st.start) document.body.classList.add('start');
+    teamNewRoleFor = null;
+    closePopover();
+    document.body.classList.remove('wizard-open');
+    var x = $('#wzClose');
+    if (x) x.remove();
+    var stepLbl = $('#wzTopStep');
+    if (stepLbl) stepLbl.remove();
+    $('#wizard').hidden = true;
+    $('#wizard').innerHTML = '';
+    stateRev += 1;
+    if (st.reloaded) {
+      // a reload while the wizard was up: adopt it now (fresh undo, auto-order)
+      if (selectedId && !RM.itemById(state, selectedId)) { selectedId = null; selStory = null; }
+      reloadingDoc = true;
+      try { adoptState(state); } finally { reloadingDoc = false; }
+    } else {
+      validation = RM.validate(state);
+      render();
+    }
+    updateSaveBtn();
+    // what the wizard held back for the open project: its pending flush and
+    // any peer changes that arrived meanwhile
+    if (docKind === 'bundle' && !docSaved) scheduleBundleFlush();
+    drainDeferred();
+    if (window.HeadwayDesktop && HeadwayDesktop.syncMenu) HeadwayDesktop.syncMenu();
+    return discard ? null : draft;
+  }
+  function wizardTryClose() {
+    if (!wz) return;
+    if (!wz.dirty) { closeWizard(true); return; }
+    confirmBox('Discard this new project?', 'The settings you picked are not saved anywhere yet.', 'Discard',
+      function () { closeWizard(true); }, true);
+  }
+  function wizardCreate() {
+    var keep = wz && { welcomed: wz.welcomed, expandWorkWeek: wz.expandWorkWeek };
+    var draft = closeWizard(false);
+    if (!draft) return;
+    var saved = RM.clone(draft);
+    // a canceled Save dialog or a failed export must not lose the setup:
+    // reopen the wizard at Review with the draft
+    function reopen() {
+      openWizard();
+      if (!wz) return;
+      state = saved;
+      wz.step = 'review'; wz.dirty = true;
+      wz.welcomed = keep.welcomed; wz.expandWorkWeek = keep.expandWorkWeek;
+      renderWizard();
+    }
+    function done() { try { localStorage.setItem(ONBOARDED_KEY, '1'); } catch (e) { /* storage optional */ } }
+    // pending edits of the open project land before the new one opens
+    // (createProjectOnDisk → createSharedFolder settles the current document)
+    createProjectOnDisk(draft, { onDone: done, onFail: reopen });
+  }
+  function wizardGo(k) {
+    if (!wz) return;
+    wz.step = k;
+    teamNewRoleFor = null;
+    renderWizard();
+    var c = $('#wizard .wz-content');
+    if (c) c.scrollTop = 0;
+  }
+  function wizardStepLabel(k) {
+    if (k === 'review') return 'Review & create';
+    var t = SETUP_SECTIONS[0][1].filter(function (x) { return x[0] === k; })[0];
+    return t ? t[1] : k;
+  }
+  function welcomeHtml() {
+    var cur = themePref || 'system';
+    var sw = { light: ['#F5F2EC', '#FFFFFF', '#0057B8'], dark: ['#161B21', '#242C35', '#5B9BE0'],
+      system: ['linear-gradient(90deg,#F5F2EC 50%,#161B21 50%)', 'rgba(255,255,255,.55)', '#0057B8'] };
+    return '<section class="su-card wz-hello"><div class="wz-kicker">FIRST TIME ONLY</div><h1 class="wz-h1">Welcome to Headway</h1>' +
+      '<div class="m-hint">Two things about you before the project. They’re saved on this computer, not in project files.</div>' +
+      '<label class="p-lab" for="wzName">Your name</label><input id="wzName" maxlength="60" placeholder="e.g. Sam Rivera" value="' + esc(userName()) + '">' +
+      '<div class="p-lab">Theme</div><div class="wz-themes">' + ['light', 'dark', 'system'].map(function (k) {
+        var c = sw[k];
+        return '<button class="pcard' + (cur === k ? ' on' : '') + '" data-wztheme="' + k + '" aria-pressed="' + (cur === k) + '">' +
+          (cur === k ? '<span class="pc-check" aria-hidden="true">✓</span>' : '') +
+          '<span class="wz-sw" style="background:' + c[0] + '"><i style="background:' + c[1] + '"></i><i style="background:' + c[2] + '"></i></span>' +
+          (k === 'system' ? 'Match system' : k.charAt(0).toUpperCase() + k.slice(1)) + '</button>';
+      }).join('') + '</div>' +
+      '<div class="wz-hello-foot"><button class="primary" data-wz="next">Continue</button></div></section>';
+  }
+  // the Review step: one line per section, each with a way back
+  var WZ_SUMMARY = {
+    project: function () {
+      var m = state.meta, p = RM.PRESETS.filter(function (x) { return x.key === m.preset; })[0];
+      return (m.title || 'Untitled') + ' · ' + RM.fmtShort(RM.parseISO(m.timelineStart)) +
+        (m.endDate ? ' – ' + RM.fmtShort(RM.parseISO(m.endDate)) : '') + (p ? ' · ' + p.name + ' preset' : '');
+    },
+    sprints: function () {
+      return RM.sprintsEnabled(state.meta) ? state.meta.weeksPerSprint + '-week sprints from S' + RM.sprintInfo(state.meta).firstNum : 'No sprints';
+    },
+    org: function () {
+      var n = state.phases.filter(function (p) { return !p.bucket; }).length;
+      return n + (n === 1 ? ' phase' : ' phases') + (state.meta.workstreamsEnabled ? ' · ' + allWorkstreams().length + ' workstreams' : '');
+    },
+    est: function () {
+      var m = state.meta;
+      function nm(k) { return (RM.SIZE_SCHEMES[k] || { name: 'Custom' }).name; }
+      return RM.levelLabel(state, 'feature') + ': ' + nm(m.sizeScheme) + ' · ' + RM.levelLabel(state, 'story') + ': ' + nm(m.storySizeScheme);
+    },
+    budget: function () {
+      return RM.appEnabled(state, 'budget') ? 'On · ' + state.teamTypes.length + (state.teamTypes.length === 1 ? ' role' : ' roles') + ' on the rate card' : 'Off';
+    },
+    team: function () { return state.team.length + (state.team.length === 1 ? ' person' : ' people'); },
+    scheduling: function () {
+      var m = state.meta;
+      return m.capacityEnabled ? (m.planLevel === 'story' ? 'Stories' : 'Features') + ', ' + (m.capMode === 'points' ? 'story points' : 'per person') +
+        ', ' + state.capTypes.length + ' capacity types' : 'Off';
+    },
+    columns: function () {
+      var n = allScopeCols().filter(function (c) { return !isFixedColKey(c[0]); }).length;
+      return n + (n === 1 ? ' custom column' : ' custom columns');
+    }
+  };
+  function reviewHtml() {
+    return '<h1 class="wz-h1">Review &amp; create</h1><div class="m-hint">Check the essentials. Anything can be changed later in Setup.</div>' +
+      '<section class="su-card wz-sum">' + WZ_STEPS.slice(0, 8).map(function (k, i) {
+        return '<div class="wz-sum-row"><span class="wz-num">' + (i + 1) + '</span><b>' + esc(wizardStepLabel(k)) + '</b><span class="wz-sum-v">' +
+          esc(WZ_SUMMARY[k]()) + '</span><button data-wzgo="' + k + '">Edit</button></div>';
+      }).join('') + '</section>';
+  }
+  function renderWizard() {
+    if (!wz) return;
+    var host = $('#wizard');
+    var keep = host.querySelector('.wz-content');
+    var scroll = keep ? keep.scrollTop : 0;
+    var idx = WZ_STEPS.indexOf(wz.step);
+    var hasPreset = !!state.meta.preset;
+    var need = wz.step === 'project' && !hasPreset;
+    if (wz.step === 'welcome') {
+      host.innerHTML = '<div class="wz-welcome">' + welcomeHtml() + '</div>';
+    } else {
+      var rail = WZ_STEPS.map(function (k, i) {
+        var done = i < idx;
+        return '<button class="wz-step' + (k === wz.step ? ' on' : '') + (done ? ' done' : '') + '" data-wzgo="' + k + '"' +
+          (!hasPreset && k !== 'project' ? ' disabled' : '') + '><span class="wz-num">' + (done ? '✓' : i + 1) + '</span>' +
+          esc(wizardStepLabel(k)) + '</button>';
+      }).join('');
+      var body = wz.step === 'review' ? reviewHtml() : sectionBody(wz.step, 'wizard');
+      host.innerHTML =
+        '<div class="wz-progress"><i style="width:' + Math.round((idx + 1) / WZ_STEPS.length * 100) + '%"></i></div>' +
+        '<div class="wz-layout"><nav class="wz-rail" aria-label="New project steps">' + rail + '</nav>' +
+        '<div class="wz-main"><div class="wz-content">' +
+        (wz.step === 'review' ? '' : '<h1 class="wz-h1">' + esc(wizardStepLabel(wz.step)) + '</h1>') + body + '</div>' +
+        '<div class="wz-foot"><span></span><button data-wz="back"' + (idx === 0 && !wz.welcomed ? ' disabled' : '') + '>Back</button>' +
+        (idx > 0 && wz.step !== 'review' ? '<button data-wz="skip">Skip</button>' : '') +
+        '<button class="primary" data-wz="next"' + (need ? ' disabled' : '') + '>' + (wz.step === 'review' ? 'Create project' : 'Continue') + '</button></div>' +
+        '</div></div>';
+      var c = host.querySelector('.wz-content');
+      if (c && keep) c.scrollTop = scroll;
+    }
+    var topStep = $('#wzTopStep');
+    if (topStep) topStep.textContent = idx === -1 ? '' : 'Step ' + (idx + 1) + ' of ' + WZ_STEPS.length;
+    var nrIn = teamNewRoleFor && host.querySelector('[data-sutmnewrole]');
+    if (nrIn) nrIn.focus();
+    if (window.lucide) lucide.createIcons();
+  }
+  $('#wizard').addEventListener('click', function (e) {
+    if (!wz) return;
+    var go = e.target.closest('[data-wzgo]');
+    if (go) { if (!go.disabled) wizardGo(go.dataset.wzgo); return; }
+    var pc = e.target.closest('[data-wzpreset]');
+    if (pc) {
+      var pKey = pc.dataset.wzpreset;
+      commit('preset', function (s2) { RM.applyPreset(s2, pKey); });
+      return;
+    }
+    var th = e.target.closest('[data-wztheme]');
+    if (th) { setTheme(th.dataset.wztheme); renderWizard(); return; }
+    if (e.target.closest('[data-wzexpand]')) { wz.expandWorkWeek = true; renderWizard(); return; }
+    var b = e.target.closest('[data-wz]');
+    if (!b || b.disabled) return;
+    var idx = WZ_STEPS.indexOf(wz.step);
+    if (b.dataset.wz === 'next' && wz.step === 'welcome') { wz.welcomed = true; wizardGo('project'); return; }
+    if (b.dataset.wz === 'next' && wz.step === 'review') { wizardCreate(); return; }
+    if (b.dataset.wz === 'next' || b.dataset.wz === 'skip') { wizardGo(WZ_STEPS[Math.min(idx + 1, WZ_STEPS.length - 1)]); return; }
+    if (b.dataset.wz === 'back') {
+      if (idx > 0) wizardGo(WZ_STEPS[idx - 1]);
+      else if (wz.welcomed) wizardGo('welcome');
+    }
+  });
+  $('#wizard').addEventListener('change', function (e) {
+    if (e.target.id === 'wzName') setUserName(e.target.value);
+  });
+  // the preset radio group: arrow keys pick the next / previous preset
+  $('#wizard').addEventListener('keydown', function (e) {
+    var card = e.target.closest && e.target.closest('[data-wzpreset]');
+    if (!wz || !card) return;
+    var d = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+    if (!d) return;
+    e.preventDefault();
+    var keys = RM.PRESETS.map(function (p) { return p.key; });
+    var next = keys[(keys.indexOf(card.dataset.wzpreset) + d + keys.length) % keys.length];
+    commit('preset', function (s2) { RM.applyPreset(s2, next); });
+    var nb = $('#wizard [data-wzpreset="' + next + '"]');
+    if (nb) nb.focus();
+  });
+  $('#topbar').addEventListener('click', function (e) {
+    if (e.target.closest('#wzClose')) wizardTryClose();
+  });
+
+  // the Setup section handlers, shared by #setupView and the wizard
+  function bindSectionHandlers(suHost) {
   // vertical settings rail; personal controls share the modal's wiring
-  $('#setupView').addEventListener('click', function (e) {
+  suHost.addEventListener('click', function (e) {
     var tab = e.target.closest('[data-sutab]');
     if (!tab) return;
     setupTab = tab.dataset.sutab;
     saveLocal();
     renderSetup();
   });
-  wirePersonalFields($('#setupView'), function () {
-    if (view === 'setup') renderSetup();
+  wirePersonalFields(suHost, function () {
+    if (wz) renderWizard();
+    else if (view === 'setup') renderSetup();
   });
 
-  $('#setupView').addEventListener('change', function (e) {
+  suHost.addEventListener('change', function (e) {
+    if (e.target.matches('[data-subudget]')) {
+      var budOn = e.target.checked;
+      commit('budgeting', function (s2) { s2.meta.apps.budget = budOn; });
+      return;
+    }
+    var tf = e.target.closest('[data-sutm]');
+    if (tf) {
+      var tmId = tf.dataset.mid, tmF = tf.dataset.sutm, tmV = tf.value;
+      if (tmF === 'type' && tmV === '__new') { teamNewRoleFor = tmId; renderSetupHost(); return; }
+      commit('team', function (s2) {
+        var mm = s2.team.filter(function (x) { return x.id === tmId; })[0];
+        if (!mm) return;
+        if (tmF === 'capacity') mm.capacity = Math.max(0, (+tmV || 0) / 100);
+        else if (tmF === 'points') mm.points = tmV === '' ? null : Math.max(0, +tmV || 0);
+        else if (tmF === 'rate' || tmF === 'cost') mm[tmF] = Math.max(0, +tmV || 0);
+        else mm[tmF] = String(tmV);
+        if (tmF === 'type') RM.syncMemberCapTypes(s2);
+      });
+      return;
+    }
+    if (e.target.matches('[data-sutmnewrole]')) {
+      var nrId = e.target.dataset.mid, nrName = e.target.value.trim();
+      teamNewRoleFor = null;
+      if (!nrName) { renderSetupHost(); return; }
+      commit('add role', function (s2) {
+        if (s2.teamTypes.indexOf(nrName) === -1) s2.teamTypes.push(nrName);
+        s2.team.forEach(function (x) { if (x.id === nrId) x.type = nrName; });
+        RM.syncMemberCapTypes(s2);
+      });
+      return;
+    }
+    var sk = e.target.closest('[data-suscheme-kind]');
+    if (sk) {
+      var skKind = sk.dataset.kind, skV = sk.value;
+      if (sk.dataset.suschemeKind === 'size') {
+        if (skV === state.meta[RM.sizeKeys(skKind).scheme]) return;
+        commit('sizing approach', function (s2) { RM.setSizeScheme(s2, skV, skKind); });
+      } else if (sk.dataset.suschemeKind === 'prio') {
+        if (skV === RM.prioritySchemeOf(state, skKind)) return;
+        commit('priority column', function (s2) { RM.setPriorityScheme(s2, skV, skKind); });
+      } else {
+        if (skV === RM.riskSchemeOf(state, skKind)) return;
+        commit('risk column', function (s2) { RM.setRiskScheme(s2, skV, skKind); });
+      }
+      return;
+    }
     if (e.target.id === 'suProjectName') {
       var pn = e.target.value.trim() || 'Roadmap';
       if (pn !== projectName()) renameProjectFolder(pn).then(function () { if (view === 'setup') renderSetup(); });
@@ -12148,7 +12720,7 @@
     if (t.id === 'suCapEnable') {
       var on = t.checked;
       commit('capacity feature', function (s2) { s2.meta.capacityEnabled = on; });
-      toast('Capacity planning ' + (on ? 'enabled' : 'disabled'));
+      toast('Scheduling ' + (on ? 'on' : 'off'));
       return;
     }
     if (t.id === 'suWsEnable') {
@@ -12313,13 +12885,13 @@
       var v = isFinite(pv) && pv >= 0 ? pv : (cur != null ? cur : 5);
       commit('size days', function (s2) {
         s2.meta[szKeys.days][sz] = v;
-        s2.meta[szKeys.scheme] = 'custom';
+        RM.markSizeCustom(s2, t.dataset.kind || 'feature');
       });
       return;
     }
   });
 
-  $('#setupView').addEventListener('click', function (e) {
+  suHost.addEventListener('click', function (e) {
     var t = e.target.closest('button');
     if (!t) return;
     if (t.id === 'suHolAddBtn') {
@@ -12330,6 +12902,20 @@
       if (hEnd < hStart) { var swp = hStart; hStart = hEnd; hEnd = swp; }
       commit('holiday add', function (s2) {
         RM.addHolidayRange(s2.meta, hName, hStart, hEnd);
+      });
+      return;
+    }
+    // workstreams: the same multi-pick menu as the Budgeting / Resources rows
+    if (t.dataset.sutmws != null) { openMemberWsDropdown(t, t.dataset.mid); return; }
+    if (t.dataset.sutmdel != null) {
+      var tdId = t.dataset.sutmdel;
+      commit('remove person', function (s2) { s2.team = s2.team.filter(function (x) { return x.id !== tdId; }); });
+      return;
+    }
+    if (t.id === 'suTmAdd') {
+      commit('add person', function (s2) {
+        s2.team.push({ id: RM.uid('t'), name: '', role: '', type: '', capType: '', workstream: '', workstreams: [],
+          capacity: 1, points: null, rate: 0, cost: 0, weekHours: {} });
       });
       return;
     }
@@ -12358,24 +12944,6 @@
       commit('estimate basis', function (s2) { s2.meta.estimateBasis = estBasis; });
       return;
     }
-    if (t.dataset.suscheme) {
-      var schemeKey = t.dataset.suscheme, schemeKind = t.dataset.kind || 'feature';
-      if (schemeKey === state.meta[RM.sizeKeys(schemeKind).scheme]) return;
-      commit('sizing approach', function (s2) { RM.setSizeScheme(s2, schemeKey, schemeKind); });
-      return;
-    }
-    if (t.dataset.surisk) {
-      var riskKey = t.dataset.surisk;
-      if (riskKey === RM.riskSchemeOf(state)) return;
-      commit('risk column', function (s2) { RM.setRiskScheme(s2, riskKey); });
-      return;
-    }
-    if (t.dataset.supri) {
-      var priKey = t.dataset.supri, priKind = t.dataset.kind || 'feature';
-      if (priKey === RM.prioritySchemeOf(state, priKind)) return;
-      commit('priority column', function (s2) { RM.setPriorityScheme(s2, priKey, priKind); });
-      return;
-    }
     if (t.id === 'suSzAdd' || t.id === 'suSzAddStory') {
       var addKind = t.id === 'suSzAddStory' ? 'story' : 'feature';
       commit('add size', function (s2) {
@@ -12391,11 +12959,43 @@
       return;
     }
     if (t.id === 'suWsAddBtn') {
-      var wv = $('#suWsAdd').value.trim();
-      if (!wv) return;
+      var wsNames = addListNames($('#suWsAdd').value);
+      if (!wsNames.length) return;
       commit('add workstream', function (s2) {
-        if (!s2.wsColors[wv]) s2.wsColors[wv] = RM.DEFAULT_WS_COLORS[wv] || 'neutral';
+        wsNames.forEach(function (wv) {
+          if (!s2.wsColors[wv]) s2.wsColors[wv] = RM.DEFAULT_WS_COLORS[wv] || 'neutral';
+        });
       });
+      return;
+    }
+    if (t.id === 'suPhAddBtn') {
+      var phNames = addListNames($('#suPhAddIn').value, state.phases.map(function (p2) { return p2.name; }));
+      if (!phNames.length) return;
+      commit('add phase', function (s2) {
+        phNames.forEach(function (nm) {
+          s2.phases.push({ id: RM.uid('p'), name: nm, description: '', bucket: false, collapsed: false });
+        });
+      });
+      return;
+    }
+    if (t.id === 'suEpAddBtn') {
+      var epNames = addListNames($('#suEpAdd').value, allEpics());
+      if (!epNames.length) return;
+      commit('add epic', function (s2) {
+        s2.epicList = (s2.epicList || []).concat(epNames);
+      });
+      return;
+    }
+    if (t.dataset.suhieropen != null) { orgHierOpen = true; renderSetupHost(); return; }
+    if (t.dataset.suszreset) {
+      var rsKind = t.dataset.kind || 'feature', rsScheme = t.dataset.suszreset;
+      commit('sizing approach', function (s2) { RM.setSizeScheme(s2, rsScheme, rsKind); });
+      return;
+    }
+    if (t.dataset.suroleadd) { roleSupplyMenu(t, t.dataset.suroleadd); return; }
+    if (t.dataset.surolerm) {
+      var rmRole = t.dataset.surolerm;
+      commit('role capacity type', function (s2) { RM.setRoleCapType(s2, rmRole, ''); });
       return;
     }
     if (t.id === 'suColAddBtn') {
@@ -12404,8 +13004,9 @@
       commit('add column', function (s2) { RM.addScopeCol(s2, colV); });
       return;
     }
-    if (t.dataset.sucolrm) {
-      var rmKey = t.dataset.sucolrm;
+    if (t.dataset.sucoldel) {
+      if (t.disabled || isFixedColKey(t.dataset.sucoldel)) return; // built-ins stay
+      var rmKey = t.dataset.sucoldel;
       commit('remove column', function (s2) { RM.removeScopeCol(s2, rmKey); });
       return;
     }
@@ -12433,7 +13034,7 @@
     if (t.dataset.suhticon) { typeIconMenu(t, t.dataset.suhticon); return; }
     if (t.id === 'suHierAdd') {
       commit('add type', function (s2) { RM.addItemType(s2, 'New type', 'tag', ''); });
-      requestAnimationFrame(function () { var all = $$('#setupView input[data-suhtlabel]'); var inp = all[all.length - 1]; if (inp) { inp.focus(); inp.select(); } });
+      requestAnimationFrame(function () { var all = $$('input[data-suhtlabel]', suHost); var inp = all[all.length - 1]; if (inp) { inp.focus(); inp.select(); } });
       return;
     }
     if (t.dataset.suepedit) { epicEditModal(t.dataset.suepedit); return; }
@@ -12497,7 +13098,7 @@
   }
   (function () {
     var d = null;
-    $('#setupView').addEventListener('pointerdown', function (e) {
+    suHost.addEventListener('pointerdown', function (e) {
       var g = e.target.closest('.su-grip');
       if (!g) return;
       var row = g.closest('.su-row');
@@ -12547,6 +13148,9 @@
       });
     });
   })();
+  }
+  bindSectionHandlers($('#setupView'));
+  bindSectionHandlers($('#wizard'));
 
   // template workbook: a blank roadmap carrying ONE worked example so every
   // sheet's shape is visible (feature with size/deps columns + a story)
@@ -12667,7 +13271,7 @@
         // instead (their seat and points are kept for when they get one)
         (state.meta.capacityEnabled && !m.capType
           ? '<span class="res-cap res-untyped" tabindex="0" role="button" data-runtyped="' + m.id +
-            '" title="No capacity type — supplies nothing. Click to set one">set type</span>'
+            '" title="No capacity type — supplies nothing. Click to pick a role">set type</span>'
           : '') +
         (state.meta.capacityEnabled && m.capType && state.meta.capMode !== 'points'
           ? '<span class="res-cap" tabindex="0" role="button" data-rcap="' + m.id +
@@ -13481,7 +14085,7 @@
     var open = e.target.closest('[data-sp-open]');
     if (open) { guardUnsaved(function () { openRecent(open.dataset.spOpen); }); return; }
     if (e.target.closest('[data-sp-continue]')) { enterEditor(); return; }
-    if (e.target.closest('[data-sp-new]')) { guardUnsaved(newProjectModal); return; }
+    if (e.target.closest('[data-sp-new]')) { guardUnsaved(openWizard); return; }
     if (e.target.closest('[data-sp-opendlg]')) {
       guardUnsaved(function () {
         if (window.HeadwayDesktop) openAnyDialog();
@@ -13504,43 +14108,9 @@
     openBundleDoc(path).catch(function () { dropRecent(path); renderStartPage(); });
   }
 
-  // every project starts life on disk: the desktop creates a project folder
-  // (<Name>/<Name>.headway + <Name>/.headway/) inside a folder picked next;
-  // the browser fires the .xlsx download the moment it's created
-  function newProjectModal() {
-    var desktop = !!window.HeadwayDesktop;
-    openModal(
-      '<div class="modal" style="width:440px">' +
-      '<div class="m-head"><h2>New project</h2><button class="p-close" data-m="x"><i data-lucide="x"></i></button></div>' +
-      '<div class="m-body">' +
-      '<div class="m-sec"><label>Project name</label>' +
-      '<input id="npName" style="width:100%" maxlength="120" placeholder="Q1 Platform Roadmap">' +
-      '<div class="m-hint">' + (desktop
-        ? 'Creates a project folder with this name inside the folder you pick next. Put it somewhere synced (OneDrive, SharePoint, Dropbox) and others can open and edit it at the same time.'
-        : 'Every project lives in an .xlsx file — a copy downloads right away; use Save to keep it current.') +
-      '</div></div></div>' +
-      '<div class="m-foot"><button data-m="cancel">Cancel</button>' +
-      '<button id="npCreate" class="primary"><i data-lucide="file-plus-2"></i>Create project</button></div></div>',
-      function (host) {
-        $('[data-m=x]', host).onclick = closeModal;
-        $('[data-m=cancel]', host).onclick = closeModal;
-        var inp = $('#npName', host);
-        function go() {
-          var name = inp.value.trim() || 'New Roadmap';
-          var st = blankState();
-          st.meta.title = name;
-          closeModal();
-          // flush pending edits to the currently-open file before the paths
-          // switch, so the last few seconds of work can't land in the wrong file
-          settleCurrentDoc().then(function () { createProjectOnDisk(st); },
-            function () { createProjectOnDisk(st); });
-        }
-        $('#npCreate', host).onclick = go;
-        inp.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') go(); });
-        inp.focus();
-      });
-  }
-
+  // every project starts life as a file on disk: desktop picks a location
+  // first; the browser fires the .xlsx download the moment it's created
+  // (the new-project wizard gathers the settings first — see openWizard)
   function adoptProject(st, savedPath) {
     // a new project is a standalone workbook: the bundle session (and any
     // flush it still owes) ends first, or the new state would flush into it
@@ -13554,8 +14124,20 @@
     });
   }
 
-  function createProjectOnDisk(st) {
-    if (window.HeadwayDesktop) return createSharedFolder(st, st.meta.title, 'Created');
+  // opts.onDone after the project is adopted; opts.onFail when no folder /
+  // file was chosen or the create failed (the wizard reopens with its draft).
+  // The desktop creates a project FOLDER (<Name>/<Name>.headway +
+  // <Name>/.headway/) inside a folder picked next; the browser fires the
+  // .xlsx download the moment it's created.
+  function createProjectOnDisk(st, opts) {
+    opts = opts || {};
+    if (window.HeadwayDesktop) {
+      return createSharedFolder(st, st.meta.title, 'Created').then(function (res) {
+        if (res) { if (opts.onDone) opts.onDone(); }
+        else if (opts.onFail) opts.onFail();
+        return res;
+      });
+    }
     var fname = ((st.meta.title || '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Roadmap') + '.xlsx';
     RMExcel.exportWorkbook(st, exportUiSnapshot()).then(function (blob) {
       var a = document.createElement('a');
@@ -13564,9 +14146,11 @@
       a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
       adoptProject(st, null);
+      if (opts.onDone) opts.onDone();
       toast('Created “' + st.meta.title + '” — saved ' + fname + ' to your downloads');
     }).catch(function (err) {
       toast('Could not create the project: ' + (err && err.message || err), 'err');
+      if (opts.onFail) opts.onFail();
     });
   }
 
@@ -13597,6 +14181,7 @@
   }
 
   function doSave(forceDialog, quiet) {
+    if (wz) return null; // the open document is stashed behind the wizard
     if (docKind === 'bundle') return exportXlsx(); // Save = a standalone export
     // the desktop never writes an .xlsx in place: a document that is not a
     // project yet (a session restored from app storage) becomes one
@@ -13644,6 +14229,14 @@
     return sessionEdited && !docSaved;
   }
   function guardUnsaved(proceed) {
+    // the new-project wizard goes first (its draft is never saved anywhere);
+    // then the open document gets the usual question
+    if (wz) {
+      if (!wz.dirty) { closeWizard(true); guardUnsaved(proceed); return; }
+      confirmBox('Discard this new project?', 'The settings you picked are not saved anywhere yet.', 'Discard',
+        function () { closeWizard(true); guardUnsaved(proceed); }, true);
+      return;
+    }
     flushPanelEdit(); // typing still in the field counts as an edit too
     if (!unsavedNow()) { proceed(); return; }
     openModal(
@@ -13689,10 +14282,15 @@
     return closeBundleSession().then(function () {
       return RMExcel.importWorkbook(buf);
     }).then(function (r) {
+      var capTypeChanges = r.capTypeChanges || 0; // people moved to their role's type
       resumeInfo = null; docKind = 'xlsx'; // a workbook never re-links a folder
       // the file's name IS the roadmap's title (minus .xlsx) — a rename on
       // disk or a differing embedded title resolves in the filename's favor
       if (name) r.state.meta.title = titleFromFileName(name);
+      // the wizard holds a draft: a reload of the open file updates the
+      // document stashed behind it; opening another file ends the wizard
+      if (wz && reload) { wizardStashReload(r.state); return; }
+      if (wz) closeWizard(true);
       if (reload) {
         // keep whatever selection still exists in the new document
         var keepSel = selectedId && RM.itemById(r.state, selectedId) ? selectedId : null;
@@ -13716,6 +14314,8 @@
       if (r.source !== 'tool') {
         toast('Parsed “' + name + '” from the template layout');
       }
+      // people now take their role's capacity type: say so when that moved anyone
+      capTypeToast(capTypeChanges);
     });
   }
 
@@ -13764,14 +14364,22 @@
     openModal: openModal,
     closeModal: closeModal,
     openDropdown: openDropdown,
-    openSetup: function (tab) { setupTab = tab; view = 'setup'; saveLocal(); render(); },
+    openSetup: function (tab) { setupTab = normSetupTab(tab); view = 'setup'; saveLocal(); render(); },
+    wizard: {
+      open: openWizard,
+      go: function (k) { wizardGo(k); },
+      create: wizardCreate,
+      close: closeWizard,
+      isOpen: function () { return !!wz; }
+    },
     // hooks for the AI assistant (js/ai.js): reads are clones, every write
     // goes through commit() so it lands in undo + Version history (as
     // "<name> · AI")
     ai: {
-      state: function () { return RM.clone(state); },
+      state: function () { return RM.clone(wz ? wz.stash.state : state); },
       hasDoc: function () { return !!state && !document.body.classList.contains('start'); },
       commit: function (label, mutate) {
+        if (wz) { withStash(function () { aiActor = true; try { commit(label, mutate); } finally { aiActor = false; } }); return; }
         aiActor = true;
         try { commit(label, mutate); } finally { aiActor = false; }
       },
@@ -13813,7 +14421,7 @@
       },
       setView: function (v) {
         if (['planning', 'scoping', 'setup', 'budget', 'reports', 'history', 'prio', 'sprints'].indexOf(v) === -1) return false;
-        if (!RM.appEnabled(state, v)) return false; // switched off in Setup → Apps
+        if (!RM.appEnabled(state, v)) return false; // switched off in Setup → Views
         flushPanelEdit();
         view = v;
         if (view === 'history') { vhSel = null; vhPick = []; vhTab = null; }
@@ -13844,6 +14452,16 @@
     // contenteditable editors (rich description, scoping cells) count as fields too
     var inField = /INPUT|TEXTAREA|SELECT/.test(ae.tagName) ||
       ae.isContentEditable || (ae.closest && ae.closest('[contenteditable="true"]') !== null);
+    // the new-project wizard takes no app shortcuts; Escape closes it
+    if (wz) {
+      if (e.key !== 'Escape') return;
+      if (!popEl.hidden) { closePopover(); return; }
+      if (!modalHost.hidden) { closeModal(); return; }
+      if (!calPop.hidden) { closeCal(); return; }
+      if (inField) { document.activeElement.blur(); return; }
+      wizardTryClose();
+      return;
+    }
     // Esc/Delete while drawing a dependency line cancels the add
     if (drag && drag.kind === 'port' && (e.key === 'Escape' || e.key === 'Delete' || e.key === 'Backspace')) {
       e.preventDefault();
@@ -14136,7 +14754,7 @@
       '<label class="p-check"><input type="checkbox" id="jxFeatures"' + ck(pref.features != null ? pref.features : d.features) + '> Features</label>' +
       '<label class="p-check"><input type="checkbox" id="jxStories"' + ck(pref.stories != null ? pref.stories : d.stories) + '> Stories</label>' +
       '</div><div class="m-hint">Without story rows, a feature\'s stories become a checklist in its description.</div>' +
-      '<div class="m-hint">Issue types follow each item\'s type (Setup → Hierarchy).</div></div>' +
+      '<div class="m-hint">Issue types follow each item\'s type (Setup → Organization).</div></div>' +
       '<div class="m-sec"><label>In Jira</label><div class="m-hint">' +
       'Work navigator → ⋯ → Import issues from CSV (needs the Create work items and Make bulk changes permissions). ' +
       'Choose the date format <b>yyyy-MM-dd</b>. Parent and Blocked By carry the Jira keys entered in Headway; ' +
@@ -14303,6 +14921,7 @@
     // (unless a saved expansion map — local or from an imported file — says otherwise)
     if (!uiExpandedLoaded) state.items.forEach(function (it) { if (it.stories.length) expanded[it.id] = true; });
     render();
+    capTypeToast(localCapTypeChanges); // a restored local copy migrated people's types
     // fresh launches land on the start page; a mid-session reload (the
     // sessionStorage flag survives those, not app restarts) rejoins the editor
     var inEditor = readOnly;

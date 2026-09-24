@@ -757,6 +757,105 @@ eq(RM.itemByNum(RM.placeUnit(sPhM, sPhM.items[1].id, null, { today: 0 }).state, 
 eq(RM.todayDay(META, new Date(Date.UTC(2026, 6, 20))), 0, 'today before the timeline clamps to 0');
 eq(RM.todayDay(META, new Date(Date.UTC(2026, 7, 4))), 6, 'today maps to its working-day index');
 
+// ------------------------------------------------------------- role capacity types
+section('role capacity types');
+var sR = RM.normalizeState({
+  meta: { timelineStart: '2026-07-27', numWeeks: 8, capacityEnabled: true, capRowTypes: ['Design'] },
+  phases: [{ id: 'p1' }], items: [],
+  capTypes: ['Development', 'Design'],
+  teamTypes: ['Engineer', 'Designer', 'PM'],
+  team: [
+    { name: 'A', type: 'Engineer', capType: 'Development' },
+    { name: 'B', type: 'Engineer', capType: 'Development' },
+    { name: 'C', type: 'Engineer', capType: 'Design' },
+    { name: 'D', type: 'Designer', capType: 'Design' },
+    { name: 'E', type: '', capType: 'Design' },
+    { name: 'F', type: 'PM', capType: '' }
+  ]
+});
+eq(sR.roleCapTypes, { Engineer: 'Development', Designer: 'Design' }, 'majority type per role; roles with no typed people map to nothing');
+eq(sR.team.map(function (m) { return m.capType; }), ['Development', 'Development', 'Development', 'Design', 'Design', ''],
+  'people take their role\'s type; a person with no role keeps theirs');
+ok(!('capRowTypes' in sR.meta), 'capRowTypes is dropped');
+var sTie = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p1' }], items: [],
+  capTypes: ['Development', 'Design'], teamTypes: ['Eng'],
+  team: [{ name: 'A', type: 'Eng', capType: 'Design' }, { name: 'B', type: 'Eng', capType: 'Development' }] });
+eq(sTie.roleCapTypes, { Eng: 'Development' }, 'a tie takes the first type in capTypes');
+var sKeep = RM.normalizeState(RM.clone(sR));
+eq(sKeep.roleCapTypes, sR.roleCapTypes, 'an existing map is kept on reload, not re-derived');
+RM.setRoleCapType(sR, 'PM', 'Design');
+eq(sR.team[5].capType, 'Design', 'setting a role\'s type updates its people');
+eq(RM.capTypeRoles(sR, 'Design'), ['Designer', 'PM'], 'roles supplying a type, in teamTypes order');
+RM.renameCapType(sR, 'Design', 'UX');
+eq([sR.roleCapTypes.Designer, sR.team[3].capType], ['UX', 'UX'], 'renaming a type follows into the map');
+RM.renameRole(sR, 'Designer', 'Product designer');
+eq(sR.roleCapTypes['Product designer'], 'UX', 'renaming a role moves its mapping');
+RM.removeCapType(sR, 'UX');
+ok(!('Product designer' in sR.roleCapTypes) && sR.team[3].capType === '', 'removing a type clears its roles and people');
+RM.removeRole(sR, 'Engineer');
+ok(!('Engineer' in sR.roleCapTypes), 'removing a role drops its mapping');
+var sNoRole = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p1' }], items: [],
+  capTypes: ['Design'], teamTypes: ['X'], team: [{ name: 'E', type: '', capType: 'Design' }] });
+RM.setRoleCapType(sNoRole, 'X', 'Design'); RM.renameRole(sNoRole, 'X', 'Y');
+eq(sNoRole.team[0].capType, 'Design', 'no-role person keeps an old type through role edits');
+eq(RM.lastCapTypeChanges, 0, 'nothing to report for a clean file');
+RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8 }, phases: [{ id: 'p1' }], items: [],
+  capTypes: ['A', 'B'], teamTypes: ['R'], team: [{ name: 'x', type: 'R', capType: 'A' }, { name: 'y', type: 'R', capType: 'A' }, { name: 'z', type: 'R', capType: 'B' }] });
+eq(RM.lastCapTypeChanges, 1, 'normalize reports how many people changed type');
+
+// ------------------------------------------------------------- story risk scheme
+section('story risk scheme');
+function riskSt(meta, stories) {
+  return RM.normalizeState({ meta: Object.assign({ timelineStart: '2026-07-27', numWeeks: 8 }, meta),
+    phases: [{ id: 'p1' }], items: [{ num: 1, feature: 'f', risk: 'H', stories: stories }] });
+}
+var sOld = riskSt({ riskScheme: 'risk' }, [{ title: 's', risk: 'M' }]);
+eq([sOld.meta.storyRiskScheme, sOld.items[0].stories[0].risk], ['risk', 'M'], 'old file: stories keep the feature scheme');
+eq(riskSt({ riskScheme: 'auto' }, [{ title: 's' }]).meta.storyRiskScheme, 'none', 'auto never applies to stories');
+var sConf = riskSt({ riskScheme: 'risk', storyRiskScheme: 'confidence' }, [{ title: 's', risk: 'H' }]);
+eq(RM.riskOrderOf(sConf, 'story'), ['H', 'M', 'L'], 'story ladder follows the story scheme');
+eq(RM.riskOrderOf(sConf), ['L', 'M', 'H'], 'feature ladder unchanged');
+eq(riskSt({ riskScheme: 'none', storyRiskScheme: 'auto' }, []).meta.storyRiskScheme, 'none', 'auto is rejected for stories');
+RM.setRiskScheme(sConf, 'none', 'story');
+eq([sConf.items[0].stories[0].risk, sConf.items[0].risk], [null, 'H'], 'turning story risk off clears stories only');
+RM.setRiskScheme(sConf, 'confidence');
+eq(sConf.items[0].risk, 'H', 'feature scheme change keeps a value that exists on the new ladder');
+
+section('sprints app');
+var sp = RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8, weeksPerSprint: 3, apps: { sprints: false } },
+  phases: [{ id: 'p1' }], items: [] });
+eq(sp.meta.weeksPerSprint, 3, '3-week sprints are allowed');
+ok(RM.appEnabled(sp, 'sprints') && !('sprints' in sp.meta.apps), 'Sprinting follows sprints on, apps.sprints is dropped');
+sp.meta.weeksPerSprint = 0;
+ok(!RM.appEnabled(sp, 'sprints'), 'sprints off hides Sprinting');
+
+// ------------------------------------------------------------- presets
+section('presets');
+function blankish() {
+  return RM.normalizeState({ meta: { timelineStart: '2026-07-27', numWeeks: 8, title: 'Keep me' }, phases: [{ id: 'p1', name: 'Build' }], items: [] });
+}
+var want = {
+  scrum:   { sizeScheme: 'none',   storySizeScheme: 'fibonacci', priorityScheme: 'levels', storyPriorityScheme: 'moscow', riskScheme: 'none', storyRiskScheme: 'none', weeksPerSprint: 2, budget: true,  capacityEnabled: true,  planLevel: 'story',   capMode: 'points' },
+  ascrum:  { sizeScheme: 'tshirt', storySizeScheme: 'fibonacci', priorityScheme: 'levels', storyPriorityScheme: 'moscow', riskScheme: 'risk', storyRiskScheme: 'risk', weeksPerSprint: 2, budget: true,  capacityEnabled: true,  planLevel: 'story',   capMode: 'points' },
+  rapid:   { sizeScheme: 'tshirt', storySizeScheme: 'none',      priorityScheme: 'none',   storyPriorityScheme: 'none',   riskScheme: 'none', storyRiskScheme: 'none', weeksPerSprint: 0, budget: false, capacityEnabled: true,  planLevel: 'feature', capMode: 'person' },
+  minimal: { sizeScheme: 'tshirt', storySizeScheme: 'none',      priorityScheme: 'none',   storyPriorityScheme: 'none',   riskScheme: 'none', storyRiskScheme: 'none', weeksPerSprint: 0, budget: false, capacityEnabled: false }
+};
+Object.keys(want).forEach(function (k) {
+  var s = blankish();
+  ok(RM.applyPreset(s, k), k + ' applies');
+  var m = s.meta, w = want[k];
+  var got = { sizeScheme: m.sizeScheme, storySizeScheme: m.storySizeScheme, priorityScheme: m.priorityScheme,
+    storyPriorityScheme: m.storyPriorityScheme, riskScheme: m.riskScheme, storyRiskScheme: m.storyRiskScheme,
+    weeksPerSprint: m.weeksPerSprint, budget: m.apps.budget, capacityEnabled: m.capacityEnabled };
+  if ('planLevel' in w) { got.planLevel = m.planLevel; got.capMode = m.capMode; }
+  eq(got, w, k + ' writes exactly its settings');
+  eq([m.title, s.phases[0].name], ['Keep me', 'Build'], k + ' leaves name and phases alone');
+});
+ok(!RM.applyPreset(blankish(), 'nope'), 'unknown preset is refused');
+var sSw = blankish(); RM.applyPreset(sSw, 'ascrum'); RM.applyPreset(sSw, 'minimal');
+eq([sSw.meta.riskScheme, sSw.meta.weeksPerSprint], ['none', 0], 'switching presets overwrites the preset-owned fields');
+eq(RM.normalizeState(RM.clone(sSw)).meta.sizeScheme, 'tshirt', 'a preset survives normalize');
+
 // ------------------------------------------------------------- regressions (adversarial review)
 section('regressions');
 // total calendar helpers
@@ -1877,7 +1976,7 @@ function finish() {
 section('apps switch');
 {
   var ap = RM.normalizeState({ meta: { title: 'A', timelineStart: '2026-07-27', numWeeks: 8 }, phases: [], items: [] });
-  ok(RM.APPS.every(function (a) { return ap.meta.apps[a[0]] === true; }), 'a fresh document has every app on');
+  ok(RM.APPS.every(function (a) { return a[0] === 'sprints' ? RM.appEnabled(ap, 'sprints') : ap.meta.apps[a[0]] === true; }), 'a fresh document has every app on (Sprinting via sprints on)');
   var ap2 = RM.normalizeState({ meta: { title: 'A', timelineStart: '2026-07-27', numWeeks: 8, apps: { scoping: false, planning: false, bogus: false } }, phases: [], items: [] });
   eq([ap2.meta.apps.scoping, ap2.meta.apps.planning, ap2.meta.apps.prio, 'bogus' in ap2.meta.apps], [false, true, true, false],
     'off flags stick, Planning is forced on, unknown keys drop');

@@ -211,10 +211,17 @@
   RM.DEFAULT_STORY_PRIORITY_SCHEME = 'levels';
   function sizeKeys(kind) {
     return kind === 'story'
-      ? { scheme: 'storySizeScheme', order: 'storySizeOrder', days: 'storySizeDays' }
-      : { scheme: 'sizeScheme', order: 'sizeOrder', days: 'sizeDays' };
+      ? { scheme: 'storySizeScheme', order: 'storySizeOrder', days: 'storySizeDays', base: 'storySizeSchemeBase' }
+      : { scheme: 'sizeScheme', order: 'sizeOrder', days: 'sizeDays', base: 'sizeSchemeBase' };
   }
   RM.sizeKeys = sizeKeys;
+  // an edited scale turns Custom but remembers the scheme it came from, so
+  // Setup can offer "Reset to <scheme>"
+  function markSizeCustom(m, k) {
+    if (m[k.scheme] !== 'custom') m[k.base] = m[k.scheme];
+    m[k.scheme] = 'custom';
+  }
+  RM.markSizeCustom = function (state, kind) { markSizeCustom(state.meta, sizeKeys(kind)); };
   // walk every sized thing of a kind (features, or every story)
   function eachOfKind(state, kind, fn) {
     (state.items || []).forEach(function (it) {
@@ -243,6 +250,7 @@
       (state.items || []).forEach(function (it) { if (it) it.size = null; });
     }
     m[k.scheme] = scheme;
+    delete m[k.base];
     m[k.order] = def.sizes.filter(function (l) { return skip.indexOf(l) === -1; });
     m[k.days] = {};
     Object.keys(def.days).forEach(function (l) {
@@ -257,21 +265,21 @@
     m[k.days][newLabel] = m[k.days][oldLabel];
     delete m[k.days][oldLabel];
     eachOfKind(state, kind, function (o) { if (o.size === oldLabel) o.size = newLabel; });
-    m[k.scheme] = 'custom';
+    markSizeCustom(m, k);
   };
   RM.addSizeOption = function (state, label, days, kind) {
     var m = state.meta, k = sizeKeys(kind);
     if (!label || m[k.order].indexOf(label) !== -1) return;
     m[k.order].push(label);
     m[k.days][label] = isFinite(+days) && +days >= 0 ? +days : 5;
-    m[k.scheme] = 'custom';
+    markSizeCustom(m, k);
   };
   RM.removeSizeOption = function (state, label, kind) {
     var m = state.meta, k = sizeKeys(kind);
     m[k.order] = m[k.order].filter(function (l) { return l !== label; });
     delete m[k.days][label];
     eachOfKind(state, kind, function (o) { if (o.size === label) o.size = null; });
-    m[k.scheme] = 'custom';
+    markSizeCustom(m, k);
   };
   // Documents saved before Fibonacci grew its small steps pick them up, as
   // long as they still hold an untouched old default order (an edited scale is
@@ -326,9 +334,45 @@
     ['budget', 'Budgeting', 'wallet', 'Rates, costs and role hours'],
     ['reports', 'Reporting', 'chart-pie', 'Project reporting dashboard']
   ];
+  // Onboarding presets: each writes ONLY these fields (schemes, sprints,
+  // budget, scheduling). Name, dates, phases, people and columns are never
+  // touched, so switching presets is safe after later steps were edited.
+  RM.PRESETS = [
+    { key: 'scrum', name: 'Scrum', sprints: true,
+      desc: 'Stories carry the points; a feature is the span of its stories. Work is scheduled into 2-week sprints by story points, with budget tracking.',
+      v: { size: ['none', 'fibonacci'], prio: ['levels', 'moscow'], risk: ['none', 'none'], wps: 2, budget: true, cap: { on: true, plan: 'story', mode: 'points' } } },
+    { key: 'ascrum', name: 'Advanced Scrum', sprints: true,
+      desc: 'Scrum plus a size on every feature, and priority and risk on both features and stories.',
+      v: { size: ['tshirt', 'fibonacci'], prio: ['levels', 'moscow'], risk: ['risk', 'risk'], wps: 2, budget: true, cap: { on: true, plan: 'story', mode: 'points' } } },
+    { key: 'rapid', name: 'Rapid Delivery', sprints: false,
+      desc: 'T-shirt sizes on features, no sprints. Each feature takes a person, and Auto timeline packs features in as people free up.',
+      v: { size: ['tshirt', 'none'], prio: ['none', 'none'], risk: ['none', 'none'], wps: 0, budget: false, cap: { on: true, plan: 'feature', mode: 'person' } } },
+    { key: 'minimal', name: 'Minimal', sprints: false,
+      desc: 'Just features on a timeline with T-shirt sizes. You place and stretch the bars yourself.',
+      v: { size: ['tshirt', 'none'], prio: ['none', 'none'], risk: ['none', 'none'], wps: 0, budget: false, cap: { on: false } } }
+  ];
+  RM.applyPreset = function (state, key) {
+    var p = RM.PRESETS.filter(function (x) { return x.key === key; })[0];
+    if (!p) return false;
+    var v = p.v, m = state.meta;
+    RM.setSizeScheme(state, v.size[0], 'feature');
+    RM.setSizeScheme(state, v.size[1], 'story');
+    RM.setPriorityScheme(state, v.prio[0], 'feature');
+    RM.setPriorityScheme(state, v.prio[1], 'story');
+    RM.setRiskScheme(state, v.risk[0], 'feature');
+    RM.setRiskScheme(state, v.risk[1], 'story');
+    m.weeksPerSprint = v.wps;
+    m.apps = m.apps || {};
+    m.apps.budget = v.budget;
+    m.capacityEnabled = !!v.cap.on;
+    if (v.cap.on) { m.planLevel = v.cap.plan; m.capMode = v.cap.mode; }
+    m.preset = key;
+    return true;
+  };
   RM.appEnabled = function (state, key) {
     var a = state && state.meta && state.meta.apps;
     if (key === 'planning') return true;
+    if (key === 'sprints') return RM.sprintsEnabled(state && state.meta);
     if (!RM.APPS.some(function (x) { return x[0] === key; })) return true; // not an app (setup, history)
     return !a || a[key] !== false;
   };
@@ -367,26 +411,31 @@
       if (o.priority && order.indexOf(o.priority) === -1) o.priority = null;
     });
   };
-  RM.riskSchemeOf = function (state) {
-    var s = state && state.meta && state.meta.riskScheme;
+  // stories rate risk on their own scheme: a manual ladder or none (the
+  // auto scheme reads the dependency graph, which only features have)
+  RM.STORY_RISK_SCHEMES = ['none', 'risk', 'confidence'];
+  function riskKey(kind) { return kind === 'story' ? 'storyRiskScheme' : 'riskScheme'; }
+  RM.riskSchemeOf = function (state, kind) {
+    var s = state && state.meta && state.meta[riskKey(kind)];
+    if (kind === 'story') return RM.STORY_RISK_SCHEMES.indexOf(s) !== -1 ? s : 'none';
     return RM.RISK_SCHEMES[s] ? s : 'none';
   };
-  RM.riskEnabled = function (state) { return RM.riskSchemeOf(state) !== 'none'; };
-  RM.riskOrderOf = function (state) {
-    return (RM.RISK_SCHEMES[RM.riskSchemeOf(state)].order || []).slice();
+  RM.riskEnabled = function (state, kind) { return RM.riskSchemeOf(state, kind) !== 'none'; };
+  RM.riskOrderOf = function (state, kind) {
+    return (RM.RISK_SCHEMES[RM.riskSchemeOf(state, kind)].order || []).slice();
   };
-  RM.riskColLabel = function (state) {
-    return RM.RISK_SCHEMES[RM.riskSchemeOf(state)].label;
+  RM.riskColLabel = function (state, kind) {
+    return RM.RISK_SCHEMES[RM.riskSchemeOf(state, kind)].label;
   };
-  RM.setRiskScheme = function (state, key) {
+  RM.setRiskScheme = function (state, key, kind) {
     if (!RM.RISK_SCHEMES[key]) return;
-    state.meta.riskScheme = key;
+    if (kind === 'story' && RM.STORY_RISK_SCHEMES.indexOf(key) === -1) return;
+    state.meta[riskKey(kind)] = key;
     var order = RM.RISK_SCHEMES[key].order || [];
     state.items.forEach(function (it) {
-      if (it.risk && order.indexOf(it.risk) === -1) it.risk = null;
-      (it.stories || []).forEach(function (st) {
-        if (st.risk && order.indexOf(st.risk) === -1) st.risk = null;
-      });
+      if (kind === 'story') {
+        (it.stories || []).forEach(function (st) { if (st.risk && order.indexOf(st.risk) === -1) st.risk = null; });
+      } else if (it.risk && order.indexOf(it.risk) === -1) it.risk = null;
     });
   };
 
@@ -420,6 +469,28 @@
   RM.memberPoints = function (state, m) {
     return m.points != null ? m.points : (state.meta || state).defaultPoints;
   };
+  // people take their role's capacity type; a person with no role keeps
+  // whatever type they already had. Returns how many people changed.
+  RM.syncMemberCapTypes = function (state) {
+    var map = state.roleCapTypes || {}, n = 0;
+    state.team.forEach(function (m) {
+      if (!m.type) return;
+      var t = map[m.type] || '';
+      if (m.capType !== t) { m.capType = t; n++; }
+    });
+    return n;
+  };
+  RM.setRoleCapType = function (state, role, capType) {
+    state.roleCapTypes = state.roleCapTypes || {};
+    if (capType && state.capTypes.indexOf(capType) !== -1) state.roleCapTypes[role] = capType;
+    else delete state.roleCapTypes[role];
+    RM.syncMemberCapTypes(state);
+  };
+  RM.capTypeRoles = function (state, capType) {
+    var map = state.roleCapTypes || {};
+    return state.teamTypes.filter(function (r) { return map[r] === capType; });
+  };
+  RM.lastCapTypeChanges = 0;
   RM.renameCapType = function (state, oldName, newName) {
     newName = String(newName || '').trim();
     if (!newName || newName === oldName) return false;
@@ -427,6 +498,9 @@
     var i = state.capTypes.indexOf(oldName);
     if (i === -1) return false;
     state.capTypes[i] = newName;
+    Object.keys(state.roleCapTypes || {}).forEach(function (r) {
+      if (state.roleCapTypes[r] === oldName) state.roleCapTypes[r] = newName;
+    });
     state.team.forEach(function (m) { if (m.capType === oldName) m.capType = newName; });
     state.items.forEach(function (it) {
       if (it.capType === oldName) it.capType = newName;
@@ -438,6 +512,9 @@
     var i = state.capTypes.indexOf(name);
     if (i === -1) return false;
     state.capTypes.splice(i, 1);
+    Object.keys(state.roleCapTypes || {}).forEach(function (r) {
+      if (state.roleCapTypes[r] === name) delete state.roleCapTypes[r];
+    });
     state.team.forEach(function (m) { if (m.capType === name) m.capType = ''; });
     state.items.forEach(function (it) {
       if (it.capType === name) it.capType = '';
@@ -1645,10 +1722,12 @@
     }
     RM.applyWorkWeek(m);
     m.numWeeks = m.numWeeks || (m.numSprints ? m.numSprints * (m.weeksPerSprint || 2) : 48);
-    m.weeksPerSprint = [0, 1, 2, 4].indexOf(+m.weeksPerSprint) !== -1 ? +m.weeksPerSprint : 2;
+    m.weeksPerSprint = [0, 1, 2, 3, 4].indexOf(+m.weeksPerSprint) !== -1 ? +m.weeksPerSprint : 2;
     // capacity feature switch — roster-based scheduling constraints and the
     // capacity header row. OFF by default; enabled per-document in Setup.
     m.capacityEnabled = !!m.capacityEnabled;
+    // the onboarding preset the project started from (informational)
+    m.preset = typeof m.preset === 'string' ? m.preset : '';
     m.planLevel = m.planLevel === 'story' ? 'story' : 'feature';
     // demand model: a unit in flight costs one person (× its multiplier) or
     // its story points spread over its weeks against each person's points
@@ -1662,11 +1741,15 @@
     m.estimateUnit = RM.ESTIMATE_UNITS[m.estimateUnit] ? m.estimateUnit : 'days';
     m.estimateBasis = m.estimateBasis === 'low' ? 'low' : 'high';
     m.daysPerUnit = isFinite(m.daysPerUnit) && m.daysPerUnit > 0 ? +m.daysPerUnit : RM.ESTIMATE_UNITS[m.estimateUnit].daysPerUnit;
-    // apps switch (Setup → Apps): which header tabs this project shows. All
+    // apps switch (Setup → Views): which header tabs this project shows. All
     // on by default; Planning is the home view and can never go off.
     var apps = (m.apps && typeof m.apps === 'object') ? m.apps : {};
     m.apps = {};
-    RM.APPS.forEach(function (a) { m.apps[a[0]] = a[0] === 'planning' ? true : apps[a[0]] !== false; });
+    RM.APPS.forEach(function (a) {
+      // Sprinting follows the sprints setting; it has no switch of its own
+      if (a[0] === 'sprints') return;
+      m.apps[a[0]] = a[0] === 'planning' ? true : apps[a[0]] !== false;
+    });
     // the saved project end date (last working day) wins over numWeeks
     if (m.endDate && /^\d{4}-\d{2}-\d{2}$/.test(m.endDate)) {
       var endWeeks = Math.floor((RM.parseISO(m.endDate) - RM.parseISO(m.timelineStart)) / (7 * 86400000)) + 1;
@@ -1822,6 +1905,11 @@
     if (isLegacyMap) m.sizeDays = RM.clone(RM.DEFAULT_SIZE_DAYS);
     // sizing approach: preset scheme, or 'custom' once edited; 'none' = off
     m.sizeScheme = RM.SIZE_SCHEMES[m.sizeScheme] ? m.sizeScheme : 'tshirt';
+    // the scheme a Custom scale was edited from (for Reset); only on Custom
+    ['sizeSchemeBase', 'storySizeSchemeBase'].forEach(function (bk) {
+      var b = m[bk], custom = m[bk === 'sizeSchemeBase' ? 'sizeScheme' : 'storySizeScheme'] === 'custom';
+      if (!custom || !RM.SIZE_SCHEMES[b] || b === 'custom' || b === 'none') delete m[bk];
+    });
     if (Array.isArray(m.sizeOrder)) {
       var seenSz = {};
       m.sizeOrder = m.sizeOrder.map(String).filter(function (l) {
@@ -1915,6 +2003,10 @@
       m.riskScheme = (state.items || []).some(function (it) { return it && it.risk; })
         ? 'risk' : 'none';
     }
+    // story risk scheme — older docs rated stories on the feature scheme
+    if (RM.STORY_RISK_SCHEMES.indexOf(m.storyRiskScheme) === -1) {
+      m.storyRiskScheme = RM.STORY_RISK_SCHEMES.indexOf(m.riskScheme) !== -1 ? m.riskScheme : 'none';
+    }
     // work week: full-time hours + working days per week
     m.weekHours = isFinite(+m.weekHours) && +m.weekHours > 0 ? Math.min(80, +m.weekHours) : RM.WEEK_HOURS;
     m.daysPerWeek = isFinite(+m.daysPerWeek) && +m.daysPerWeek >= 1 && +m.daysPerWeek <= 5
@@ -1960,6 +2052,7 @@
 
     RM.normalizeTypes(state);
     var riskOrder = RM.RISK_SCHEMES[m.riskScheme].order || RM.RISK_ORDER;
+    var storyRiskOrder = RM.RISK_SCHEMES[m.storyRiskScheme].order || RM.RISK_ORDER;
     var prioOrder = RM.PRIORITY_SCHEMES[m.priorityScheme].order || [];
     var storyPrioOrder = RM.PRIORITY_SCHEMES[m.storyPriorityScheme].order || [];
     state.items = (state.items || []).map(function (it) {
@@ -2092,8 +2185,8 @@
             estLow: RM.estDays(s.estLow), estHigh: RM.estDays(s.estHigh),
             priority: s.priority && storyPrioOrder.indexOf(String(s.priority).toUpperCase()) !== -1
               ? String(s.priority).toUpperCase() : null,
-            // stories rate risk on the document's risk scheme, like features
-            risk: s.risk && riskOrder.indexOf(String(s.risk).toUpperCase()) !== -1
+            // stories rate risk on their own scheme
+            risk: s.risk && storyRiskOrder.indexOf(String(s.risk).toUpperCase()) !== -1
               ? String(s.risk).toUpperCase() : null,
             assignees: Array.isArray(s.assignees) ? s.assignees.map(String) : [],
             // capacity type: what the story drains and who can take it
@@ -2143,6 +2236,9 @@
     state.epicColors = state.epicColors || {}; // legacy — display now keys off workstream
     state.wsColors = state.wsColors && typeof state.wsColors === 'object' ? state.wsColors : {};
     state.epicIcons = state.epicIcons && typeof state.epicIcons === 'object' ? state.epicIcons : {};
+    // epics added in Setup before any item uses them
+    state.epicList = (Array.isArray(state.epicList) ? state.epicList : []).map(function (e) { return String(e || '').trim(); })
+      .filter(function (e, i, a) { return e && a.indexOf(e) === i; });
     // epic name -> Jira epic key (epics are strings on items, like epicIcons)
     var epicJira = {};
     if (state.epicJira && typeof state.epicJira === 'object') {
@@ -2275,6 +2371,27 @@
     state.items.forEach(function (it) {
       if (it.capType && state.capTypes.indexOf(it.capType) === -1) state.capTypes.push(it.capType);
     });
+    // Each role supplies at most one capacity type; people inherit it.
+    // Old files have no map: each role takes the type most of its people
+    // carried (ties: first in capTypes). An existing map is kept.
+    var rct = state.roleCapTypes && typeof state.roleCapTypes === 'object' ? state.roleCapTypes : null;
+    if (!rct) {
+      rct = {};
+      state.teamTypes.forEach(function (role) {
+        var counts = {};
+        state.team.forEach(function (mbr) {
+          if (mbr.type === role && mbr.capType) counts[mbr.capType] = (counts[mbr.capType] || 0) + 1;
+        });
+        var best = '', bestN = 0;
+        state.capTypes.forEach(function (t) { if ((counts[t] || 0) > bestN) { best = t; bestN = counts[t]; } });
+        if (best) rct[role] = best;
+      });
+    }
+    state.roleCapTypes = {};
+    Object.keys(rct).forEach(function (role) {
+      if (state.teamTypes.indexOf(role) !== -1 && state.capTypes.indexOf(rct[role]) !== -1) state.roleCapTypes[role] = rct[role];
+    });
+    RM.lastCapTypeChanges = RM.syncMemberCapTypes(state);
     // A feature always plans as SOME capacity type: a blank one (every
     // document written before capacity types existed) takes the first type.
     // Milestones carry no demand, so they stay untyped.
@@ -4398,6 +4515,10 @@
       state.meta.rateCard[newName] = state.meta.rateCard[oldName];
       delete state.meta.rateCard[oldName];
     }
+    if (state.roleCapTypes && oldName in state.roleCapTypes) {
+      state.roleCapTypes[newName] = state.roleCapTypes[oldName];
+      delete state.roleCapTypes[oldName];
+    }
     return true;
   };
 
@@ -4410,6 +4531,7 @@
     state.team.forEach(function (m) { if (m.type === name) m.type = ''; });
     state.items.forEach(function (it) { if (it.teamType === name) it.teamType = ''; });
     if (state.meta.rateCard) delete state.meta.rateCard[name];
+    if (state.roleCapTypes) delete state.roleCapTypes[name];
     return true;
   };
 

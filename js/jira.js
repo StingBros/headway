@@ -586,7 +586,7 @@
         return client.get('/rest/api/3/field').then(function (fields) {
           var sf = JR.findStartField(fields, cfg.startField);
           if (sf) { info.startField = sf.id; info.startFieldName = sf.name; }
-          else info.notes.push('No “Start date” field in this Jira site — only due dates will be set. Enter the field id in Setup → Jira if it goes by another name.');
+          else info.notes.push('No “Start date” field in this Jira site — only due dates will be set. Enter the field id in Setup → Jira Integration if it goes by another name.');
         }, function (err) { info.notes.push('Could not list fields: ' + errText(err)); });
       })
       .then(function () {
@@ -1240,7 +1240,7 @@
       '<div class="m-hint">Kept in this app’s local storage on this computer and never written to the roadmap file, so nobody who opens the file sees it. Create a token at id.atlassian.com → Security → API tokens.' +
       (desktop ? '' : ' Jira Cloud blocks browser calls; syncing works from the desktop app.') + '</div>' +
       '<div class="p-row" style="margin-top:8px"><button id="jrTest">Test connection</button><span id="jrTestOut" class="m-hint" style="margin:0 0 0 10px"></span></div>' +
-      '<h2 style="margin-top:22px">Project (shared in the file)</h2>' +
+      '<h2 style="margin-top:22px">Project (shared in the file) <span class="su-pill jr-saved">Saved in this project</span></h2>' +
       '<div class="m-sec"><label>Site</label>' + inp('jrSite', d.site || c.site, 'your-team.atlassian.net') + '</div>' +
       '<div class="p-grid2">' +
       '<div class="m-sec"><label>Project key</label>' + inp('jrProject', d.project, 'e.g. HW') + '</div>' +
@@ -1251,7 +1251,7 @@
       ck('jrSprints', d.sprints, 'Place issues in the board’s sprints by start date, creating missing sprints') +
       ck('jrAuto', d.auto, 'Sync automatically every 5 minutes once anything is linked to Jira') +
       '<h2 style="margin-top:18px">Issue types</h2>' +
-      '<div class="m-hint">Each Headway type becomes this Jira issue type. Types are defined in Setup → Hierarchy; the Jira name can be edited here or there.</div>' +
+      '<div class="m-hint">Each Headway type becomes this Jira issue type. Types are defined in Setup → Organization; the Jira name can be edited here or there.</div>' +
       '<table class="hol-table jr-types"><thead><tr><th>Headway type</th><th>Jira issue type</th><th>In project</th></tr></thead><tbody>' +
       RM.itemTypes(st).map(function (t) {
         var r = JR.lastTypes && JR.lastTypes.byKey && JR.lastTypes.byKey[t.key];
