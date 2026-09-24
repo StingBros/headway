@@ -1603,13 +1603,14 @@
   }
   function plansChanged(hw) {
     if (docKind !== 'bundle' || !hw || !Array.isArray(hw.plans)) return;
+    var wasSeveral = livePlans().length > 1;
     planList = RMBundle.mergePlanList(planList, hw.plans);
     var cur = planEntry(activePlanId);
     if (cur && cur.deleted) {
       var live = livePlans();
       if (live.length) {
         toast('“' + cur.name + '” was deleted by someone else — switched to “' + live[0].name + '”');
-        switchPlan(live[0].id);
+        switchPlan(live[0].id).then(function () { if (wasSeveral) alignSoleTitle(); });
         return;
       }
       if (!planGone) {
@@ -1620,9 +1621,19 @@
         updateSaveBtn();
       }
     }
+    if (wasSeveral) alignSoleTitle();
     if (compareOptId && !cmpEntry()) compareOptId = null;
     syncOptBtn();
     syncCmpPill();
+  }
+  // several plans → one (a plan deleted): the one left's title IS the project
+  // name again, so it takes that name now — the next title edit then renames
+  // only what the user sees, never unexpectedly
+  function alignSoleTitle() {
+    if (wz || readOnly || docKind !== 'bundle' || livePlans().length !== 1) return;
+    var pn = projectName();
+    if (!pn || state.meta.title === pn) return;
+    commit('title', function (s2) { s2.meta.title = pn; });
   }
   // a shard of a plan we are NOT viewing changed: the Compare copy is stale
   function planShardChanged(planId) {
@@ -1714,8 +1725,8 @@
         var wasActive = id === activePlanId;
         writePlanEntry(p, 'Deleted “' + name + '”').then(function () {
           var live = livePlans();
-          if (wasActive && live.length) switchPlan(live[0].id);
-        });
+          return wasActive && live.length ? switchPlan(live[0].id) : null;
+        }).then(alignSoleTitle);
       }, true);
   }
   function openPlanMenu() {

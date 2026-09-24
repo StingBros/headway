@@ -1831,6 +1831,26 @@ async function projectFlow() {
     ok(rf && JSON.parse(S.tauri.files.get(rf)).fields.notes === 'held edit', 'the held edit is in the copy');
     eq(b.errors, [], 'no window errors');
   }
+  section('L-d: several plans back to one (a plan deleted) — the one left takes the project name as its title');
+  {
+    const S = await openFresh('SoloAgain');
+    const b = S.b;
+    await addPlanB(S);
+    setDocTitle(b, 'Only a label');
+    const metaP = S.dir + '/plans/' + S.pid + '/meta.json';
+    ok(await until(() => b.RB.unwrap(JSON.parse(S.tauri.files.get(metaP))).meta.title === 'Only a label'), 'the label landed');
+    b.click(b.doc.querySelector('#optBtn'));
+    b.click(b.optAct(/Plan B/, 'Delete'));
+    b.click(b.doc.querySelector('#modalHost [data-m="ok"]'));
+    const PN = b.HD.projectTitle();
+    ok(PN && PN !== 'Only a label', 'the project has its own name: ' + PN);
+    ok(await until(() => b.state().meta.title === PN), 'the remaining plan is titled after the project: ' + b.state().meta.title);
+    ok(await until(() => b.RB.unwrap(JSON.parse(S.tauri.files.get(metaP))).meta.title === PN), '…on disk too');
+    await settle(6);
+    eq(b.info().bundleMarker, S.marker, 'no rename on the way');
+    ok(!/Renamed the project folder/.test(b.toasts()), 'no rename toast');
+    eq(b.errors, [], 'no window errors');
+  }
   section('conversion: a workbook with no title of its own is named after its file');
   {
     let open = null;
