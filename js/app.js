@@ -4918,11 +4918,11 @@
       if (headerNeeds(bar) > room) bar.classList.add('tabs-wrap');
     }
   }
-  var headerFitQueued = false;
+  // one fit per frame however many asks: the latest ask replaces a pending one
+  var headerFitRaf = 0;
   function queueHeaderFit() {
-    if (headerFitQueued) return;
-    headerFitQueued = true;
-    requestAnimationFrame(function () { headerFitQueued = false; fitHeaderTabs(); });
+    if (headerFitRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(headerFitRaf);
+    headerFitRaf = requestAnimationFrame(function () { headerFitRaf = 0; fitHeaderTabs(); });
   }
   if (typeof ResizeObserver === 'function') new ResizeObserver(queueHeaderFit).observe($('#topbar'));
   window.addEventListener('resize', queueHeaderFit);
@@ -4954,7 +4954,17 @@
     var fsEl = $('#finishStat');
     if (fsEl) fsEl.textContent = fs;
     if (window.HeadwayJira) HeadwayJira.renderStatus($('#btnJira'), state);
-    fitHeaderTabs(); // the title, plan name or Save label may have changed width
+    // the title, plan name or Save label may have changed width: re-fit on
+    // the next frame (never a synchronous layout per render), and only when
+    // one of those texts actually changed
+    var ob = $('#optBtn'), sb = $('#btnSave');
+    var sig = [t.value, ob ? ob.textContent : '', sb ? sb.textContent : ''].join('\u0001');
+    if (sig !== headerSig) { headerSig = sig; queueHeaderFit(); }
+  }
+  var headerSig = null;
+  // web fonts swap in after first paint and change every label's width
+  if (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function') {
+    document.fonts.ready.then(function () { queueHeaderFit(); }, function () { /* no fonts API: fine */ });
   }
 
   // the widest capacity-cell form that fits the week column: ~5.5px per

@@ -242,6 +242,39 @@ ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidd
   window.dispatchEvent(new window.Event('resize'));
   window.requestAnimationFrame = raf;
   ok(!bar.classList.contains('tabs-compact') && !bar.classList.contains('tabs-wrap'), 'a window resize re-measures (full labels again)');
+  // a render re-fits on the next frame, and only when the title / plan name /
+  // Save label text changed
+  {
+    const queued = [];
+    const caf = window.cancelAnimationFrame;
+    window.requestAnimationFrame = (fn) => { queued.push(fn); return queued.length; };
+    window.cancelAnimationFrame = (id) => { queued[id - 1] = null; };
+    const runQueued = () => { const q = queued.splice(0).filter(Boolean); q.forEach((fn) => fn(0)); };
+    // every header fit starts by reading the bar's width: count the measures
+    let measures = 0;
+    Object.defineProperty(bar, 'clientWidth', { configurable: true, get: () => { measures++; return W; } });
+    W = 1500;
+    const t = doc.querySelector('#docTitle');
+    const title0 = t.value;
+    t.value = title0 + ' longer';
+    t.dispatchEvent(new window.Event('change', { bubbles: true }));
+    ok(measures === 0, 'renderTopbar does not measure synchronously (' + measures + ')');
+    ok(!bar.classList.contains('tabs-compact'), '…so nothing changed yet');
+    runQueued();
+    ok(measures > 0, 'the fit runs on the next frame (' + measures + ' reads)');
+    ok(bar.classList.contains('tabs-compact'), '…which condenses the tabs');
+    W = 1700;
+    measures = 0;
+    window.__headway.selectItem(state().items[0].id); // a render that changes none of those texts
+    runQueued();
+    ok(measures === 0, 'a render with the same title / plan / Save label does not re-fit (' + measures + ')');
+    t.value = title0;
+    t.dispatchEvent(new window.Event('change', { bubbles: true }));
+    runQueued();
+    ok(!bar.classList.contains('tabs-compact'), 'the title back: re-fitted to full labels');
+    window.requestAnimationFrame = raf;
+    window.cancelAnimationFrame = caf;
+  }
   kids.forEach((el) => { delete el.offsetWidth; });
   delete bar.clientWidth;
   H.fitHeaderTabs();
