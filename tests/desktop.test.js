@@ -605,6 +605,30 @@ async function main() {
     ok(err && /already exists/.test(err.message), 'an existing target folder is refused: ' + (err && err.message));
   }
 
+  section('copyProject: a shard that vanishes mid-copy is skipped; any other failure leaves no partial folder');
+  {
+    const tc = makeFakeTauri();
+    const bc3 = boot(tc);
+    bc3.HD.setUserId(USER);
+    const fx = bc3.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    const cc = bc3.RB.migrateFromState(fx, USER, T0);
+    await bc3.HD.createBundle('C:/v/Src', cc);
+    const pid = cc.headway.plans[0].id;
+    const gone = 'C:/v/Src/.headway/plans/' + pid + '/items/' + cc.plans[pid].items[0].id + '.json';
+    tc.beforeRead = (p) => { if (p === gone) tc.files.delete(p); }; // a peer's sync client removed it after the listing
+    let err = null;
+    const mk = await bc3.HD.copyProject('C:/v/Src/.headway', 'C:/v/Copy', 'Copy').catch((e) => { err = e; });
+    tc.beforeRead = null;
+    ok(!err && mk === 'C:/v/Copy/Copy.headway', 'the copy completes: ' + (err && err.message));
+    eq([...tc.files.keys()].filter((k) => k.indexOf('C:/v/Copy/.headway/plans/' + pid + '/items/') === 0).length, cc.plans[pid].items.length - 1, 'every other shard copied');
+    tc.mkdirFails = (p) => (p.indexOf('C:/v/Copy2/.headway/plans') === 0 ? 'Access is denied. (os error 5)' : null);
+    err = null;
+    await bc3.HD.copyProject('C:/v/Src/.headway', 'C:/v/Copy2', 'Copy2').catch((e) => { err = e; });
+    tc.mkdirFails = null;
+    ok(err && /denied/.test(err.message), 'the failure is reported: ' + (err && err.message));
+    ok(![...tc.files.keys()].some((k) => k.indexOf('C:/v/Copy2') === 0) && ![...tc.dirs].some((d) => d.indexOf('C:/v/Copy2') === 0), 'no partial folder is left behind');
+  }
+
   section('copyProject with several plans: the project is named; every plan keeps its own title');
   {
     const tc = makeFakeTauri();

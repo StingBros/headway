@@ -884,8 +884,10 @@
           }, Promise.resolve());
         });
       }
+      var started = false;
       return fs.exists(destProjectDir).then(function (there) {
         if (there) throw new Error('A folder named “' + basename(destProjectDir) + '” already exists there');
+        started = true;
         return walk('');
       }).then(function () {
         return files.sort().reduce(function (chain, r) {
@@ -908,6 +910,11 @@
               return fs.mkdir(dirname(dest + '/' + r), { recursive: true }).then(function () {
                 return atomicWriteText(dest + '/' + r, text);
               });
+            }, function (err) {
+              // listed, then gone before we read it (a peer's sync client):
+              // skip that one shard — never abort with half a copy
+              if (isMissingDir(err) && /\.json$/i.test(r) && classify(r).kind !== 'plans') return;
+              throw err;
             });
           });
         }, Promise.resolve());
@@ -916,7 +923,13 @@
         return fs.mkdir(dest + '/presence', { recursive: true });
       }).then(function () {
         return writeMarker(destProjectDir, docId, title);
-      }).catch(rejectFriendly);
+      }).catch(function (err) {
+        // the target did not exist when we started: take back what we made
+        if (!started) rejectFriendly(err);
+        return fs.remove(destProjectDir, { recursive: true }).catch(function () { /* best effort */ }).then(function () {
+          rejectFriendly(err);
+        });
+      });
     },
     // the project's title changed: <Old>/<Old>.headway → <New>/<New>.headway.
     // The caller has landed its pending shards. Watcher off, marker renamed,

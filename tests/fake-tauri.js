@@ -36,6 +36,7 @@ module.exports = function makeFakeTauri(opts) {
   const fs = {
     readTextFile: guard('readTextFile', (p) => {
       p = norm(p);
+      if (typeof api.beforeRead === 'function') api.beforeRead(p);
       if (!files.has(p)) return missing(p);
       const v = files.get(p);
       return typeof v === 'string' ? v : Buffer.from(v).toString('utf8');
@@ -122,9 +123,15 @@ module.exports = function makeFakeTauri(opts) {
       files.delete(a);
       log.push({ op: 'rename', from: a, to: b, path: b });
     }),
-    remove: guard('remove', (p) => {
+    remove: guard('remove', (p, o) => {
       p = norm(p);
       if (files.has(p)) { files.delete(p); log.push({ op: 'remove', path: p }); return; }
+      if (o && o.recursive && hasDir(p)) {
+        for (const f of [...files.keys()]) if (f.indexOf(p + '/') === 0) files.delete(f);
+        for (const d of [...dirs]) if (d === p || d.indexOf(p + '/') === 0) dirs.delete(d);
+        log.push({ op: 'remove', path: p, recursive: true });
+        return;
+      }
       if (dirs.has(p)) { dirs.delete(p); log.push({ op: 'remove', path: p }); return; }
       return missing(p);
     }),
@@ -169,6 +176,7 @@ module.exports = function makeFakeTauri(opts) {
     onExists: null,    // (path) → called before every fs.exists answers
     beforeWrite: null, // (path) → called before every writeTextFile lands
     mkdirFails: null,  // (path) → error string to refuse that mkdir (a read-only folder)
+    beforeRead: null,  // (path) → called before every readTextFile answers
     window: { getCurrentWindow: () => win },
     watching: () => !!watchCb,
     watchOpts: () => watchOpts,
