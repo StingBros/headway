@@ -763,6 +763,47 @@ async function main() {
     }
   }
 
+  section('after the watcher is re-pointed, peer shards that landed in the gap are applied');
+  {
+    const tg = makeFakeTauri();
+    const bg = boot(tg, ['bundleMoved', 'bundleReattached']);
+    bg.HD.setUserId(USER);
+    const fx = bg.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    const cg = bg.RB.migrateFromState(fx, USER, T0);
+    const og = await bg.HD.openBundle(await bg.HD.createBundle('C:/g/One', cg));
+    const pid = og.planId;
+    const peerEdit = (root, env, note) => {
+      const p = root + '/.headway/plans/' + pid + '/items/' + env.id + '.json';
+      const e = JSON.parse(tg.files.get(p));
+      e.fields.notes = note; e.fieldsAt.notes = T2; e.updatedAt = T2; e.updatedBy = 'peer-zz999'; e.rev = e.rev + 1;
+      tg.files.set(p, JSON.stringify(e));
+    };
+    const [e1, e2, e3] = og.envs.items;
+    const applied = () => bg.named('applyExternalEntities').map((c) => c.args[0].map((x) => x.id + ':' + (x.env.fields && x.env.fields.notes)));
+    // 1. our own rename: a peer write lands while the watcher is off
+    tg.renameFails = (a, b) => { if (a === 'C:/g/One' && b === 'C:/g/Two') peerEdit('C:/g/One', e1, 'during our rename'); return null; };
+    await bg.HD.renameProject('Two');
+    tg.renameFails = null;
+    await tick(20);
+    eq(applied(), [[e1.id + ':during our rename']], 'our rename: the gap\'s peer shard is applied once');
+    // 2. a followed peer rename: a shard changed in the new place before we followed
+    tg.moveDir('C:/g/Two', 'C:/g/Three');
+    tg.files.delete('C:/g/Three/Two.headway');
+    tg.files.set('C:/g/Three/Three.headway', bg.RB.markerText(cg.headway.docId, 'Three'));
+    peerEdit('C:/g/Three', e2, 'before we followed');
+    eq(await bg.HD.checkBundleLocation(), 'moved', 'followed');
+    await tick(20);
+    eq(applied().slice(1), [[e2.id + ':before we followed']], 'a followed rename: the changed shard is applied, nothing else');
+    // 3. re-attached: changed while detached
+    tg.moveDir('C:/g/Three', 'C:/stash/g3');
+    eq(await bg.HD.checkBundleLocation(), 'detached', 'detached');
+    peerEdit('C:/stash/g3', e3, 'while we were detached');
+    tg.moveDir('C:/stash/g3', 'C:/g/Three');
+    eq(await bg.HD.checkBundleLocation(), 'reattached', 're-attached');
+    await tick(20);
+    eq(applied().slice(2), [[e3.id + ':while we were detached']], 're-attached: the changed shard is applied');
+  }
+
   section('a peer rename mid-flush: the old folder is never re-created; every shard lands in the new one');
   for (const how of ['inside a shard write', 'between two shards']) {
     const tm = makeFakeTauri();

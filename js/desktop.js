@@ -657,6 +657,26 @@
       return null;
     }, function () { return null; });
   }
+  // the watcher was off (our rename, a followed peer rename, a detached
+  // spell): re-read the active plan and hand the app every shard that differs
+  // from what we last read or wrote — ONE applyExternalEntities, like an event
+  function resyncActivePlan() {
+    var dir = bundleDir, pid = activePlanId, a = app();
+    if (!dir || !pid) return Promise.resolve();
+    var before = {};
+    Object.keys(lastShardJson).forEach(function (k) { before[k] = lastShardJson[k]; });
+    return readPlan(dir, pid).then(function (plan) {
+      if (bundleDir !== dir || activePlanId !== pid) return;
+      var pending = [];
+      function consider(kind, env) {
+        var r = shardRelPath(pid, kind, kind === 'meta' ? 'meta' : env.id);
+        if (RB().canonicalize(env) !== before[r]) pending.push({ kind: kind, id: kind === 'meta' ? 'meta' : env.id, env: env });
+      }
+      RB().KINDS.forEach(function (kind) { (plan.envs[kind] || []).forEach(function (env) { consider(kind, env); }); });
+      if (plan.meta) consider('meta', plan.meta);
+      if (pending.length && a && typeof a.applyExternalEntities === 'function') a.applyExternalEntities(pending);
+    }).catch(function (err) { warn('plans/' + pid, err); });
+  }
   function stopWatch() {
     watchGen++;
     if (unwatch) { try { unwatch(); } catch (e) { /* already gone */ } unwatch = null; }
@@ -672,7 +692,7 @@
     markTitle();
     rewatch();
     if (a && typeof a.bundleMoved === 'function') a.bundleMoved({ marker: found.marker, dir: ndir, from: marker, title: projectTitle });
-    return 'moved';
+    return resyncActivePlan().then(function () { return 'moved'; });
   }
   function detach(dir, marker, title) {
     var a = app();
@@ -698,7 +718,7 @@
     delete goneDirs[dir];
     rewatch();
     if (a && typeof a.bundleReattached === 'function') a.bundleReattached({ marker: marker, dir: dir });
-    return 'reattached';
+    return resyncActivePlan().then(function () { return 'reattached'; });
   }
   // a <X>/<Y>.headway marker with this id (and its .headway/ beside it)
   // among parent's sub-folders; null when none
@@ -1059,6 +1079,8 @@
         rewatch();
         return atomicWriteText(nm, RB().markerText(projectId, title)).catch(function (err) {
           warn(nm, err); // the rename stands; the marker's title catches up on the next rename
+        }).then(function () {
+          return resyncActivePlan(); // a peer's shard that landed while the watcher was off
         }).then(function () {
           var a = app();
           if (a && typeof a.noteRecent === 'function') a.noteRecent(nm, 'bundle');
