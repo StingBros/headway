@@ -713,6 +713,39 @@ async function fixes() {
     eq(S.item().feature === 'A1', false, 'the document is Plan B\'s');
   }
 
+  section('M2: a plan switch (and a new plan) inside the project-rename window use the renamed folder');
+  {
+    const S = await openFresh('M2');
+    const planB = 'plan-b';
+    const envsB = S.b.RB.wrapState(S.b.RM.clone(S.b.state()), {}, 'seed', T0);
+    const chB = [{ kind: 'meta', id: 'meta', env: S.b.RB.wrapMeta(S.b.state(), null, 'seed', T0), baseRev: 0 }];
+    S.b.RB.KINDS.forEach((k) => envsB[k].forEach((env) => chB.push({ kind: k, id: env.id, env, baseRev: 0 })));
+    await S.b.HD.flushShards(S.dir, planB, chB);
+    S.b.HA.plansChanged(await S.b.HD.writeHeadway(S.dir, { plans: [S.b.RB.newPlanEntry(planB, 'Plan B', T0)] }));
+    const NP = 'C:/Users/me/OneDrive/M2 Renamed';
+    const ren = S.b.HA.renameProjectFolder('M2 Renamed'); // not awaited: the switch lands inside the window
+    S.b.click(S.b.doc.querySelector('#optBtn'));
+    S.b.click(S.b.optRow(/Plan B/));
+    await ren;
+    ok(await until(() => S.b.info().activePlanId === planB), 'switched to Plan B — toasts: ' + S.b.toasts());
+    eq(S.b.info().bundleMarker, NP + '/M2 Renamed.headway', 'on the renamed marker');
+    eq(S.b.info().bundleDir, NP + '/.headway', '…and folder');
+    ok(!/Could not switch plan/.test(S.b.toasts()), 'no switch failure');
+    // New plan inside a rename window: its shards + list entry land in the renamed folder
+    const ren2 = S.b.HA.renameProjectFolder('M2 Again');
+    S.b.click(S.b.doc.querySelector('#optBtn'));
+    S.b.click([...S.b.doc.querySelectorAll('#popover .menu-list button')].find((x) => /New plan/.test(x.textContent)));
+    const nin = S.b.doc.querySelector('#modalHost #optNameIn');
+    nin.value = 'Plan C';
+    S.b.click(S.b.doc.querySelector('#modalHost #optNameOk'));
+    await ren2;
+    const AP = 'C:/Users/me/OneDrive/M2 Again';
+    ok(await until(() => (S.b.info().plans || []).some((p) => p.name === 'Plan C') && S.b.info().bundleDir === AP + '/.headway'), 'Plan C created — toasts: ' + S.b.toasts());
+    ok(!/Could not create the plan/.test(S.b.toasts()), 'no create failure');
+    ok(JSON.parse(S.tauri.files.get(AP + '/.headway/headway.json')).plans.some((p) => p.name === 'Plan C'), 'its list entry is in the renamed folder');
+    ok(![...S.tauri.files.keys()].some((k) => k.indexOf(NP + '/') === 0) && ![...S.tauri.dirs].some((d) => d.indexOf(NP) === 0), 'the old folder was not re-created');
+  }
+
   section('F1+F7/T2b+T8: edit during an in-flight flush, then Open… an .xlsx → edits on disk in the first project, the converted one watched');
   {
     const S = await openFresh('T2b');

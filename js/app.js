@@ -1617,9 +1617,10 @@
   // nothing shared is written
   function switchPlan(id) {
     if (!window.HeadwayDesktop || !bundleDir || id === activePlanId) return Promise.resolve();
-    var marker = bundleMarker, prevId = activePlanId;
+    var prevId = activePlanId;
     return flushBundle().catch(function () { /* toasted */ }).then(function () {
-      return HeadwayDesktop.openBundle(marker, id);
+      // read AFTER the flush: a project rename it waited for moved the marker
+      return HeadwayDesktop.openBundle(bundleMarker, id);
     }).then(function (res) {
       // comparing with the plan being activated: flip the overlay to the one we leave
       var cmp = compareOptId === id ? prevId : compareOptId;
@@ -1632,7 +1633,7 @@
   function createPlan() {
     promptName('New plan', 'Plan name', 'Starts as a copy of “' + esc(planName(activePlanId)) +
       '” — edits stay in the new plan until you switch back.', '', function (nm) {
-      var dir = bundleDir, uid = userId(), now = new Date().toISOString(), newId = RM.uid('plan');
+      var dir, uid = userId(), now = new Date().toISOString(), newId = RM.uid('plan');
       var doc = RM.clone(state);
       var envs = RMBundle.wrapState(doc, {}, uid, now);
       var changes = [{ kind: 'meta', id: 'meta', env: RMBundle.wrapMeta(doc, null, uid, now), baseRev: 0 }];
@@ -1640,8 +1641,10 @@
         envs[kind].forEach(function (env) { changes.push({ kind: kind, id: env.id, env: env, baseRev: 0 }); });
       });
       flushBundle().catch(function () { /* toasted */ }).then(function () {
+        dir = bundleDir; // after the flush: a project rename it waited for moved the folder
         return HeadwayDesktop.flushShards(dir, newId, changes); // new files only — nothing to conflict with
-      }).then(function () {
+      }).then(function (res) {
+        if (res && res.dir) dir = res.dir;
         return HeadwayDesktop.writeHeadway(dir, { plans: [RMBundle.newPlanEntry(newId, nm, now)] });
       }).then(function (hw) {
         if (bundleDir !== dir) return;
