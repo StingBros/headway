@@ -1793,6 +1793,44 @@ async function projectFlow() {
     eq(S.item().notes, 'gone for good', '…and in the document');
     eq(b.errors, [], 'no window errors');
   }
+  section('M-2: detached edits are never dropped silently — File → Open… / New / Convert ask; Save as… copies, then continues');
+  {
+    const picks = [];
+    const S = await openFresh('DetOpen', { dialogOpen: (o) => { picks.push(o || {}); return o && o.directory ? 'C:/Users/me/Rescue2' : null; } });
+    const b = S.b;
+    S.tauri.moveDir(S.proj, 'C:/stash/detopen');
+    await b.HD.checkBundleLocation();
+    ok(await until(() => b.info().detached), 'detached');
+    S.select();
+    S.set('notes', 'held edit');
+    await settle(4);
+    const labels = b.menuLabels('file');
+    b.doc.querySelector('#popover').hidden = true;
+    ok(labels.some((l) => /^Save as…/.test(l)) && !labels.some((l) => /Export \.xlsx/.test(l)), 'the File menu\'s Save reads Save as… — ' + labels.join(', '));
+    eq(labels.filter((l) => /^Save as…/.test(l)).length, 1, '…once');
+    for (const re of [/^Open…/, /^New project…/, /^Open and Convert Legacy File…/]) {
+      b.menuClick('file', re);
+      const gs = b.doc.querySelector('#modalHost [data-m=gsave]');
+      ok(!!gs && /Save as…/.test(gs.textContent), re + ': the unsaved prompt appears, offering Save as…');
+      b.click(b.doc.querySelector('#modalHost [data-m=cancel]'));
+      await settle(2);
+      ok(!b.HA.wizard.isOpen() && picks.length === 0, re + ': Cancel opens nothing');
+    }
+    ok(b.info().detached && !b.info().docSaved && S.item().notes === 'held edit', 'Cancel keeps everything');
+    S.tauri.dirs.add('C:/Users/me/Rescue2');
+    b.menuClick('file', /^Open…/);
+    b.click(b.doc.querySelector('#modalHost [data-m=gsave]'));
+    const nin = b.doc.querySelector('#modalHost #optNameIn');
+    ok(!!nin, 'Save as… asks for a name');
+    nin.value = 'Rescued Two';
+    b.click(b.doc.querySelector('#modalHost #optNameOk'));
+    const RP = 'C:/Users/me/Rescue2/Rescued Two';
+    ok(await until(() => b.info().bundleDir === RP + '/.headway'), 'saved as a new project — ' + b.toasts());
+    ok(await until(() => picks.some((o) => !o.directory)), 'then the Open picker runs');
+    const rf = [...S.tauri.files.keys()].find((k) => k.indexOf(RP + '/.headway/plans/') === 0 && k.slice(-(S.vId.length + 5)) === S.vId + '.json');
+    ok(rf && JSON.parse(S.tauri.files.get(rf)).fields.notes === 'held edit', 'the held edit is in the copy');
+    eq(b.errors, [], 'no window errors');
+  }
   section('conversion: a workbook with no title of its own is named after its file');
   {
     let open = null;

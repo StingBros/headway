@@ -1395,11 +1395,13 @@
     clearTimeout(bundleFlushTimer);
     updateSaveBtn();
     toast('Project folder is missing — edits are kept in memory; use Save as… to keep them', 'err');
+    if (window.HeadwayDesktop && HeadwayDesktop.syncMenu) HeadwayDesktop.syncMenu(); // Save reads Save as…
   }
   function bundleReattached(info) {
     if (docKind !== 'bundle' || !detached || (info && info.dir && info.dir !== bundleDir)) return;
     detached = false;
     updateSaveBtn();
+    if (window.HeadwayDesktop && HeadwayDesktop.syncMenu) HeadwayDesktop.syncMenu();
     toast('The project folder is back' + (docSaved ? '' : ' — syncing your edits'));
     if (!docSaved) flushBundle();
   }
@@ -10328,23 +10330,30 @@
   }
   function menuItemsFor(name) {
     var isMacDesktop = !!window.HeadwayDesktop && navigator.platform.indexOf('Mac') === 0;
-    function openProject() {
+    // anything that replaces the open document asks first (a detached
+    // project's held edits are never dropped silently)
+    function guarded(fn) { return function () { guardUnsaved(fn); }; }
+    var openProject = guarded(function () {
       if (window.HeadwayDesktop) openAnyDialog();
       else $('#filePick').click();
-    }
+    });
+    var newProject = guarded(openWizard);
     // the desktop app edits projects (folders) only: one Open for a project
     // or a legacy .xlsx (which converts), Save is an .xlsx export, Save as…
     // copies the project. The browser keeps its workbook flow.
     var desk = !!window.HeadwayDesktop;
     var bundle = docKind === 'bundle';
     var openItem = { icon: 'folder-open', label: desk ? 'Open…' : 'Open project…', fn: openProject };
-    var convertItem = desk ? { icon: 'file-input', label: 'Open and Convert Legacy File…', fn: convertLegacyDialog } : null;
-    var saveItem = bundle
+    var convertItem = desk ? { icon: 'file-input', label: 'Open and Convert Legacy File…', fn: guarded(convertLegacyDialog) } : null;
+    // detached (the folder is missing): Save IS Save as… — the only way to keep the edits
+    var saveItem = bundle && detached
+      ? { icon: 'save', label: 'Save as…', kbd: '⌘S', fn: saveAsProject }
+      : bundle
       ? { icon: 'file-spreadsheet', label: 'Export .xlsx…', fn: exportXlsx }
       : desk
         ? { icon: 'download', label: 'Save…', kbd: '⌘S', fn: function () { $('#btnSave').click(); } }
         : { icon: 'download', label: 'Save', kbd: '⌘S', fn: function () { $('#btnSave').click(); } };
-    var saveAsItem = desk ? { icon: 'save', label: 'Save as…', kbd: '⇧⌘S', fn: saveAsProject } : null;
+    var saveAsItem = desk && !(bundle && detached) ? { icon: 'save', label: 'Save as…', kbd: '⇧⌘S', fn: saveAsProject } : null;
     // a workbook merged INTO the open shared roadmap (add-only)
     var importItem = desk && bundle ? { icon: 'file-input', label: 'Import from Excel…', fn: importFromExcel } : null;
     if (name === 'macApp') {
@@ -10354,7 +10363,7 @@
       // MultipleDocuments etc. are full-colour pictograms and look out of
       // place next to the template ones, so those items carry no icon.
       return [
-        { icon: 'file-plus-2', nativeIcon: 'Add', label: 'New project', fn: openWizard },
+        { icon: 'file-plus-2', nativeIcon: 'Add', label: 'New project', fn: newProject },
         openItem,
         convertItem,
         { icon: 'file-spreadsheet', label: 'Download template', fn: downloadTemplate },
@@ -10373,7 +10382,7 @@
       return [
         { icon: 'house', label: 'Start page', fn: showStart },
         { sep: true },
-        { icon: 'file-plus-2', label: 'New project…', fn: openWizard },
+        { icon: 'file-plus-2', label: 'New project…', fn: newProject },
         openItem,
         convertItem,
         { sep: true },
@@ -14200,7 +14209,7 @@
 
   function doSave(forceDialog, quiet) {
     if (wz) return null; // the open document is stashed behind the wizard
-    if (docKind === 'bundle') return exportXlsx(); // Save = a standalone export
+    if (docKind === 'bundle') return detached ? saveAsProject() : exportXlsx(); // Save = a standalone export (Save as… while the folder is missing)
     // the desktop never writes an .xlsx in place: a document that is not a
     // project yet (a session restored from app storage) becomes one
     if (window.HeadwayDesktop) return saveAsProject();
@@ -14261,11 +14270,13 @@
       '<div class="modal" style="width:440px">' +
       '<div class="m-head"><h2>Unsaved changes</h2></div>' +
       '<div class="m-body"><div style="font-size:13px;color:var(--ink-2);line-height:1.5">' +
-      '“' + esc(state.meta.title || 'This roadmap') + '” has changes that aren’t saved' +
-      (window.HeadwayDesktop ? ' to a file' : ' to an .xlsx file') + ' yet.</div></div>' +
+      (docKind === 'bundle'
+        ? 'The project folder of “' + esc(projectName()) + '” is missing — its edits are only in memory. Save as… keeps them in a new project.'
+        : '“' + esc(state.meta.title || 'This roadmap') + '” has changes that aren’t saved' +
+          (window.HeadwayDesktop ? ' to a file' : ' to an .xlsx file') + ' yet.') + '</div></div>' +
       '<div class="m-foot"><button data-m="gdiscard">Don’t save</button>' +
       '<button data-m="cancel">Cancel</button>' +
-      '<button data-m="gsave" class="primary"><i data-lucide="download"></i>Save</button></div></div>',
+      '<button data-m="gsave" class="primary"><i data-lucide="download"></i>' + (docKind === 'bundle' ? 'Save as…' : 'Save') + '</button></div></div>',
       function (host) {
         $('[data-m=cancel]', host).onclick = closeModal;
         $('[data-m=gdiscard]', host).onclick = function () { closeModal(); proceed(); };
