@@ -376,7 +376,6 @@
     groupWs: 'boolean — group rows by workstream',
     groupEpic: 'boolean — group rows by epic',
     colorBy: "'workstream' | 'epic' | 'assignee' | 'priority' | 'type' — what bar colours follow",
-    autoSave: 'boolean — desktop: write to the open file automatically',
     detailMode: "'feature' | 'story' — Planning row detail level"
   };
   AI.VIEWS = ['scoping', 'prio', 'planning', 'sprints', 'budget', 'reports', 'setup', 'history'];
@@ -831,7 +830,7 @@
     '- Reporting: dashboard (done / scheduled / by workstream or phase).',
     '- Setup (gear): project settings — Timeline (start, end, work week, sprint length and numbering, holidays), Phases, Workstreams, Team, Capacity (capacity planning on/off, planning level, demand model, capacity types), Columns, Sizing (size, risk and priority schemes for features and stories, single or range estimates), Jira. Personal: Appearance, Preferences, AI assistant.',
     '- History (clock): version history with timeline diffs.',
-    'Undo is ⌘Z / Ctrl+Z. Save writes the .xlsx; the desktop app auto-saves the open file.',
+    'Undo is ⌘Z / Ctrl+Z. In the browser, Save downloads an .xlsx. The desktop app edits project folders: every change syncs to the project folder on its own (the Save button shows Sync / Synced), Save as… (⇧⌘S) copies the project, and File → Export .xlsx… writes a workbook.',
     '',
     '## Model',
     '- Time is counted in working days from meta.timelineStart (weekends and non-work days do not exist in the index). Holidays stretch bars. A sprint = meta.weeksPerSprint weeks; sprint numbers count from meta.sprintAnchor / sprintAnchorNum. Tools accept and report ISO dates; day indexes appear in raw sections.',

@@ -1,7 +1,8 @@
 /* Desktop (Tauri) integration. Loaded after app.js; a no-op in a plain
-   browser. Gives real file semantics: Open/Save As via native dialogs, Save
-   writes back to the current path, and the open file is watched so external
-   edits (another machine via OneDrive, Excel, etc.) auto-reload. */
+   browser. The desktop edits projects (folders) only: Open / Save as via
+   native dialogs, the open project's data folder is watched so a peer's
+   edits (another machine via OneDrive, …) land live. A legacy workbook is
+   read once and converted — never written in place. */
 (function () {
   'use strict';
   if (!window.__TAURI__) return;
@@ -10,12 +11,9 @@
   var fs = window.__TAURI__.fs;
 
   var XLSX_FILTER = [{ name: 'Excel workbook', extensions: ['xlsx'] }];
-  var PROJECT_FILTER = [{ name: 'Headway project', extensions: ['headway'] }];
   var OPEN_FILTER = [{ name: 'Headway project or Excel workbook', extensions: ['headway', 'xlsx'] }];
-  var currentPath = null;   // absolute path of the open xlsx (null = unsaved / bundle mode)
   var unwatch = null;       // stops the active directory watcher
   var watchGen = 0;         // bumps on every rewatch so a late event from an old watcher is dropped
-  var reloading = false;
 
   // shared-bundle (folder) document — see the "shared bundle" section below
   var bundleDir = null;      // absolute path of the open project's hidden <Project>/.headway data folder
@@ -38,141 +36,31 @@
     var m = String(p).match(/^(.*)[\\/][^\\/]+$/);
     return m ? m[1] : p;
   }
-  function samePath(a, b) {
-    // watcher events may use the other separator style on Windows
-    return String(a).replace(/\\/g, '/') === String(b).replace(/\\/g, '/');
-  }
 
   function markTitle() {
-    var name = markerFile ? (projectTitle || basename(markerFile).replace(/\.headway$/i, ''))
-      : currentPath ? basename(currentPath) : null;
+    var name = markerFile ? (projectTitle || basename(markerFile).replace(/\.headway$/i, '')) : null;
     document.title = name ? name + ' — Headway' : 'Headway — Roadmap Planner';
     var t = document.getElementById('docTitle');
-    if (t) t.title = markerFile || currentPath || '';
-  }
-
-  function setPath(p) {
-    // opening an xlsx ends the bundle session: the watcher below prefers
-    // bundleDir, so it must be gone before rewatch()
-    if (p && bundleDir) leaveBundle();
-    currentPath = p;
-    markTitle();
-    rewatch();
-    if (p) app().noteRecent(p); // the start page's Recent list
+    if (t) t.title = markerFile || '';
   }
 
   // the pre-start-page single last-path memory named an .xlsx; recents are
   // projects only now
   try { localStorage.removeItem('headway-last-path'); } catch (e) { /* storage optional */ }
 
-  // Watch the parent directory, not the file: editors and sync clients
-  // (OneDrive included) replace files by rename, which kills a file watch.
+  // the open project's data folder, recursively: shards live three levels down
   function rewatch() {
     if (unwatch) { try { unwatch(); } catch (e) { /* already gone */ } unwatch = null; }
     var gen = ++watchGen;
-    if (bundleDir) {
-      // whole folder, recursively: shards live three levels down
-      fs.watch(bundleDir, function (event) {
-        if (gen !== watchGen) return;
-        return onBundleEvent(event);
-      }, { recursive: true, delayMs: 800 }).then(function (un) {
-        if (gen !== watchGen) { try { un(); } catch (e) { /* stale */ } return; }
-        unwatch = un;
-      }).catch(function (err) {
-        app().toast('Could not watch the shared folder: ' + friendlyFsError(err), 'err');
-      });
-      return;
-    }
-    if (!currentPath) return;
-    fs.watch(dirname(currentPath), function (event) {
-      var paths = (event && event.paths) || [];
-      var hit = paths.some(function (p) { return samePath(p, currentPath); });
-      // own writes are filtered by content (byte sig + embedded document
-      // JSON, see below), never by timing
-      // with auto-save off the document on screen is not what is on disk;
-      // a reload would throw away the unsaved edits
-      if (!hit || reloading || !app().autoSaveOn()) return;
-      reloadFromDisk();
-    }, { delayMs: 800 }).then(function (un) {
+    if (!bundleDir) return;
+    fs.watch(bundleDir, function (event) {
+      if (gen !== watchGen) return;
+      return onBundleEvent(event);
+    }, { recursive: true, delayMs: 800 }).then(function (un) {
+      if (gen !== watchGen) { try { un(); } catch (e) { /* stale */ } return; }
       unwatch = un;
     }).catch(function (err) {
-      // plugin errors are plain strings, not Error objects
-      app().toast('Could not watch for external changes: ' + (err && err.message || err), 'err');
-    });
-  }
-
-  // fingerprint of the workbook bytes we last loaded or wrote — reloads are
-  // applied (and announced) only when the content actually changed
-  var lastSig = null;
-  function sigOf(bytes) {
-    var h = 2166136261;
-    for (var i = 0; i < bytes.length; i++) {
-      h ^= bytes[i];
-      h = (h * 16777619) >>> 0;
-    }
-    return bytes.length + ':' + h.toString(16);
-  }
-
-  // The byte fingerprint alone cannot tell our own save from a remote edit:
-  // sync clients (OneDrive/SharePoint especially) rewrite the xlsx container
-  // after upload — injected sync metadata re-zips the file — so the bytes
-  // change while the document does not. Track the embedded document JSON
-  // (excel.js hides it in the _RoadmapTool sheet) beside the byte sig; a
-  // changed file whose JSON still matches is an echo of our own write and is
-  // adopted silently instead of announcing a reload.
-  var lastStateJson = null;
-  function noteLoadedBytes(bytes) {
-    lastSig = sigOf(bytes);
-    return window.RMExcel.readStateJson(bytes.buffer).then(function (json) {
-      lastStateJson = json;
-    }, function () {
-      lastStateJson = null;
-    });
-  }
-
-  // Sync clients (OneDrive especially) fire the change event before the new
-  // bytes are fully on disk — an immediate read can return the old content
-  // or a partial file. Retry with backoff until genuinely new bytes appear.
-  var RELOAD_RETRY_MS = [1200, 3000, 8000];
-  function reloadFromDisk(attempt) {
-    attempt = attempt || 0;
-    if (!app().autoSaveOn()) return;
-    var p = currentPath;
-    reloading = true;
-    fs.readFile(p).then(function (bytes) {
-      var validZip = bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4B; // xlsx = 'PK…'
-      var sig = validZip ? sigOf(bytes) : null;
-      if (!validZip || sig === lastSig) {
-        reloading = false;
-        if (attempt < RELOAD_RETRY_MS.length) {
-          setTimeout(function () {
-            if (currentPath === p && !reloading) reloadFromDisk(attempt + 1);
-          }, RELOAD_RETRY_MS[attempt]);
-        }
-        return;
-      }
-      // new bytes — but is it a new DOCUMENT? A sync client's container
-      // rewrite of our own save carries the same embedded JSON: adopt the
-      // new bytes quietly and leave the editor alone.
-      return window.RMExcel.readStateJson(bytes.buffer).catch(function () {
-        return null;
-      }).then(function (json) {
-        if (json != null && lastStateJson != null && json === lastStateJson) {
-          lastSig = sig;
-          reloading = false;
-          return;
-        }
-        return app().loadBuffer(bytes.buffer, basename(p), true /* reload in place */).then(function () {
-          lastSig = sig;
-          lastStateJson = json;
-          app().toast('Reloaded “' + basename(p) + '” — changed on disk');
-        }).finally(function () {
-          reloading = false;
-        });
-      });
-    }).catch(function (err) {
-      reloading = false;
-      app().toast('Auto-reload failed: ' + (err && err.message || err), 'err');
+      app().toast('Could not watch the shared folder: ' + friendlyFsError(err), 'err');
     });
   }
 
@@ -213,6 +101,9 @@
   //   bundleDetached({marker, title})             the data folder stayed missing
   //       through the retry ladder: nothing is written, the session is kept.
   //   bundleReattached({marker, dir})             …and it is back (complete).
+  // sync clients fire the change event before the new bytes are fully on
+  // disk: a shard read that fails to parse is retried with backoff
+  var RELOAD_RETRY_MS = [1200, 3000, 8000];
   var ENTITY_DIRS = { items: 'item', phases: 'phase', team: 'team', costs: 'cost' };
   var RENAME_RETRY_MS = [120, 400, 1200];
   var CLOSE_HOOK_MS = 3000;
@@ -796,8 +687,6 @@
           projectId = mk.id;
           delete goneDirs[dir]; detached = false; clearTimeout(reattachTimer); reattachTimer = null;
           activePlanId = pid;
-          // keeps every xlsx path inert: autosave, renameTo, reload all gate on currentPath
-          currentPath = null; lastSig = null; lastStateJson = null;
           markTitle();
           rewatch();
           var a = app();
@@ -1029,12 +918,6 @@
         return writeMarker(destProjectDir, docId, title);
       }).catch(rejectFriendly);
     },
-    // pick a <Project>.headway marker and open it; null on cancel
-    openBundleDialog: function () {
-      return dialog.open({ multiple: false, filters: PROJECT_FILTER }).then(function (p) {
-        return p ? window.HeadwayDesktop.openBundle(p) : null;
-      });
-    },
     // the project's title changed: <Old>/<Old>.headway → <New>/<New>.headway.
     // The caller has landed its pending shards. Watcher off, marker renamed,
     // folder renamed (marker put back if that fails), marker title rewritten,
@@ -1133,8 +1016,8 @@
         return atomicWriteText(p, JSON.stringify(out, null, 2) + '\n').then(function () { return out; });
       });
     },
-    // write a blob where the user says and adopt NOTHING: currentPath, the
-    // watcher and the bundle session are untouched (a bundle's .xlsx export).
+    // write a blob where the user says and adopt NOTHING: the watcher and
+    // the bundle session are untouched (a bundle's .xlsx export).
     // Resolves the path, or null on cancel.
     exportBlob: function (blob, suggestedName, ext, filterName) {
       ext = ext || 'xlsx';
@@ -1161,10 +1044,9 @@
     classify: classify,
     friendlyFsError: friendlyFsError,
 
-    // ---- xlsx (single-file) backend ----
-    // pick an .xlsx and hand back its bytes WITHOUT adopting it — no
-    // currentPath, no watcher (Import from Excel…, Open and Convert Legacy
-    // File…). Resolves {path, name, buffer}, or null on cancel.
+    // ---- legacy workbooks: read once, never adopted ----
+    // pick an .xlsx and hand back its bytes WITHOUT adopting it — no watcher
+    // (Import from Excel…, Open and Convert Legacy File…). Resolves {path, name, buffer}, or null on cancel.
     pickWorkbook: function () {
       return dialog.open({ multiple: false, filters: XLSX_FILTER }).then(function (p) {
         return p ? window.HeadwayDesktop.readWorkbookAt(p) : null;
@@ -1187,29 +1069,6 @@
         var a = app();
         if (p && a && typeof a.openFromPath === 'function') return a.openFromPath(p);
         return null;
-      });
-    },
-
-    // write the workbook; dialog only when there's no path yet (or Save As).
-    // stateJson: the document JSON embedded in this blob (RMExcel.stateJsonOf)
-    // — remembered so a sync client's rewrite of this save is not mistaken
-    // for a remote change. Resolves to the saved path, or null on cancel.
-    saveBlob: function (blob, suggestedName, forceDialog, stateJson) {
-      var target = (currentPath && !forceDialog)
-        ? Promise.resolve(currentPath)
-        : dialog.save({ defaultPath: suggestedName, filters: XLSX_FILTER });
-      return target.then(function (p) {
-        if (!p) return null;
-        if (!/\.xlsx$/i.test(p)) p += '.xlsx';
-        return blob.arrayBuffer().then(function (buf) {
-          var u8 = new Uint8Array(buf);
-          lastSig = sigOf(u8);
-          lastStateJson = stateJson != null ? stateJson : null;
-          return fs.writeFile(p, u8);
-        }).then(function () {
-          if (!samePath(p, currentPath || '')) setPath(p);
-          return p;
-        });
       });
     },
 
@@ -1258,24 +1117,6 @@
       return op.openUrl(url).catch(function (err) { app().toast('Could not open link: ' + (err && err.message || err), 'err'); });
     },
 
-    // rename the open file in place (the title IS the filename). Resolves to
-    // the new path; null with no open file; rejects if the target exists or
-    // the filesystem refuses.
-    renameTo: function (newBase) {
-      if (!currentPath) return Promise.resolve(null);
-      if (!/\.xlsx$/i.test(newBase)) newBase += '.xlsx';
-      var np = dirname(currentPath) + '/' + newBase;
-      if (samePath(np, currentPath)) return Promise.resolve(currentPath);
-      return fs.exists(np).then(function (there) {
-        if (there) throw new Error('“' + newBase + '” already exists in this folder');
-        return fs.rename(currentPath, np);
-      }).then(function () {
-        setPath(np); // re-watches the directory and refreshes the recents list
-        return np;
-      });
-    },
-
-    currentPath: function () { return currentPath; },
     basename: basename,
     // Claude Code process bridge for the AI assistant's "Claude subscription"
     // provider (js/ai.js owns the stream-json protocol). One global event
@@ -1355,10 +1196,11 @@
     // still land its pending bundle flush before the window goes
     // closing the window (caption ✕, Alt+F4, the red traffic light) — ONE
     // handler, two duties in order:
-    //   1. unsaved .xlsx work asks first — app.js owns the Save / Don't save /
-    //      Cancel dialog (guardUnsaved) and flushes silently when autosave
-    //      already owns the file. A shared bundle is never "unsaved" that
-    //      way (unsavedNow is false for it), so it skips straight to 2.
+    //   1. work that is not in a project folder asks first — app.js owns the
+    //      Save / Don't save / Cancel dialog (guardUnsaved; Save runs Save
+    //      as…): a session that is not a project yet, or a DETACHED project
+    //      whose folder is missing. An attached project is never "unsaved"
+    //      that way (its flush is awaited in 2).
     //   2. beforeClose(): the app lands its pending bundle flush and drops
     //      its presence file; the window is destroyed once that settles
     //      (CLOSE_HOOK_MS cap). destroy() raises no second close-requested

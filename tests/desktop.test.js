@@ -71,7 +71,7 @@ async function main() {
   ok(errors.length === 0, 'no window errors during boot' + (errors.length ? ' — ' + errors.join('; ') : ''));
   ok(HD && typeof HD.openBundle === 'function' && typeof HD.openDialog === 'function', 'HeadwayDesktop has bundle + xlsx methods');
   ['openBundle', 'readPlan', 'flushShards', 'appendHistory', 'rewriteHistory', 'readHistory', 'writePresence', 'readPresence',
-    'removePresence', 'removeShard', 'createBundle', 'openBundleDialog', 'closeBundle', 'setUserId', 'bundleDir',
+    'removePresence', 'removeShard', 'createBundle', 'closeBundle', 'setUserId', 'bundleDir',
     'activePlanId', 'bundleWarnings', 'friendlyFsError', 'classify'].forEach((m) => {
     ok(typeof HD[m] === 'function', 'HeadwayDesktop.' + m + ' exists');
   });
@@ -120,7 +120,6 @@ async function main() {
   eq(opened.envs.items.length, fixture.items.length, 'envelopes handed back for lastCanon priming');
   eq(HD.bundleDir(), DIR, 'bundleDir set');
   eq(HD.activePlanId(), pid, 'activePlanId set');
-  eq(HD.currentPath(), null, 'currentPath stays null in bundle mode');
   eq(HD.markerPath(), MARKER, 'markerPath set');
   eq(HD.projectDir(), PROJ, 'projectDir is the marker\'s folder');
   eq(HD.projectTitle(), fixture.meta.title, 'projectTitle from the marker');
@@ -514,7 +513,6 @@ async function main() {
   eq(ep, 'C:/picked/Roadmap.xlsx', 'exportBlob resolves the written path');
   eq(Array.from(t8.files.get('C:/picked/Roadmap.xlsx')), [1, 2, 3], 'bytes written');
   eq(await b8.HD.exportBlob(blob8, 'Plain', 'xlsx'), 'C:/picked/Plain.xlsx', 'the extension is appended when missing');
-  eq(b8.HD.currentPath(), null, 'currentPath untouched');
   eq(b8.HD.bundleDir(), DIR, 'bundle session untouched');
   ok(t8.watching() && t8.watchOpts().recursive === true, 'the recursive bundle watch is still the active one');
   eq(b8.named('noteRecent').filter((c) => c.args[0] === 'C:/picked/Roadmap.xlsx').length, 0, 'an export is not a recent');

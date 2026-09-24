@@ -5755,22 +5755,17 @@ ok(window.__headway.saveFileName() === state().meta.title + '.xlsx',
 }
 
 ok(JSON.parse(window.localStorage.getItem('headway-v1')).items.length > 100, 'commits autosave to localStorage');
-// desktop: reload from disk only while auto-save is on
+// desktop: projects only — no in-place workbook save, auto-save or reload left
 {
-  ok(typeof window.HeadwayApp.autoSaveOn === 'function', 'HeadwayApp exposes autoSaveOn()');
-  const was = window.HeadwayApp.autoSaveOn();
-  click(doc.querySelector('.menu-btn[data-menu="file"]'));
-  const tog = [...doc.querySelectorAll('#popover .menu-list button')].find(b => /Auto.?save/i.test(b.textContent));
-  if (tog) {
-    click(tog);
-    ok(window.HeadwayApp.autoSaveOn() === !was, 'autoSaveOn() follows the File menu toggle');
-    click(doc.querySelector('.menu-btn[data-menu="file"]'));
-    click([...doc.querySelectorAll('#popover .menu-list button')].find(b => /Auto.?save/i.test(b.textContent)));
-    ok(window.HeadwayApp.autoSaveOn() === was, 'toggling back restores it');
-  } else ok(true, 'auto-save toggle is desktop-only in this build');
+  ok(typeof window.HeadwayApp.autoSaveOn === 'undefined', 'HeadwayApp has no autoSaveOn()');
   const desk = fs.readFileSync(path.join(ROOT, 'js/desktop.js'), 'utf8');
-  ok(/autoSaveOn\(\)/.test(desk) && /if \(!hit \|\| reloading \|\| !app\(\)\.autoSaveOn\(\)\) return;/.test(desk),
-    'the disk watcher skips reloads while auto-save is off');
+  ['saveBlob', 'setPath', 'renameTo', 'reloadFromDisk', 'noteLoadedBytes', 'openBundleDialog', 'autoSaveOn', 'currentPath'].forEach((n) => {
+    ok(!new RegExp('\\b' + n + '\\b').test(desk), 'desktop.js: no ' + n);
+  });
+  const appSrc0 = fs.readFileSync(path.join(ROOT, 'js/app.js'), 'utf8');
+  ok(!/Auto-save to the open file/.test(appSrc0) && !/\bautoSave\b/.test(appSrc0) && !/renameTo|saveBlob/.test(appSrc0), 'app.js: no auto-save pref, renameTo or saveBlob');
+  const aiSrc = fs.readFileSync(path.join(ROOT, 'js/ai.js'), 'utf8');
+  ok(!/auto-saves the open file/.test(aiSrc) && !/\bautoSave\b/.test(aiSrc), 'ai.js: no auto-save pref or guide line');
 }
 
 // rich text: URLs render as links; ⌘-click opens them; storage stays plain

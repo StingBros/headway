@@ -86,7 +86,6 @@
   var multiSel = null;       // multi-selection: item ids (null = single-select mode; selectedId stays the anchor)
   var docSaved = false;      // doc matches its last save/open (Save button shows ✓)
   var sessionEdited = false; // an actual edit happened this session (guards never nag a doc that was only opened)
-  var autoSave = true;       // desktop: write to the open file after each change
   var resPanelH = 150;       // resources panel height (px)
   var resCollapsed = false;  // resources section collapsed
   var drag = null;           // active drag descriptor
@@ -181,7 +180,7 @@
   // commit AND carried in the .xlsx (_RoadmapTool sheet) so a saved file
   // restores the exact browser state on any machine
   function uiSnapshot() {
-    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showRange: showRange, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, autoSave: autoSave, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioHideUnset: prioHideUnset, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColW: plColW, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy, docKind: docKind, bundleMarker: bundleMarker, activePlanId: activePlanId };
+    return { weekPx: weekPx, view: view, depsMode: depsMode, groupWs: groupWs, groupEpic: groupEpic, resCollapsed: resCollapsed, snapFeat: snapFeat, snapStory: snapStory, autoOrder: autoOrder, showCrit: showCrit, showRange: showRange, showCap: showCap, scopeColW: scopeColW, resPanelH: resPanelH, panelSec: panelSec, leftWPlan: leftWPlan, leftWScope: leftWScope, leftWBudget: leftWBudget, panelW: panelW, expanded: expanded, repCollapsed: repCollapsed, repMode: repMode, setupTab: setupTab, panelOpen: panelOpen, prioGroup: prioGroup, prioFields: prioFields, prioChipHide: prioChipHide, prioHideUnset: prioHideUnset, prioSort: prioSort, detailMode: detailMode, buColW: buColW, buColOrder: buColOrder, buColHide: buColHide, plColW: plColW, plColOrder: plColOrder, plColHide: plColHide, exportPrefs: exportPrefs, jiraPrefs: jiraPrefs, sprLevel: sprLevel, prioLevel: prioLevel, prioStoryCol: prioStoryCol, prioFeatCol: prioFeatCol, leftCollapsed: leftCollapsed, colorBy: colorBy, docKind: docKind, bundleMarker: bundleMarker, activePlanId: activePlanId };
   }
   // the snapshot an .xlsx carries: a workbook must never re-link a folder
   function exportUiSnapshot() {
@@ -249,7 +248,6 @@
     panelW = ui.panelW > 280 ? ui.panelW : 372;
     repCollapsed = ui.repCollapsed !== false; // default collapsed
     repMode = ['workstream', 'phase', 'phase-ws'].indexOf(ui.repMode) !== -1 ? ui.repMode : 'workstream';
-    autoSave = ui.autoSave !== false;   // default true (desktop writes to the open file)
     setupTab = typeof ui.setupTab === 'string' ? ui.setupTab : 'timeline';
     panelOpen = ui.panelOpen !== false; // panel is persistent by default
     leftCollapsed = ui.leftCollapsed === true;
@@ -780,18 +778,7 @@
     render();
     flushGen++;
     noteLocalStamps(new Date().toISOString()); // bundle: the commit time is the field's LWW stamp
-    scheduleAutoSave();     // xlsx: inert in bundle mode (currentPath is null there)
-    scheduleBundleFlush();  // bundle: inert for xlsx
-  }
-
-  var autoSaveTimer = null;
-  function scheduleAutoSave() {
-    // desktop only, and only once the doc lives in a real file
-    if (!autoSave || !window.HeadwayDesktop || !HeadwayDesktop.currentPath()) return;
-    clearTimeout(autoSaveTimer);
-    autoSaveTimer = setTimeout(function () {
-      if (!docSaved && !savingNow) doSave(false, true);
-    }, 1500);
+    scheduleBundleFlush();  // bundle: inert otherwise
   }
 
   // ------------------------------------------------------------ shared bundle
@@ -1202,7 +1189,6 @@
   function adoptBundle(res, opts) {
     opts = opts || {};
     var dir = HeadwayDesktop.bundleDir();
-    clearTimeout(autoSaveTimer);
     clearTimeout(bundleFlushTimer);
     docKind = 'bundle';
     bundleDir = dir;
@@ -1268,9 +1254,6 @@
   // pending writes of whatever is open land before the document changes
   function settleCurrentDoc() {
     if (docKind === 'bundle') return flushBundle().catch(function () { /* toasted already */ });
-    if (window.HeadwayDesktop && !docSaved && HeadwayDesktop.currentPath()) {
-      return (doSave(false, true) || Promise.resolve()).catch(function () { /* toasted already */ });
-    }
     return Promise.resolve();
   }
   // marker = <Project>/<Project>.headway
@@ -1390,10 +1373,6 @@
   function beforeClose() {
     clearTimeout(bundleFlushTimer);
     if (docKind === 'bundle') return closeBundleSession();
-    clearTimeout(autoSaveTimer);
-    if (window.HeadwayDesktop && autoSave && !docSaved && HeadwayDesktop.currentPath()) {
-      return (doSave(false, true) || Promise.resolve()).catch(function () { /* nothing more to do */ });
-    }
     return Promise.resolve();
   }
   // every selected row (the whole multi-selection) plus whatever is being dragged
@@ -1916,7 +1895,7 @@
   // shared roadmap. Add-only — RM.planImport never overwrites a value — and
   // previewed first; the apply runs through commit, so it is one undoable
   // step with one history line, flushed like any other edit. The workbook is
-  // read once and never adopted: currentPath and the bundle session stand.
+  // read once and never adopted: the bundle session stands.
   function countOf(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
   function importFromExcel() {
     if (docKind !== 'bundle' || !window.HeadwayDesktop || !HeadwayDesktop.pickWorkbook) return;
@@ -10016,13 +9995,6 @@
     if (v === state.meta.title) { e.target.value = v; return; }
     commit('title', function (s) { s.meta.title = v; });
     e.target.value = state.meta.title;
-    if (window.HeadwayDesktop && HeadwayDesktop.renameTo && HeadwayDesktop.currentPath()) {
-      HeadwayDesktop.renameTo(saveFileName()).then(function (p) {
-        if (p) toast('Renamed file to “' + HeadwayDesktop.basename(p) + '”');
-      }, function (err) {
-        toast('Could not rename the file: ' + (err && err.message || err), 'err');
-      });
-    }
   });
   // the title edits in place — click it to rename. It rests readonly so
   // header clicks can still drag the desktop window; the click unlocks it,
@@ -13262,9 +13234,7 @@
       '<div class="m-sec"><label>Color bars by</label><div class="seg">' + COLOR_MODES.map(function (cm) {
         return '<button data-pref-color="' + cm[0] + '"' + (colorBy === cm[0] ? ' class="on"' : '') + '>' + cm[1] + '</button>';
       }).join('') + '</div></div>' +
-      (desktop
-        ? '<div class="m-sec"><label>Files</label>' + chk('autoSave', 'Auto-save to the open file', autoSave) + '</div>'
-        : '');
+      '';
     if (part === 'appearance') return appearance;
     if (part === 'behavior') return behavior;
     return appearance + behavior;
@@ -13291,7 +13261,6 @@
       else if (key === 'autoOrder') autoOrder = on; // view-only; render() below re-sorts
       else if (key === 'groupWs') groupWs = on;
       else if (key === 'groupEpic') groupEpic = on;
-      else if (key === 'autoSave') { autoSave = on; if (on) scheduleAutoSave(); }
       else return;
       saveLocal();
       render();
@@ -13631,7 +13600,7 @@
     if (docKind === 'bundle') return exportXlsx(); // Save = a standalone export
     // the desktop never writes an .xlsx in place: a document that is not a
     // project yet (a session restored from app storage) becomes one
-    if (window.HeadwayDesktop) { saveAsProject(); return Promise.resolve(); }
+    if (window.HeadwayDesktop) return saveAsProject();
     var btn = $('#btnSave');
     savingNow = true;
     btn.disabled = true; btn.textContent = 'Saving…';
@@ -13640,27 +13609,9 @@
       btn.dataset.mode = '';
       updateSaveBtn();
     }
-    // the exact document JSON this export embeds — the desktop shell keeps it
-    // to recognize a sync client's rewrite of this very save (same document,
-    // different bytes) and not reload over it
     var vs = viewState(); // sheet rows in on-screen order; the blob re-sorts by key on load
-    var stateJson = RMExcel.stateJsonOf(vs);
     return RMExcel.exportWorkbook(vs, exportUiSnapshot()).then(function (blob) {
       var name = saveFileName();
-      if (window.HeadwayDesktop) { // desktop: write straight to disk
-        return HeadwayDesktop.saveBlob(blob, name, forceDialog, stateJson).then(function (path) {
-          if (!path) return; // dialog canceled
-          lastExport = new Date().toTimeString().slice(0, 5);
-          docSaved = true;
-          saveLocal();
-          noteRecent(path); // keep the start page's title + timestamp fresh
-          if (!quiet) toast('Saved ' + HeadwayDesktop.basename(path));
-          // Save As under a different name: the filename wins — retitle the
-          // doc (the autosave that follows rewrites the file to match)
-          var ft = titleFromFileName(HeadwayDesktop.basename(path));
-          if (ft !== state.meta.title) commit('title', function (s) { s.meta.title = ft; });
-        });
-      }
       var a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = name;
@@ -13695,15 +13646,6 @@
   function guardUnsaved(proceed) {
     flushPanelEdit(); // typing still in the field counts as an edit too
     if (!unsavedNow()) { proceed(); return; }
-    // autosave already owns this doc's file: flush the pending write instead
-    // of asking a question the user has answered by turning autosave on
-    if (autoSave && window.HeadwayDesktop && HeadwayDesktop.currentPath()) {
-      clearTimeout(autoSaveTimer);
-      (doSave(false, true) || Promise.resolve()).then(function () {
-        if (docSaved) proceed();
-      });
-      return;
-    }
     openModal(
       '<div class="modal" style="width:440px">' +
       '<div class="m-head"><h2>Unsaved changes</h2></div>' +
@@ -13796,7 +13738,6 @@
     save: doSave,
     unsavedNow: unsavedNow,
     guardUnsaved: guardUnsaved,
-    autoSaveOn: function () { return !!autoSave; },
     menuItems: menuItems,
     noteRecent: noteRecent,
     renderStartPage: renderStartPage,
@@ -13848,7 +13789,7 @@
         return {
           view: view, selectedNum: sel ? sel.num : null, theme: themePref, snapFeat: snapFeat, snapStory: snapStory, weekPx: weekPx,
           deps: depsMode === 'on', crit: showCrit, range: showRange, cap: showCap, autoOrder: autoOrder,
-          groupWs: groupWs, groupEpic: groupEpic, autoSave: autoSave, detailMode: detailMode,
+          groupWs: groupWs, groupEpic: groupEpic, detailMode: detailMode,
           desktop: !!window.HeadwayDesktop, userName: userName()
         };
       },
@@ -13864,7 +13805,6 @@
         else if (key === 'groupWs') groupWs = !!val;
         else if (key === 'groupEpic') groupEpic = !!val;
         else if (key === 'colorBy') { if (RM.COLOR_MODES.indexOf(val) === -1) return false; setColorBy(val); }
-        else if (key === 'autoSave') { autoSave = !!val; if (autoSave) scheduleAutoSave(); }
         else if (key === 'detailMode') { if (['feature', 'story'].indexOf(val) === -1) return false; detailMode = val; }
         else return false;
         saveLocal();

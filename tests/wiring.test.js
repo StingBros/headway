@@ -307,7 +307,6 @@ async function main() {
   eq(JSON.parse(tauri.files.get(DIR + '/plans/' + pid + '/meta.json')).fields.meta.title, 'Shared Title', 'meta shard carries the title');
   eq(b.HD.bundleDir(), DIR, 'the folder already carries that name: not renamed');
   ok(await until(() => JSON.parse(tauri.files.get(MARKER)).title === 'Shared Title'), '…only the marker\'s title is rewritten');
-  eq(b.HD.currentPath(), null, 'no xlsx path adopted');
 
   section('presence + editingIds');
   b.HA.presenceChanged('peer-zz999', { name: 'Peer', planId: pid, editing: [vId], ts: 1 });
@@ -404,7 +403,6 @@ async function main() {
   ok(!('docId' in imp.state) && !('bundle' in imp.state) && !('planId' in imp.state), 'exported state carries no bundle markers');
   eq(imp.state.items.length, b.state().items.length, 'same items');
   ok(imp.ui && imp.ui.docKind === undefined && imp.ui.bundleDir === undefined, 'the workbook\'s ui snapshot has no folder link');
-  eq(b.HD.currentPath(), null, 'currentPath untouched by the export');
   eq([b.info().docKind, b.HD.bundleDir()], ['bundle', DIR], 'bundle session untouched');
 
   section('menus with __TAURI__: one Open, the legacy convert entry, Save as…');
@@ -444,7 +442,6 @@ async function main() {
   ok(tauri.files.has(CDIR + '/history/' + myId + '.jsonl'), 'legacy history landed in the converting user\'s file');
   eq(b.state().meta.title, 'Exported', 'same document');
   eq(Buffer.from(tauri.files.get(XL)).toString('base64'), xlBefore, 'the workbook is byte-for-byte untouched');
-  eq(b.HD.currentPath(), null, 'the workbook was never adopted');
   ok(seenToasts.some((t) => /Converted to “Exported”/.test(t)), 'toast: Converted to “Exported”');
   eq(JSON.parse(window.localStorage.getItem('headway-recents-v1'))[0].path, CMARK, 'recents: the new marker, not the workbook');
 
@@ -793,7 +790,6 @@ async function fixes() {
     st.restore();
     await settle();
     eq(S.b.info().bundleDir, 'C:/tmp/Solo/.headway', 'the converted project is open');
-    eq(S.b.HD.currentPath(), null, 'no xlsx path adopted');
     const d = S.disk(S.vId);
     eq([d.fields.feature, d.fields.notes], ['A1', 'N2'], 'both edits on disk under the first project');
     ok(S.tauri.watching() && (S.tauri.watchOpts() || {}).recursive, 'a recursive watch is active after the switch');
@@ -1582,7 +1578,7 @@ async function importFlow() {
   b.menuClick('file', /Import from Excel…/);
   await settle();
   ok(mh().hidden && shardWrites(tauri, mark).length === 0, 'dialog cancel: no modal, no shard writes');
-  eq([b.info().docKind, b.HD.currentPath()], ['bundle', null], 'the workbook was never adopted');
+  eq(b.info().docKind, 'bundle', 'the workbook was never adopted');
 
   section('Import from Excel…: absent for an .xlsx document and in the web build');
   await b.HA.loadBuffer(u8.buffer, 'Team edits.xlsx');
