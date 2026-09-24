@@ -256,22 +256,67 @@
     return fs.writeTextFile(tmp, text).catch(function (err) {
       if (!isMissingDir(err)) throw err;
       // a missing sub-folder (a new plan's, a kind's first shard) is made —
-      // but ONLY inside a data folder that is still there: a peer's rename
-      // mid-write must never re-create <Old>/.headway/plans/…
+      // but ONLY inside a data folder that is still there, one level at a
+      // time: a peer's rename mid-write must never re-create <Old>/.headway/plans/…
       var root = dataRootOf(path);
       if (!root) throw err;
       if (goneDirs[root]) throw goneError();
       return fs.exists(root).catch(function () { return false; }).then(function (there) {
         if (!there) throw goneError();
-        return fs.mkdir(dirname(path), { recursive: true });
+        return mkdirUnder(root, dirname(path).slice(root.length + 1));
       }).then(function () { return fs.writeTextFile(tmp, text); });
     }).then(function () {
       return renameAttempt(0);
     }).catch(function (err) {
       fs.remove(tmp).catch(function () { /* may not exist */ });
       if (err && err.gone) throw err;
-      rejectFriendly(err);
+      // the tmp landed, then the folder vanished under the rename (or the
+      // in-place write): a gone data folder, not a failed sync
+      var root = isMissingDir(err) && dataRootOf(path);
+      if (!root) rejectFriendly(err);
+      if (goneDirs[root]) throw goneError();
+      return fs.exists(root).catch(function () { return true; }).then(function (there) {
+        if (!there) throw goneAt(root);
+        rejectFriendly(err);
+      });
     });
+  }
+  // a write under the data folder `root` failed: 'gone' when the folder
+  // itself vanished (the flush relocates), the friendly error otherwise
+  function failIn(root) {
+    return function (err) {
+      if (err && err.gone) throw err;
+      if (!isMissingDir(err)) rejectFriendly(err);
+      return fs.exists(root).catch(function () { return true; }).then(function (there) {
+        if (!there) throw goneAt(root);
+        rejectFriendly(err);
+      });
+    };
+  }
+  // an mkdir refused because the folder is already there (a peer made it)
+  function isExistsErr(err) { return /already exists|directory exists|os error 17\b|os error 183\b|EEXIST/i.test(errText(err)); }
+  // root/<rel…> made one NON-recursive level at a time under a live data
+  // folder: a level whose parent vanished between the check and the mkdir
+  // fails 'gone' instead of quietly re-creating the tree
+  function mkdirUnder(root, rel) {
+    root = norm(root).replace(/\/+$/, '');
+    var p = root;
+    return String(rel || '').split('/').filter(Boolean).reduce(function (chain, seg) {
+      return chain.then(function () {
+        var at = p = p + '/' + seg;
+        return fs.exists(at).catch(function () { return false; }).then(function (there) {
+          if (there) return null;
+          return fs.mkdir(at).catch(function (err) {
+            if (isExistsErr(err)) return null;
+            if (!isMissingDir(err)) throw err;
+            return fs.exists(root).catch(function () { return true; }).then(function (rootThere) {
+              if (!rootThere) throw goneAt(root);
+              throw err;
+            });
+          });
+        });
+      });
+    }, Promise.resolve());
   }
   // <Project>/.headway/plans/x.json → <Project>/.headway; null outside a data folder
   function dataRootOf(path) {
@@ -487,11 +532,16 @@
     // the data FOLDER, not headway.json: sync clients delete-then-create files
     return fs.exists(dir).catch(function () { return true; }).then(function (there) {
       if (there) return;
-      if (bundleDir && norm(bundleDir) === dir) checkBundleLocation().catch(function () { /* retried */ });
-      throw goneError();
+      throw goneAt(dir);
     });
   }
   function goneError() { var e = new Error(GONE_MSG); e.gone = true; return e; }
+  // the open project's data folder is gone: start the search for it
+  function goneAt(dir) {
+    dir = norm(dir).replace(/\/+$/, '');
+    if (bundleDir && norm(bundleDir).replace(/\/+$/, '') === dir) checkBundleLocation().catch(function () { /* retried */ });
+    return goneError();
+  }
 
   // The open project's data folder vanished (a peer renamed it — their
   // sync client moved ours — or it was moved / removed, or a sync client is
@@ -747,22 +797,22 @@
     appendHistory: function (dir, userId, line) {
       var p = dir + '/history/' + userId + '.jsonl';
       return liveRoot(dir).then(function () {
-        return fs.mkdir(dir + '/history', { recursive: true });
+        return mkdirUnder(dir, 'history');
       }).then(function () {
         return readTextOr(p, '');
       }).then(function (text) {
         text = String(text || '');
         if (text && !/\n$/.test(text)) text += '\n';
         return fs.writeTextFile(p, text + window.RM.asciiJson(line) + '\n');
-      }).catch(rejectFriendly);
+      }).catch(failIn(dir));
     },
     rewriteHistory: function (dir, userId, lines) {
       var p = dir + '/history/' + userId + '.jsonl';
       return liveRoot(dir).then(function () {
-        return fs.mkdir(dir + '/history', { recursive: true });
+        return mkdirUnder(dir, 'history');
       }).then(function () {
         return fs.writeTextFile(p, RB().encodeHistory(lines));
-      }).catch(rejectFriendly);
+      }).catch(failIn(dir));
     },
     readHistory: function (dir) {
       var out = {};
@@ -786,9 +836,12 @@
     writePresence: function (dir, userId, obj) {
       return liveRoot(dir).then(function () { return true; }, function () { return false; }).then(function (live) {
         if (!live) return false;
-        return fs.mkdir(dir + '/presence', { recursive: true }).then(function () {
+        return mkdirUnder(dir, 'presence').then(function () {
           return fs.writeTextFile(dir + '/presence/' + userId + '.json', JSON.stringify(obj));
-        }).then(function () { return true; });
+        }).then(function () { return true; }, function (err) {
+          if (err && err.gone) return false; // vanished between the check and the mkdir
+          throw err;
+        });
       }).catch(rejectFriendly);
     },
     readPresence: function (dir) {

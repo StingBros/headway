@@ -87,6 +87,8 @@ module.exports = function makeFakeTauri(opts) {
     }),
     mkdir: guard('mkdir', (p, o) => {
       p = norm(p);
+      // a sync client removing / moving things between a check and the mkdir: tests set this
+      if (typeof api.onMkdir === 'function') api.onMkdir(p);
       if (typeof api.mkdirFails === 'function') {
         const why = api.mkdirFails(p);
         if (why) return Promise.reject(why);
@@ -176,6 +178,7 @@ module.exports = function makeFakeTauri(opts) {
     onExists: null,    // (path) → called before every fs.exists answers
     beforeWrite: null, // (path) → called before every writeTextFile lands
     mkdirFails: null,  // (path) → error string to refuse that mkdir (a read-only folder)
+    onMkdir: null,     // (path) → called before every mkdir lands
     beforeRead: null,  // (path) → called before every readTextFile answers
     window: { getCurrentWindow: () => win },
     watching: () => !!watchCb,

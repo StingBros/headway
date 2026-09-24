@@ -918,6 +918,65 @@ async function main() {
     ok(tm.files.has('C:/m/Live/.headway/plans/plan-new01/items/' + env.id + '.json') && r.written.length === 1, 'a new plan\'s folders are still created inside a live project');
   }
 
+  section('L-a: a parent removed between the check and the mkdir fails "gone" — the tree is never re-created');
+  {
+    const tg = makeFakeTauri();
+    const bg = boot(tg);
+    const fx = bg.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    const cg = bg.RB.migrateFromState(fx, USER, T0);
+    const GP = 'C:/g/Hist', GD = GP + '/.headway';
+    await bg.HD.createBundle(GP, cg);
+    const away = () => tg.moveDir(GP, 'C:/stash/hist');
+    const back = () => tg.moveDir('C:/stash/hist', GP);
+    const nothingUnder = () => ![...tg.files.keys()].some((k) => k.indexOf(GP + '/') === 0) && ![...tg.dirs].some((d) => d === GP || d.indexOf(GP + '/') === 0);
+    for (const [what, sub, run] of [
+      ['appendHistory', 'history', () => bg.HD.appendHistory(GD, USER, { op: 'x' })],
+      ['rewriteHistory', 'history', () => bg.HD.rewriteHistory(GD, USER, [{ op: 'x' }])],
+      ['writePresence', 'presence', () => bg.HD.writePresence(GD, USER, { ts: 1 })],
+      ['a new plan\'s shard', 'plans/plan-gone1', () => bg.HD.flushShards(GD, 'plan-gone1', [{ kind: 'items', id: cg.plans[cg.headway.plans[0].id].items[0].id, env: cg.plans[cg.headway.plans[0].id].items[0], baseRev: 0 }])],
+    ]) {
+      tg.removeDir(GD + '/' + sub);
+      tg.onMkdir = (p) => { if (p === GD + '/' + sub) away(); };
+      let err = null, res;
+      try { res = await run(); } catch (e) { err = e; }
+      tg.onMkdir = null;
+      if (what === 'writePresence') eq(res, false, what + ': resolves false (skipped)');
+      else ok(err && err.gone, what + ': rejects gone — ' + (err && err.message));
+      ok(nothingUnder(), what + ': nothing re-created where the project was');
+      back();
+    }
+    // a live root still gets its missing sub-folders, one level at a time
+    tg.removeDir(GD + '/history');
+    await bg.HD.appendHistory(GD, USER, { op: 'y' });
+    ok(tg.files.has(GD + '/history/' + USER + '.jsonl'), 'a live project still gets its history/ folder');
+    await bg.HD.appendHistory(GD, USER, { op: 'z' });
+    eq(tg.files.get(GD + '/history/' + USER + '.jsonl').split('\n').filter(Boolean).length, 2, '…and appends once it exists');
+  }
+
+  section('L-b: the folder vanishes under the tmp → final rename: tagged gone, not a failed sync');
+  {
+    const tb = makeFakeTauri();
+    const bb = boot(tb);
+    const fx = bb.RM.normalizeState(JSON.parse(JSON.stringify(require('./seed.fixture.js'))));
+    const cb = bb.RB.migrateFromState(fx, USER, T0);
+    const BP = 'C:/g/Ren', BD = BP + '/.headway';
+    await bb.HD.createBundle(BP, cb);
+    const pid = cb.headway.plans[0].id, env = cb.plans[pid].items[0];
+    let movedIt = false;
+    tb.renameFails = (a) => {
+      if (a.indexOf(BD + '/plans/') !== 0 || !/\.tmp$/.test(a)) return null;
+      if (!movedIt) { movedIt = true; tb.moveDir(BP, 'C:/stash/ren'); }
+      return 'failed to rename: No such file or directory (os error 2)';
+    };
+    const upd = bb.RB.wrap(Object.assign(bb.RB.unwrap(env), { notes: 'x' }), env, USER, T1);
+    let err = null;
+    await bb.HD.flushShards(BD, pid, [{ kind: 'items', id: env.id, env: upd, baseRev: env.rev }]).catch((e) => { err = e; });
+    tb.renameFails = null;
+    ok(movedIt, 'the folder moved during the rename');
+    ok(err && err.gone, 'the flush rejects gone — ' + (err && err.message));
+    ok(![...tb.files.keys()].some((k) => k.indexOf(BP + '/') === 0), 'nothing re-created where it was');
+  }
+
   section('resumeBundle is called once desktop.js has loaded');
   const b9 = boot(makeFakeTauri(), ['resumeBundle']);
   eq(b9.named('resumeBundle').length, 1, 'HeadwayApp.resumeBundle() called at load');
