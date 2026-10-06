@@ -346,7 +346,16 @@ the row as an update). It is the third format in the Export dialog (right of Pow
   fetched once per gateway when the drawer opens or models are loaded): a model that reports
   `reasoning_effort` / `supports_reasoning` offers Low / Medium / High, one that doesn't offers
   no effort at all and none is sent (`AI.effortsFor` / `AI.effortAllowed`); an unknown model
-  keeps every level. Transport is Tauri's http plugin on desktop, `fetch` otherwise. `claude` —
+  keeps every level. Transport is Tauri's http plugin on desktop, `fetch` otherwise.
+  `copilot` — desktop only: `HeadwayDesktop.copilot.spawn` runs the GitHub Copilot CLI once per
+  turn (`-s --output-format json --stream on --available-tools none --no-ask-user
+  --no-custom-instructions --disable-builtin-mcps --disallow-temp-dir --no-auto-update --model ...
+  --reasoning-effort ...`), the prompt on stdin (`handle.write` then `handle.end`, so no
+  command-line length limit and nothing through cmd.exe); the system prompt rides on the first
+  turn, `--session-id <our uuid>` names the session and later turns `--resume` it (a dead resume
+  retries once fresh); JSONL `assistant.message_delta` / `assistant.message` / `model.call_failure`
+  / `result` reduce to the turn; Headway's tools come through the same ```headway-tool fences.
+  Images and PDFs are not sent (the CLI takes attachments only as file paths). `claude` —
   desktop only: `HeadwayDesktop.claude.spawn` runs `claude -p --input-format stream-json
   --output-format stream-json --include-partial-messages --tools "" --strict-mcp-config
   --system-prompt … --model … --effort …` once per conversation, user turns are written as

@@ -702,6 +702,41 @@
       .then(function (entries) { return (entries || []).map(function (e) { return e.name; }); });
   }
 
+  // process bridge for one CLI (see HeadwayDesktop.claude / .copilot):
+  // path(custom) resolves the binary, spawn(bin, args, onLine) -> handle
+  // { write(line), end() (close stdin: EOF for a prompt-on-stdin CLI), kill(), alive }
+  var cliHandles = {};
+  var cliListening = false;
+  function cliBridge(pathCmd) {
+    var invoke = window.__TAURI__.core.invoke;
+    function ensureListener() {
+      if (cliListening) return;
+      cliListening = true;
+      window.__TAURI__.event.listen('ai-proc', function (ev) {
+        var p = ev.payload || {};
+        var h = cliHandles[p.id];
+        if (!h) return;
+        if (p.kind === 'exit') { delete cliHandles[p.id]; h.alive = false; }
+        try { h.onLine(p.kind, p.line); } catch (e) { /* handler error must not kill the pipe */ }
+      });
+    }
+    return {
+      // resolve the CLI binary (custom path wins); null when not installed
+      path: function (custom) { return invoke(pathCmd, { custom: custom || '' }); },
+      spawn: function (bin, args, onLine) {
+        ensureListener();
+        return invoke('ai_spawn', { bin: bin, args: args }).then(function (id) {
+          var h = { id: id, alive: true, onLine: onLine,
+            write: function (line) { return invoke('ai_write', { id: id, line: line }); },
+            end: function () { return invoke('ai_close_stdin', { id: id }); },
+            kill: function () { h.alive = false; delete cliHandles[id]; return invoke('ai_kill', { id: id }); } };
+          cliHandles[id] = h;
+          return h;
+        });
+      }
+    };
+  }
+
   window.HeadwayDesktop = {
     // ---- shared bundle (folder) backend ----
     // open a project by its <Project>.headway folder (its headway.json or
@@ -1176,40 +1211,12 @@
     },
 
     basename: basename,
-    // Claude Code process bridge for the AI assistant's "Claude subscription"
-    // provider (js/ai.js owns the stream-json protocol). One global event
-    // listener fans stdout/stderr/exit lines out to the live handles by pid.
-    claude: (function () {
-      var invoke = window.__TAURI__.core.invoke;
-      var handles = {};
-      var listening = false;
-      function ensureListener() {
-        if (listening) return;
-        listening = true;
-        window.__TAURI__.event.listen('ai-proc', function (ev) {
-          var p = ev.payload || {};
-          var h = handles[p.id];
-          if (!h) return;
-          if (p.kind === 'exit') { delete handles[p.id]; h.alive = false; }
-          try { h.onLine(p.kind, p.line); } catch (e) { /* handler error must not kill the pipe */ }
-        });
-      }
-      return {
-        // resolve the CLI binary (custom path wins); null when not installed
-        path: function (custom) { return invoke('ai_claude_path', { custom: custom || '' }); },
-        // spawn → handle { write(line), kill(), alive }
-        spawn: function (bin, args, onLine) {
-          ensureListener();
-          return invoke('ai_spawn', { bin: bin, args: args }).then(function (id) {
-            var h = { id: id, alive: true, onLine: onLine,
-              write: function (line) { return invoke('ai_write', { id: id, line: line }); },
-              kill: function () { h.alive = false; delete handles[id]; return invoke('ai_kill', { id: id }); } };
-            handles[id] = h;
-            return h;
-          });
-        }
-      };
-    })(),
+    // CLI process bridges for the AI assistant's "Claude subscription" and
+    // "GitHub Copilot" providers (js/ai.js owns each protocol). One global
+    // event listener fans stdout/stderr/exit lines out to the live handles by
+    // pid; the two bridges differ only in which binary they look for.
+    claude: cliBridge('ai_claude_path'),
+    copilot: cliBridge('ai_copilot_path'),
     appVersion: '' // filled asynchronously below
   };
 

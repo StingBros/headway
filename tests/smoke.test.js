@@ -301,6 +301,14 @@ ok(!doc.body.classList.contains('start') && doc.querySelector('#startPage').hidd
   click(doc.querySelector('#aiSettingsCard [data-aiprov="claude"]'));
   ok(AI.loadSettings().provider === 'claude' && !doc.querySelector('#aiSettingsCard #aiClaude').hidden,
     'picking the Claude provider persists and reveals its fields');
+  click(doc.querySelector('#aiSettingsCard [data-aiprov="copilot"]'));
+  ok(AI.loadSettings().provider === 'copilot' && !doc.querySelector('#aiSettingsCard #aiCopilot').hidden && doc.querySelector('#aiSettingsCard #aiClaude').hidden,
+    'GitHub Copilot is the third provider; its fields replace the Claude ones');
+  ok(doc.querySelector('#aiSettingsCard #aiCopilotModel') && doc.querySelector('#aiSettingsCard #aiCopilotBin') && doc.querySelector('#aiSettingsCard #aiCopilotCheck'),
+    'Copilot settings: model, CLI path, Check');
+  click(doc.querySelector('#btnAI'));
+  ok([...doc.querySelectorAll('#aiDrawer #aiModelSel option')].some((o) => o.value === 'auto'), 'the drawer lists the Copilot models (auto first)');
+  click(doc.querySelector('#aiDrawer #aiClose'));
   click(doc.querySelector('#aiSettingsCard [data-aiprov="litellm"]'));
   ok(!doc.querySelector('#aiSettingsCard [data-aieffort]'), 'the settings tab carries no effort control (it lives in the drawer)');
   {

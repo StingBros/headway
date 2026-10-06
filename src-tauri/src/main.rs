@@ -62,10 +62,12 @@ mod traffic {
 }
 
 
-/// AI assistant ↔ Claude Code bridge. The "Claude subscription" provider runs
+/// AI assistant ↔ CLI bridge. The "Claude subscription" provider runs
 /// `claude -p` (headless Claude Code, billed to the user's Claude plan) as a
-/// child process speaking stream-json on stdin/stdout; the webview owns the
-/// protocol, this module only spawns, pipes lines and kills.
+/// child process speaking stream-json on stdin/stdout; the "GitHub Copilot"
+/// provider runs the Copilot CLI once per turn with the prompt on stdin and
+/// JSONL on stdout. The webview owns each protocol; this module only finds
+/// the binaries, spawns, pipes lines, closes stdin and kills.
 mod ai {
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Write};
@@ -74,7 +76,7 @@ mod ai {
     use tauri::{AppHandle, Emitter, Manager, State};
 
     #[derive(Default)]
-    pub struct Procs(pub Mutex<HashMap<u32, (Child, ChildStdin)>>);
+    pub struct Procs(pub Mutex<HashMap<u32, (Child, Option<ChildStdin>)>>);
 
     #[derive(Clone, serde::Serialize)]
     struct Line {
@@ -97,32 +99,50 @@ mod ai {
         if l.ends_with(".exe") { 0 } else if l.ends_with(".cmd") || l.ends_with(".bat") { 1 } else { 9 }
     }
 
-    /// npm's claude.cmd only launches the native binary shipped inside the
+    /// Where each CLI's npm package keeps the native binary its .cmd shim
+    /// launches, relative to the npm bin folder (several candidates: Copilot
+    /// ships one platform package per architecture).
+    #[cfg(target_os = "windows")]
+    fn npm_native_paths(name: &str) -> Vec<Vec<&'static str>> {
+        match name {
+            "claude" => vec![vec!["node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"]],
+            "copilot" => vec![
+                vec!["node_modules", "@github", "copilot-win32-x64", "copilot.exe"],
+                vec!["node_modules", "@github", "copilot-win32-arm64", "copilot.exe"],
+            ],
+            _ => Vec::new(),
+        }
+    }
+
+    /// npm's <name>.cmd only launches the native binary shipped inside the
     /// package. Return that binary so nothing goes through cmd.exe: Rust refuses
     /// to hand a batch file any argument with quotes or newlines, and the
     /// assistant's system prompt has both.
     #[cfg(target_os = "windows")]
-    fn unwrap_npm_shim(p: &str) -> Option<String> {
+    fn unwrap_npm_shim(name: &str, p: &str) -> Option<String> {
         if exe_rank(p) != 1 {
             return None;
         }
-        let native = std::path::Path::new(p)
-            .parent()?
-            .join("node_modules")
-            .join("@anthropic-ai")
-            .join("claude-code")
-            .join("bin")
-            .join("claude.exe");
-        if native.is_file() { Some(native.to_string_lossy().into_owned()) } else { None }
+        let dir = std::path::Path::new(p).parent()?;
+        for rel in npm_native_paths(name) {
+            let mut native = dir.to_path_buf();
+            for seg in rel {
+                native.push(seg);
+            }
+            if native.is_file() {
+                return Some(native.to_string_lossy().into_owned());
+            }
+        }
+        None
     }
 
-    /// Every `claude` the login shell / PATH knows about, in PATH order.
-    fn login_shell_lookup() -> Vec<String> {
+    /// Every `<name>` the login shell / PATH knows about, in PATH order.
+    fn login_shell_lookup(name: &str) -> Vec<String> {
         #[cfg(target_os = "windows")]
         {
             // `where` lists every PATH hit; with nvm-for-windows the first is the
             // extensionless Unix shim, which CreateProcess cannot run (error 193)
-            let Ok(out) = Command::new("where").arg("claude").output() else { return Vec::new() };
+            let Ok(out) = Command::new("where").arg(name).output() else { return Vec::new() };
             let s = String::from_utf8_lossy(&out.stdout);
             return s
                 .lines()
@@ -134,7 +154,7 @@ mod ai {
         #[cfg(not(target_os = "windows"))]
         {
             let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-            let Ok(out) = Command::new(shell).args(["-lc", "command -v claude"]).output() else { return Vec::new() };
+            let Ok(out) = Command::new(shell).args(["-lc", &format!("command -v {name}")]).output() else { return Vec::new() };
             let s = String::from_utf8_lossy(&out.stdout);
             s.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect()
         }
@@ -143,12 +163,12 @@ mod ai {
     /// The best of several found paths. On Windows a native .exe beats a batch
     /// wrapper (unwrapped to its bundled .exe when possible); earlier hits win
     /// within a rank. Elsewhere the first hit wins, as before.
-    fn best_claude(found: Vec<String>) -> Option<String> {
+    fn best_bin(name: &str, found: Vec<String>) -> Option<String> {
         #[cfg(target_os = "windows")]
         {
             let mut all: Vec<String> = Vec::new();
             for p in found {
-                if let Some(native) = unwrap_npm_shim(&p) {
+                if let Some(native) = unwrap_npm_shim(name, &p) {
                     all.push(native);
                 }
                 all.push(p);
@@ -159,7 +179,29 @@ mod ai {
         }
         #[cfg(not(target_os = "windows"))]
         {
+            let _ = name;
             found.into_iter().find(|p| std::path::Path::new(p).is_file())
+        }
+    }
+
+    /// A user-typed path for `<name>`: on Windows a saved path to the npm
+    /// shell shim (no extension) or to <name>.cmd resolves to the runnable
+    /// binary beside / inside it.
+    fn custom_bin(name: &str, c: &str) -> Option<String> {
+        #[cfg(target_os = "windows")]
+        {
+            let mut tries = vec![c.to_string()];
+            if std::path::Path::new(c).extension().is_none() {
+                for ext in ["exe", "cmd", "bat"] {
+                    tries.push(format!("{c}.{ext}"));
+                }
+            }
+            best_bin(name, tries)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = name;
+            if std::path::Path::new(c).is_file() { Some(c.to_string()) } else { None }
         }
     }
 
@@ -170,22 +212,7 @@ mod ai {
     pub fn ai_claude_path(custom: String) -> Option<String> {
         let c = custom.trim();
         if !c.is_empty() {
-            #[cfg(target_os = "windows")]
-            {
-                // a saved path to the npm shell shim (no extension) or to
-                // claude.cmd resolves to the runnable binary beside / inside it
-                let mut tries = vec![c.to_string()];
-                if std::path::Path::new(c).extension().is_none() {
-                    for ext in ["exe", "cmd", "bat"] {
-                        tries.push(format!("{c}.{ext}"));
-                    }
-                }
-                return best_claude(tries);
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                return if std::path::Path::new(c).is_file() { Some(c.to_string()) } else { None };
-            }
+            return custom_bin("claude", c);
         }
         let h = home();
         let mut candidates = vec![
@@ -215,8 +242,44 @@ mod ai {
             }
         }
         let mut found: Vec<String> = candidates.into_iter().filter(|p| std::path::Path::new(p).is_file()).collect();
-        found.extend(login_shell_lookup());
-        best_claude(found)
+        found.extend(login_shell_lookup("claude"));
+        best_bin("claude", found)
+    }
+
+    /// Locate the GitHub Copilot CLI (`npm install -g @github/copilot`,
+    /// `winget install GitHub.Copilot`, `brew install --cask copilot-cli`, or
+    /// the gh.io/copilot-install script): explicit path, usual spots, login shell.
+    #[tauri::command]
+    pub fn ai_copilot_path(custom: String) -> Option<String> {
+        let c = custom.trim();
+        if !c.is_empty() {
+            return custom_bin("copilot", c);
+        }
+        let h = home();
+        let mut candidates = vec![
+            format!("{h}/.local/bin/copilot"),
+            "/opt/homebrew/bin/copilot".to_string(),
+            "/usr/local/bin/copilot".to_string(),
+        ];
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            candidates.push(format!("{appdata}\\npm\\copilot.cmd"));
+        }
+        if let Ok(sym) = std::env::var("NVM_SYMLINK") {
+            candidates.push(format!("{sym}\\copilot.cmd"));
+        }
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            candidates.push(format!("{local}\\Microsoft\\WinGet\\Links\\copilot.exe"));
+            if let Ok(entries) = std::fs::read_dir(format!("{local}\\Microsoft\\WinGet\\Packages")) {
+                for e in entries.flatten() {
+                    if e.file_name().to_string_lossy().starts_with("GitHub.Copilot_") {
+                        candidates.push(e.path().join("copilot.exe").to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+        let mut found: Vec<String> = candidates.into_iter().filter(|p| std::path::Path::new(p).is_file()).collect();
+        found.extend(login_shell_lookup("copilot"));
+        best_bin("copilot", found)
     }
 
     #[tauri::command]
@@ -224,13 +287,20 @@ mod ai {
         // never spawn through cmd.exe: unwrap an npm batch wrapper to the native
         // binary it launches, and refuse a bare .cmd with a fix the user can apply
         #[cfg(target_os = "windows")]
-        let bin = unwrap_npm_shim(&bin).unwrap_or(bin);
+        let bin = {
+            let stem = std::path::Path::new(&bin)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default();
+            unwrap_npm_shim(&stem, &bin).unwrap_or(bin)
+        };
         #[cfg(target_os = "windows")]
         if exe_rank(&bin) == 1 {
             return Err(format!(
                 "{bin} is a batch wrapper and Windows cannot pass this prompt through cmd.exe. \
-                 In AI settings set Claude Code path to a claude.exe (the native install, or \
-                 node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe inside your npm folder)."
+                 In AI settings point the CLI path at the native .exe (for Claude Code \
+                 node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe, for Copilot \
+                 node_modules\\@github\\copilot-win32-x64\\copilot.exe inside your npm folder)."
             ));
         }
         let mut cmd = Command::new(&bin);
@@ -249,7 +319,7 @@ mod ai {
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let stderr = child.stderr.take().ok_or("no stderr")?;
         let id = child.id();
-        procs.0.lock().map_err(|e| e.to_string())?.insert(id, (child, stdin));
+        procs.0.lock().map_err(|e| e.to_string())?.insert(id, (child, Some(stdin)));
 
         let app_out = app.clone();
         std::thread::spawn(move || {
@@ -279,9 +349,20 @@ mod ai {
     pub fn ai_write(procs: State<Procs>, id: u32, line: String) -> Result<(), String> {
         let mut m = procs.0.lock().map_err(|e| e.to_string())?;
         let (_, stdin) = m.get_mut(&id).ok_or("process is gone")?;
+        let stdin = stdin.as_mut().ok_or("stdin is closed")?;
         stdin.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
         stdin.write_all(b"\n").map_err(|e| e.to_string())?;
         stdin.flush().map_err(|e| e.to_string())
+    }
+
+    /// Close the child's stdin: EOF tells a prompt-on-stdin CLI (Copilot) the
+    /// prompt is complete. The process keeps running until it exits by itself.
+    #[tauri::command]
+    pub fn ai_close_stdin(procs: State<Procs>, id: u32) -> Result<(), String> {
+        let mut m = procs.0.lock().map_err(|e| e.to_string())?;
+        let (_, stdin) = m.get_mut(&id).ok_or("process is gone")?;
+        drop(stdin.take());
+        Ok(())
     }
 
     #[tauri::command]
@@ -299,7 +380,7 @@ mod ai {
 fn main() {
     tauri::Builder::default()
         .manage(ai::Procs::default())
-        .invoke_handler(tauri::generate_handler![ai::ai_claude_path, ai::ai_spawn, ai::ai_write, ai::ai_kill])
+        .invoke_handler(tauri::generate_handler![ai::ai_claude_path, ai::ai_copilot_path, ai::ai_spawn, ai::ai_write, ai::ai_close_stdin, ai::ai_kill])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

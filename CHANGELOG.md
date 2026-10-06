@@ -7,6 +7,12 @@ both come from the matching section here. Newest first.
 Format: short sections, bullets, one bold title per notable change —
 `**Feature title**: a short, impactful description and use case.`
 
+## Unreleased
+
+### New
+
+- **GitHub Copilot as an AI provider** (desktop): Setup → Personal → AI assistant → GitHub Copilot runs the Copilot CLI on your machine, billed to your Copilot plan — `npm install -g @github/copilot`, `copilot login` once, pick `auto` or a model id. Copilot's own shell and file tools are switched off; it edits the roadmap only through Headway's tools, every edit undoable and in Version history as “you · AI”.
+
 ## 1.1.0 — 2026-09-28
 
 ### New
