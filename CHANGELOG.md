@@ -7,7 +7,7 @@ both come from the matching section here. Newest first.
 Format: short sections, bullets, one bold title per notable change —
 `**Feature title**: a short, impactful description and use case.`
 
-## Unreleased
+## 1.1.1 — 2026-10-06
 
 ### New
 
