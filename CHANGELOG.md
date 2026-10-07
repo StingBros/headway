@@ -7,6 +7,12 @@ both come from the matching section here. Newest first.
 Format: short sections, bullets, one bold title per notable change —
 `**Feature title**: a short, impactful description and use case.`
 
+## Unreleased
+
+### Fixed
+
+- **GitHub Copilot on macOS and Linux**: the assistant no longer fails with “env: node: No such file or directory” when Headway is opened from the Dock or Finder. It now runs Copilot's native binary directly.
+
 ## 1.1.1 — 2026-10-06
 
 ### New

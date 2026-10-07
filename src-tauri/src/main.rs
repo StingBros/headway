@@ -179,9 +179,67 @@ mod ai {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = name;
-            found.into_iter().find(|p| std::path::Path::new(p).is_file())
+            found
+                .into_iter()
+                .find(|p| std::path::Path::new(p).is_file())
+                .map(|p| unwrap_node_loader(name, &p).unwrap_or(p))
         }
+    }
+
+    /// npm installs `copilot` as a `#!/usr/bin/env node` loader, and an app
+    /// started from Finder has a bare PATH with no node ("env: node: No such
+    /// file or directory"). The loader only runs the native binary from the
+    /// platform package, so return that binary instead.
+    #[cfg(not(target_os = "windows"))]
+    fn unwrap_node_loader(name: &str, p: &str) -> Option<String> {
+        if name != "copilot" {
+            return None;
+        }
+        let real = std::fs::canonicalize(p).ok()?; // …/@github/copilot/npm-loader.js
+        if real.extension()? != "js" {
+            return None;
+        }
+        let pkg = real.parent()?;
+        let os = match std::env::consts::OS { "macos" => "darwin", o => o };
+        let arch = match std::env::consts::ARCH { "aarch64" => "arm64", "x86_64" => "x64", a => a };
+        let mut plats = vec![format!("copilot-{os}-{arch}")];
+        if os == "linux" {
+            plats.push(format!("copilot-linuxmusl-{arch}"));
+        }
+        let mut tries = Vec::new();
+        for plat in &plats {
+            tries.push(pkg.join("node_modules").join("@github").join(plat).join("copilot"));
+            // hoisted beside the package instead of nested in it
+            if let Some(scope) = pkg.parent() {
+                tries.push(scope.join(plat).join("copilot"));
+            }
+        }
+        tries.into_iter().find(|t| t.is_file()).map(|t| t.to_string_lossy().into_owned())
+    }
+
+    /// PATH for a spawned CLI: the binary's own folder (npm puts node there),
+    /// then the login shell's PATH, then ours — GUI apps start with a bare one,
+    /// and a CLI may still shell out to node or git.
+    #[cfg(not(target_os = "windows"))]
+    fn child_path(bin: &str) -> String {
+        static LOGIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        let login = LOGIN.get_or_init(|| {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+            Command::new(shell)
+                .args(["-lc", "printf %s \"$PATH\""])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default()
+        });
+        let own = std::env::var("PATH").unwrap_or_default();
+        let dir = std::path::Path::new(bin).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut parts: Vec<&str> = Vec::new();
+        for p in std::iter::once(dir.as_str()).chain(login.split(':')).chain(own.split(':')) {
+            if !p.is_empty() && !parts.contains(&p) {
+                parts.push(p);
+            }
+        }
+        parts.join(":")
     }
 
     /// A user-typed path for `<name>`: on Windows a saved path to the npm
@@ -200,8 +258,7 @@ mod ai {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = name;
-            if std::path::Path::new(c).is_file() { Some(c.to_string()) } else { None }
+            best_bin(name, vec![c.to_string()])
         }
     }
 
@@ -303,7 +360,18 @@ mod ai {
                  node_modules\\@github\\copilot-win32-x64\\copilot.exe inside your npm folder)."
             ));
         }
+        // a path saved before the loader was unwrapped at lookup
+        #[cfg(not(target_os = "windows"))]
+        let bin = {
+            let stem = std::path::Path::new(&bin)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            unwrap_node_loader(&stem, &bin).unwrap_or(bin)
+        };
         let mut cmd = Command::new(&bin);
+        #[cfg(not(target_os = "windows"))]
+        cmd.env("PATH", child_path(&bin));
         cmd.args(&args)
             .current_dir(home())
             .stdin(Stdio::piped())
