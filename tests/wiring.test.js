@@ -119,6 +119,7 @@ async function main() {
   ['openBundleDoc', 'applyExternalEntities', 'presenceChanged', 'plansChanged', 'planShardChanged', 'resumeBundle', 'beforeClose', 'editingIds', 'flushBundle', 'closeBundleSession', 'userId']
     .forEach((m) => ok(typeof b.HA[m] === 'function', 'HeadwayApp.' + m + ' exists'));
   ['pickFolder', 'pathExists', 'exportBlob', 'readHeadway', 'writeHeadway'].forEach((m) => ok(typeof b.HD[m] === 'function', 'HeadwayDesktop.' + m + ' exists'));
+  ['claude', 'copilot'].forEach((c) => ok(b.HD[c] && typeof b.HD[c].path === 'function' && typeof b.HD[c].spawn === 'function', 'HeadwayDesktop.' + c + ' CLI bridge exists'));
   eq(b.info().docKind, 'xlsx', 'boots as a standalone document');
   ok(doc.body.classList.contains('start'), 'fresh launch shows the start page');
   ok(!window.localStorage.getItem('headway-user-v2'), 'no identity minted before it is needed');

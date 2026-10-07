@@ -512,6 +512,51 @@ function done() {
     eq(red2.state.error, 'Not logged in', 'result errors surface');
   }
 
+  console.log('— copilot protocol');
+  {
+    var cs = { copilotModel: 'gpt-5', effort: 'high' };
+    var ca = AI.copilot.args(cs, 'U1', true);
+    ok(ca.indexOf('--session-id') !== -1 && ca[ca.indexOf('--session-id') + 1] === 'U1' && ca.indexOf('--resume') === -1, 'a fresh chat mints its session id');
+    var ca2 = AI.copilot.args(cs, 'U1', false);
+    ok(ca2.indexOf('--resume') !== -1 && ca2[ca2.indexOf('--resume') + 1] === 'U1' && ca2.indexOf('--session-id') === -1, 'later turns resume it');
+    ok(ca[ca.indexOf('--available-tools') + 1] === 'none' && ca.indexOf('--allow-all-tools') === -1, "Copilot's own tools are off and nothing is pre-approved");
+    ok(ca.indexOf('--output-format') !== -1 && ca[ca.indexOf('--output-format') + 1] === 'json' && ca.indexOf('-p') === -1, 'JSONL output, prompt on stdin (no -p)');
+    ok(ca[ca.indexOf('--model') + 1] === 'gpt-5' && ca[ca.indexOf('--reasoning-effort') + 1] === 'high', 'model + reasoning effort passed');
+    ok(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(AI.copilot.uuid()), 'session ids are v4 UUIDs');
+
+    var first = AI.copilot.promptText({ role: 'user', text: 'hello', files: [{ name: 'n.txt', kind: 'text', data: 'NOTE' }, { name: 'i.png', type: 'image/png', kind: 'image', data: 'QUJD' }] }, 'SYSTEM PROMPT', true);
+    ok(first.indexOf('SYSTEM PROMPT') === 0 && /\n---\n/.test(first) && /hello/.test(first), 'the first turn carries the system prompt above the message');
+    ok(/--- file: n.txt ---\nNOTE/.test(first) && /\[attachment i.png — images and PDFs are not sent/.test(first), 'text files inline, binary attachments named');
+    var later = AI.copilot.promptText({ role: 'user', text: 'again' }, 'SYSTEM PROMPT', false);
+    eq(later, 'again', 'later turns send just the message');
+    var tr = AI.copilot.promptText({ role: 'tool', results: [{ name: 'get_project', content: { x: 1 } }] }, 'S', false);
+    ok(/^Tool results:/.test(tr) && /"x":1/.test(tr) && /Continue\.$/.test(tr), 'tool results go back as a text turn');
+
+    var cevs = [];
+    var cr = AI.copilot.reducer(function (e) { cevs.push(e.type + ':' + (e.delta || e.model || '')); });
+    cr.push('{"type":"session.skills_loaded","data":{"skills":[]}}');
+    cr.push('{"type":"assistant.message_delta","data":{"messageId":"m1","deltaContent":"po"}}');
+    cr.push('{"type":"assistant.message_delta","data":{"messageId":"m1","deltaContent":"ng"}}');
+    cr.push('garbage line');
+    cr.push('{"type":"assistant.message","data":{"messageId":"m1","model":"gpt-5","content":"pong","toolRequests":[]}}');
+    cr.push('{"type":"result","sessionId":"S9","exitCode":0,"usage":{"premiumRequests":1}}');
+    eq([cr.state.session, cr.state.text, cr.state.finalText, cr.state.done, cr.state.error], ['S9', 'pong', 'pong', true, null], 'JSONL events reduced');
+    eq(cevs, ['text:po', 'text:ng', 'meta:gpt-5'], 'stream events surfaced');
+    var cr2 = AI.copilot.reducer();
+    cr2.push('{"type":"model.call_failure","data":{"error":"rate limited"}}');
+    cr2.push('{"type":"result","sessionId":"S10","exitCode":1,"usage":{}}');
+    eq(cr2.state.error, 'rate limited', 'a failed turn surfaces the model failure');
+    var cr3 = AI.copilot.reducer();
+    cr3.push('{"type":"result","sessionId":"S11","exitCode":2}');
+    eq(cr3.state.error, 'Copilot exited with code 2', 'a bare non-zero exit is reported');
+
+    eq(AI.ready({ provider: 'copilot' }, false).ok, false, 'copilot needs the desktop');
+    eq(AI.ready({ provider: 'copilot' }, true).ok, true, 'copilot ready on desktop');
+    eq(AI.effortsFor({ provider: 'copilot', copilotModel: 'auto' }).length, 4, 'the Copilot CLI keeps every effort level');
+    eq(AI.modelOf({ provider: 'copilot', copilotModel: 'auto', model: 'x', claudeModel: 'opus' }), 'auto', 'modelOf picks the provider\'s model');
+    ok(AI.isCli({ provider: 'copilot' }) && AI.isCli({ provider: 'claude' }) && !AI.isCli({ provider: 'litellm' }), 'both CLIs count as CLI providers');
+  }
+
   console.log('— system prompt');
   {
     var sp = AI.systemPrompt({ today: '2026-09-07', userName: 'Ada', desktop: true, view: 'planning', selectedNum: 3, doc: { title: 'Doc', items: 4, phases: 2, start: '2026-07-27', end: '2026-12-31' }, textTools: true });

@@ -1,6 +1,6 @@
 {
   "name": "headway",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "Standalone roadmap planning tool — web page and Tauri desktop app.",
   "scripts": {

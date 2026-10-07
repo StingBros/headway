@@ -14,6 +14,9 @@
  *  - claude.*: the `claude -p` stream-json protocol — user lines, event
  *    reduction, and the ```headway-tool fenced text protocol that stands in
  *    for function calling.
+ *  - copilot.*: the GitHub Copilot CLI (`copilot --output-format json`): one
+ *    process per turn, the prompt on stdin, the CLI's own tools switched off,
+ *    the same fenced text protocol for Headway's tools, sessions resumed by id.
  *  - md(text): light, escaped markdown for assistant replies.
  *
  * Browser glue (window.HeadwayAI): the Setup → Personal → AI assistant tab
@@ -52,7 +55,7 @@
   // model offers OpenAI's three when it reasons, none when it doesn't, and
   // every level while the gateway has not said
   AI.effortsFor = function (s) {
-    if (!s || s.provider === 'claude') return AI.EFFORTS.slice();
+    if (!s || AI.isCli(s)) return AI.EFFORTS.slice();
     var info = AI.modelInfo && AI.modelInfo[s.model];
     if (!info) return AI.EFFORTS.slice();
     return info.reasoning ? AI.GATEWAY_EFFORTS.slice() : [];
@@ -69,12 +72,25 @@
     return eff.some(function (e) { return e[0] === 'medium'; }) ? 'medium' : eff[0][0];
   };
   AI.CLAUDE_MODELS = [['sonnet', 'Sonnet'], ['opus', 'Opus'], ['fable', 'Fable'], ['haiku', 'Haiku']];
+  // Copilot CLI model ids ('auto' lets Copilot route); the field is free text,
+  // these are only suggestions — the plan decides what a user can pick
+  AI.COPILOT_MODELS = [['auto', 'Auto (Copilot picks)'], ['gpt-5', 'GPT-5'], ['gpt-5-mini', 'GPT-5 mini'], ['claude-sonnet-4.5', 'Claude Sonnet 4.5'], ['claude-opus-4.1', 'Claude Opus 4.1'], ['gemini-2.5-pro', 'Gemini 2.5 Pro']];
+  AI.PROVIDERS = ['litellm', 'claude', 'copilot'];
+  // the two CLI providers: desktop only, text-fence tools, a session id per chat
+  AI.isCli = function (s) { return !!s && (s.provider === 'claude' || s.provider === 'copilot'); };
+  // the model a provider runs with (for labels and the drawer select)
+  AI.modelOf = function (s) {
+    if (!s) return '';
+    if (s.provider === 'claude') return s.claudeModel;
+    if (s.provider === 'copilot') return s.copilotModel;
+    return s.model;
+  };
   AI.DEFAULTS = {
     provider: 'litellm', baseUrl: '', apiKey: '', model: '', headers: '',
-    claudeBin: '', claudeModel: 'sonnet', effort: 'medium'
+    claudeBin: '', claudeModel: 'sonnet', copilotBin: '', copilotModel: 'auto', effort: 'medium'
   };
   AI.MAX_ROUNDS = 12;         // tool-call rounds per user message
-  AI.FENCE = 'headway-tool';  // claude -p tool-call fence language
+  AI.FENCE = 'headway-tool';  // CLI providers' tool-call fence language
   AI.TEXT_FILE_MAX = 300 * 1024;
   AI.BIN_FILE_MAX = 12 * 1024 * 1024;
 
@@ -111,7 +127,7 @@
       var raw = JSON.parse(root.localStorage.getItem(AI.LOCAL_KEY) || '{}') || {};
       Object.keys(out).forEach(function (k) { if (raw[k] != null) out[k] = raw[k]; });
     } catch (e) { /* storage blocked */ }
-    if (out.provider !== 'claude') out.provider = 'litellm';
+    if (AI.PROVIDERS.indexOf(out.provider) === -1) out.provider = 'litellm';
     if (!AI.EFFORTS.some(function (e) { return e[0] === out.effort; })) out.effort = 'medium';
     return out;
   };
@@ -122,6 +138,10 @@
   AI.ready = function (s, desktop) {
     if (s.provider === 'claude') {
       if (!desktop) return { ok: false, why: 'The Claude subscription provider runs the Claude Code CLI, which only the desktop app can start. Pick the LiteLLM gateway here, or use the desktop app.' };
+      return { ok: true };
+    }
+    if (s.provider === 'copilot') {
+      if (!desktop) return { ok: false, why: 'The GitHub Copilot provider runs the Copilot CLI, which only the desktop app can start. Pick the LiteLLM gateway here, or use the desktop app.' };
       return { ok: true };
     }
     if (!String(s.baseUrl || '').trim()) return { ok: false, why: 'Set the gateway URL in AI settings.' };
@@ -1403,6 +1423,147 @@
     });
   };
 
+  // ------------------------------------------------------------ copilot -p
+  // GitHub Copilot CLI in non-interactive mode. Unlike claude -p it has no
+  // persistent stdin protocol: every turn is one process, the prompt arrives on
+  // stdin (no command-line length limit, nothing through cmd.exe), events come
+  // back as JSONL and the process exits. The system prompt rides on the first
+  // turn only; `--session-id` / `--resume` keep the conversation on the CLI side.
+  // Copilot's own tools (shell, file edits, …) are switched off: the model gets
+  // Headway's tools through the same ```headway-tool fences as claude -p.
+  var copilot = AI.copilot = {};
+  copilot.args = function (s, session, fresh) {
+    var a = ['-s', '--output-format', 'json', '--stream', 'on',
+      '--available-tools', 'none', '--no-ask-user', '--no-custom-instructions', '--disable-builtin-mcps',
+      '--disallow-temp-dir', '--no-auto-update', '--log-level', 'none'];
+    if (s.copilotModel) a.push('--model', s.copilotModel);
+    if (s.effort) a.push('--reasoning-effort', s.effort);
+    if (session) a.push(fresh ? '--session-id' : '--resume', session);
+    return a;
+  };
+  // RFC 4122 v4 — the CLI stores the session under this id, so the next turn can resume it
+  copilot.uuid = function () {
+    var b = new Array(16);
+    var c = root.crypto && root.crypto.getRandomValues ? root.crypto.getRandomValues(new Uint8Array(16)) : null;
+    for (var i = 0; i < 16; i++) b[i] = c ? c[i] : Math.floor(Math.random() * 256);
+    b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+    var h = b.map(function (x) { return (x < 16 ? '0' : '') + x.toString(16); }).join('');
+    return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
+  };
+  // the text written to stdin for one turn
+  copilot.promptText = function (m, system, first) {
+    var parts = [];
+    if (first && system) parts.push(system, '', '---', '');
+    if (m.role === 'tool') {
+      parts.push('Tool results:\n```json\n' + JSON.stringify((m.results || []).map(function (r) { return { name: r.name, result: r.content }; })) + '\n```\nContinue.');
+    } else {
+      if (m.text) parts.push(m.text);
+      (m.files || []).forEach(function (f) {
+        if (f.kind === 'text' && f.data) parts.push('--- file: ' + f.name + ' ---\n' + f.data + '\n--- end of ' + f.name + ' ---');
+        else parts.push('[attachment ' + f.name + ' — ' + (f.kind === 'text' ? 'content not available' : 'images and PDFs are not sent to the Copilot CLI; paste the text instead') + ']');
+      });
+      if (!parts.length) parts.push('(empty)');
+    }
+    return parts.join('\n');
+  };
+  // reduce JSONL stdout into a turn: { session, text, finalText, done, error }
+  copilot.reducer = function (onEvent) {
+    var st = { session: null, text: '', finalText: null, done: false, error: null, failure: null };
+    function msgOf(d) {
+      if (!d) return '';
+      if (typeof d === 'string') return d;
+      return d.message || d.error || (d.data && (d.data.message || d.data.error)) || '';
+    }
+    return {
+      state: st,
+      push: function (line) {
+        var ev = null;
+        try { ev = JSON.parse(line); } catch (e) { return; }
+        if (!ev || typeof ev !== 'object') return;
+        var d = isObj(ev.data) ? ev.data : {};
+        if (ev.type === 'assistant.message_delta') {
+          if (d.deltaContent) { st.text += d.deltaContent; if (onEvent) onEvent({ type: 'text', delta: d.deltaContent }); }
+        } else if (ev.type === 'assistant.message') {
+          // the full message is authoritative for text
+          if (typeof d.content === 'string') st.finalText = (st.finalText || '') + d.content;
+          if (d.model && onEvent) onEvent({ type: 'meta', model: d.model });
+        } else if (ev.type === 'model.call_failure') {
+          st.failure = msgOf(d) || JSON.stringify(d).slice(0, 300);
+        } else if (ev.type === 'error' || ev.type === 'session.error') {
+          st.error = msgOf(ev) || msgOf(d) || 'Copilot returned an error';
+        } else if (ev.type === 'result') {
+          st.done = true;
+          if (ev.sessionId) st.session = ev.sessionId;
+          if (ev.exitCode) st.error = st.error || st.failure || ('Copilot exited with code ' + ev.exitCode);
+          else if (!st.text && !st.finalText && st.failure) st.error = st.failure;
+        }
+      }
+    };
+  };
+  var copilotProc = null; // the turn's process handle
+  copilot.proc = function () { return copilotProc; };
+  copilot.stop = function () {
+    if (copilotProc && copilotProc.alive) { try { copilotProc.kill(); } catch (e) { /* gone */ } }
+    copilotProc = null;
+  };
+  function copilotBridge() { return root.HeadwayDesktop && root.HeadwayDesktop.copilot; }
+  // -> Promise<{ text, thinking, toolCalls, session }>
+  copilot.run = function (opts) {
+    var s = opts.settings;
+    var bridge = copilotBridge();
+    if (!bridge) return Promise.reject(new Error('The GitHub Copilot provider needs the desktop app.'));
+    var lastMsg = opts.conv[opts.conv.length - 1];
+    if (!lastMsg) return Promise.reject(new Error('nothing to send'));
+    var fresh = !opts.session;
+    var session = opts.session || copilot.uuid();
+    return bridge.path(s.copilotBin).then(function (bin) {
+      if (!bin) throw new Error('GitHub Copilot CLI is not installed (or the path in AI settings is wrong). Install it with `npm install -g @github/copilot`, run `copilot login` once, then try again.');
+      var red = copilot.reducer(opts.onEvent);
+      var stderr = [];
+      return new Promise(function (resolve, reject) {
+        var settled = false, handle = null;
+        function finish(exited) {
+          if (settled) return;
+          var st = red.state;
+          if (!st.done && !exited) return;
+          settled = true;
+          if (handle === copilotProc) copilotProc = null;
+          if (st.error) { reject(new Error(st.error)); return; }
+          if (!st.done) {
+            var why = stderr.filter(Boolean).slice(-3).join(' ');
+            reject(new Error(why ? 'Copilot exited: ' + why : 'Copilot exited before finishing'));
+            return;
+          }
+          var parsed = claude.parseFences(st.finalText || st.text || '');
+          resolve({ text: parsed.text, thinking: '', thinkingBlocks: [], toolCalls: parsed.calls, session: st.session || session });
+        }
+        bridge.spawn(bin, copilot.args(s, session, fresh), function (kind, line) {
+          if (kind === 'out') { red.push(line); if (red.state.done) finish(); }
+          else if (kind === 'err') { stderr.push(line); if (stderr.length > 40) stderr.shift(); }
+          else if (kind === 'exit') finish(true);
+        }).then(function (h) {
+          handle = h; copilotProc = h;
+          if (opts.signal) opts.signal.addEventListener('abort', function () {
+            if (settled) return;
+            settled = true; copilot.stop(); reject(new Error('stopped'));
+          });
+          // the whole prompt on stdin, then EOF: the CLI answers and exits
+          return h.write(copilot.promptText(lastMsg, opts.system, fresh)).then(function () { return h.end ? h.end() : null; });
+        }).catch(function (err) {
+          if (settled) return;
+          settled = true;
+          reject(new Error('could not start Copilot: ' + (err && err.message || err)));
+        });
+      });
+    }).catch(function (err) {
+      // a dead resume target: retry once with a fresh session
+      if (opts.session && /resume|session|not found/i.test(err.message || '') && !opts._retried) {
+        return copilot.run(Object.assign({}, opts, { session: null, _retried: true }));
+      }
+      throw err;
+    });
+  };
+
   // ------------------------------------------------------------ files
   function kindOf(file) {
     var t = String(file.type || '');
@@ -1434,7 +1595,8 @@
   // ------------------------------------------------------------ conversation + agent loop
   var conv = [];          // [{ role: 'user', text, files, t } | { role: 'assistant', text, thinking, toolCalls, toolResults, error, streaming } | { role: 'tool', results }]
   var running = null;     // { controller }
-  var claudeSession = null;
+  var claudeSession = null;          // the CLI session id (claude -p or copilot) of this chat
+  var claudeSessionProvider = null;  // which provider minted it
   var unread = false;
   var listeners = [];
   AI.conversation = function () { return conv; };
@@ -1452,20 +1614,22 @@
         delete c.streaming;
         return c;
       });
-      root.localStorage.setItem(AI.CHAT_KEY, JSON.stringify({ conv: slim.slice(-80), session: claudeSession, provider: AI.loadSettings().provider }));
+      root.localStorage.setItem(AI.CHAT_KEY, JSON.stringify({ conv: slim.slice(-80), session: claudeSession, sessionProvider: claudeSessionProvider, provider: AI.loadSettings().provider }));
     } catch (e) { /* storage optional */ }
   }
   function restoreConv() {
     try {
       var raw = JSON.parse(root.localStorage.getItem(AI.CHAT_KEY) || 'null');
-      if (raw && Array.isArray(raw.conv)) { conv = raw.conv; claudeSession = raw.session || null; }
+      if (raw && Array.isArray(raw.conv)) { conv = raw.conv; claudeSession = raw.session || null; claudeSessionProvider = raw.sessionProvider || (raw.session ? raw.provider || null : null); }
     } catch (e) { conv = []; }
   }
   AI.newChat = function () {
     if (running) AI.stop();
     claude.stop();
+    copilot.stop();
     conv = [];
     claudeSession = null;
+    claudeSessionProvider = null;
     unread = false;
     persistConv();
     emit('conv');
@@ -1500,10 +1664,10 @@
   function runTurns(s, round) {
     var controller = typeof AbortController !== 'undefined' ? new AbortController() : { signal: null, abort: function () {} };
     running = { controller: controller };
-    var asst = { role: 'assistant', text: '', thinking: '', toolCalls: [], streaming: true, t: Date.now(), provider: s.provider, model: s.provider === 'claude' ? s.claudeModel : s.model };
+    var asst = { role: 'assistant', text: '', thinking: '', toolCalls: [], streaming: true, t: Date.now(), provider: s.provider, model: AI.modelOf(s) };
     conv.push(asst);
     emit('conv');
-    var textTools = s.provider === 'claude';
+    var textTools = AI.isCli(s);
     var ctx = ctxNow();
     ctx.textTools = textTools;
     var system = AI.systemPrompt(ctx);
@@ -1513,15 +1677,17 @@
       else if (ev.type === 'meta' && ev.model) asst.model = ev.model;
       emit('stream');
     };
-    var provider = s.provider === 'claude' ? claude : openai;
+    var provider = s.provider === 'claude' ? claude : s.provider === 'copilot' ? copilot : openai;
     var history = conv.slice(0, -1);
+    // a session id only resumes on the provider that minted it
+    if (claudeSession && claudeSessionProvider && claudeSessionProvider !== s.provider) { claudeSession = null; claudeSessionProvider = null; }
     return provider.run({ settings: s, system: system, conv: history, signal: controller.signal, session: claudeSession, onEvent: onEvent })
       .then(function (res) {
         asst.text = res.text != null ? res.text : asst.text;
         asst.thinking = res.thinking || asst.thinking;
         asst.thinkingBlocks = res.thinkingBlocks || [];
         asst.toolCalls = res.toolCalls || [];
-        if (res.session) claudeSession = res.session;
+        if (res.session) { claudeSession = res.session; claudeSessionProvider = s.provider; }
         asst.streaming = false;
         if (!asst.toolCalls.length) return finish();
         if (round >= AI.MAX_ROUNDS) { asst.error = 'Stopped after ' + AI.MAX_ROUNDS + ' tool rounds.'; return finish(); }
@@ -1571,7 +1737,8 @@
     }
     var provSeg = '<div class="seg" id="aiProvSeg">' +
       '<button data-aiprov="litellm"' + (s.provider === 'litellm' ? ' class="on"' : '') + '>LiteLLM gateway</button>' +
-      '<button data-aiprov="claude"' + (s.provider === 'claude' ? ' class="on"' : '') + '>Claude subscription</button></div>';
+      '<button data-aiprov="claude"' + (s.provider === 'claude' ? ' class="on"' : '') + '>Claude subscription</button>' +
+      '<button data-aiprov="copilot"' + (s.provider === 'copilot' ? ' class="on"' : '') + '>GitHub Copilot</button></div>';
     var litellm =
       '<div id="aiLitellm"' + (s.provider === 'litellm' ? '' : ' hidden') + '>' +
       '<div class="m-sec"><label>Gateway URL</label>' + inp('aiBase', s.baseUrl, 'https://litellm.example.com') +
@@ -1596,9 +1763,20 @@
       '<div class="m-hint">Uses <code>claude -p</code>, billed to your Claude plan. Leave the path blank to find the CLI automatically.</div>' +
       '<div class="p-row" style="margin-top:8px"><button id="aiClaudeCheck" class="fixed"' + (desktop ? '' : ' disabled') + '>Check</button><span id="aiClaudeOut" class="m-hint" style="margin:0 0 0 10px"></span></div>' +
       '</div>';
+    var copilotUi =
+      '<div id="aiCopilot"' + (s.provider === 'copilot' ? '' : ' hidden') + '>' +
+      (desktop ? '' : '<div class="m-hint" style="margin-bottom:12px">This provider runs the GitHub Copilot CLI on your machine, so it only works in the desktop app. In the browser, use a LiteLLM gateway.</div>') +
+      '<div class="p-grid2">' +
+      '<div class="m-sec"><label>Model</label>' + inp('aiCopilotModel', s.copilotModel, 'auto', 'text', ' list="aiCopilotModelList"') +
+      '<datalist id="aiCopilotModelList">' + AI.COPILOT_MODELS.map(function (m) { return '<option value="' + m[0] + '">' + esc(m[1]) + '</option>'; }).join('') + '</datalist></div>' +
+      '<div class="m-sec"><label>Copilot CLI path</label>' + inp('aiCopilotBin', s.copilotBin, 'auto-detect') + '</div>' +
+      '</div>' +
+      '<div class="m-hint">Uses <code>copilot</code> in non-interactive mode, billed to your GitHub Copilot plan (premium requests). Install with <code>npm install -g @github/copilot</code> and sign in once with <code>copilot login</code>. Model ids are the ones <code>/model</code> lists in the CLI; <code>auto</code> lets Copilot pick. Copilot’s own shell and file tools stay off — it edits the roadmap only through Headway’s tools.</div>' +
+      '<div class="p-row" style="margin-top:8px"><button id="aiCopilotCheck" class="fixed"' + (desktop ? '' : ' disabled') + '>Check</button><span id="aiCopilotOut" class="m-hint" style="margin:0 0 0 10px"></span></div>' +
+      '</div>';
     return '<h2>Provider</h2>' +
       '<div class="m-sec">' + provSeg + '</div>' +
-      litellm + claudeUi +
+      litellm + claudeUi + copilotUi +
       '<div class="m-hint" style="margin-top:22px">Stored on this machine only. The assistant can read and edit the open project and your preferences; every edit is undoable and shows in Version history as “you · AI”.</div>' +
       '<div class="p-row" style="margin-top:12px"><button id="aiOpen" class="primary fixed">Open assistant</button></div>';
   };
@@ -1617,6 +1795,7 @@
         host.querySelectorAll('[data-aiprov]').forEach(function (b) { b.classList.toggle('on', b === pb); });
         $('#aiLitellm').hidden = pb.dataset.aiprov !== 'litellm';
         $('#aiClaude').hidden = pb.dataset.aiprov !== 'claude';
+        $('#aiCopilot').hidden = pb.dataset.aiprov !== 'copilot';
       }
     });
     $('#aiBase').addEventListener('change', function () { save({ baseUrl: $('#aiBase').value.trim() }); });
@@ -1625,6 +1804,18 @@
     $('#aiHeaders').addEventListener('change', function () { save({ headers: $('#aiHeaders').value }); });
     $('#aiClaudeModel').addEventListener('change', function () { save({ claudeModel: $('#aiClaudeModel').value }); });
     $('#aiClaudeBin').addEventListener('change', function () { save({ claudeBin: $('#aiClaudeBin').value.trim() }); });
+    $('#aiCopilotModel').addEventListener('change', function () { save({ copilotModel: $('#aiCopilotModel').value.trim() || 'auto' }); });
+    $('#aiCopilotBin').addEventListener('change', function () { save({ copilotBin: $('#aiCopilotBin').value.trim() }); });
+    $('#aiCopilotCheck').addEventListener('click', function () {
+      var out = $('#aiCopilotOut');
+      var bridge = copilotBridge();
+      if (!bridge) { out.textContent = 'Desktop app only'; return; }
+      save({ copilotBin: $('#aiCopilotBin').value.trim() });
+      out.textContent = 'Looking…';
+      bridge.path(AI.loadSettings().copilotBin).then(function (p) {
+        out.textContent = p ? 'Found ' + p : 'Not found — install the Copilot CLI or set the path';
+      }, function (err) { out.textContent = 'Failed: ' + err.message; });
+    });
     $('#aiModels').addEventListener('click', function () {
       save({ baseUrl: $('#aiBase').value.trim(), apiKey: $('#aiKey').value.trim(), headers: $('#aiHeaders').value });
       var s = AI.loadSettings();
@@ -1723,6 +1914,10 @@
     var modelOpts = '';
     if (s.provider === 'claude') {
       modelOpts = AI.CLAUDE_MODELS.map(function (m) { return '<option value="' + m[0] + '"' + (s.claudeModel === m[0] ? ' selected' : '') + '>' + m[1] + '</option>'; }).join('');
+    } else if (s.provider === 'copilot') {
+      var cm = AI.COPILOT_MODELS.slice();
+      if (s.copilotModel && !cm.some(function (m) { return m[0] === s.copilotModel; })) cm.unshift([s.copilotModel, s.copilotModel]);
+      modelOpts = cm.map(function (m) { return '<option value="' + esc(m[0]) + '"' + (s.copilotModel === m[0] ? ' selected' : '') + '>' + esc(m[1]) + '</option>'; }).join('');
     } else {
       // the cache belongs to one base URL: ignore it when the endpoint changed
       var ids = (AI.modelCache && AI.modelCacheBase === s.baseUrl ? AI.modelCache : []).slice();
@@ -1730,7 +1925,7 @@
       modelOpts = ids.length ? ids.map(function (id) { return '<option value="' + esc(id) + '"' + (s.model === id ? ' selected' : '') + '>' + esc(AI.shortModel(id)) + '</option>'; }).join('') : '<option value="">No model</option>';
     }
     var efforts = AI.effortsFor(s);
-    var curModel = s.provider === 'claude' ? s.claudeModel : s.model;
+    var curModel = AI.modelOf(s);
     var effortSel = efforts.length
       ? '<select id="aiEffortSel" title="Effort">' + efforts.map(function (e) { return '<option value="' + e[0] + '"' + (s.effort === e[0] ? ' selected' : '') + '>' + e[1] + '</option>'; }).join('') + '</select>'
       : '';
@@ -1847,7 +2042,7 @@
     });
     d.querySelector('#aiModelSel').addEventListener('change', function (e) {
       var s = AI.loadSettings();
-      if (s.provider === 'claude') s.claudeModel = e.target.value; else s.model = e.target.value;
+      if (s.provider === 'claude') s.claudeModel = e.target.value; else if (s.provider === 'copilot') s.copilotModel = e.target.value; else s.model = e.target.value;
       // the effort list follows the model: keep a still-valid pick, else fall back
       s.effort = AI.pickEffort(s);
       AI.saveSettings(s);
